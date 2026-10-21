@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, markRaw, onMounted } from "vue";
 import TitleBar from "./components/TitleBar.vue";
-import SideNav from "./components/SideNav.vue";
 import LogDrawer from "./components/LogDrawer.vue";
 import HomeView from "./views/HomeView.vue";
 import VersionsView from "./views/VersionsView.vue";
@@ -46,14 +45,11 @@ const statusText = computed(() => {
 
     <TitleBar />
 
-    <div class="shell">
-      <SideNav />
-      <main class="main">
-        <Transition name="page" mode="out-in">
-          <component :is="currentView" :key="store.page" />
-        </Transition>
-      </main>
-    </div>
+    <main class="main">
+      <Transition name="page" mode="out-in">
+        <component :is="currentView" :key="store.page" />
+      </Transition>
+    </main>
 
     <footer class="statusbar">
       <span

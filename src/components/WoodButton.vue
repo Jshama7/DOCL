@@ -61,6 +61,7 @@ function onClick(event: MouseEvent) {
   border-radius: 9px;
   border: 1px solid transparent;
   font-weight: 700;
+  line-height: 1;
   letter-spacing: 0.01em;
   overflow: hidden;
   isolation: isolate;
@@ -75,10 +76,11 @@ function onClick(event: MouseEvent) {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  white-space: nowrap;
 }
 
 .btn:active:not(:disabled) {
-  transform: translateY(1px) scale(0.985);
+  transform: translateY(1px);
 }
 
 .btn:disabled {

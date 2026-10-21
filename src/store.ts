@@ -244,6 +244,9 @@ export async function initApp() {
   });
 
   await onMsLoginAccount(async (account) => {
+    if (!store.accounts.some((a) => a.id === account.id)) {
+      store.accounts.push(account);
+    }
     await refreshAccounts();
     await api.selectAccount(account.id);
     await refreshConfig();

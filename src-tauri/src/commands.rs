@@ -129,13 +129,10 @@ pub fn delete_version(state: State<'_, AppState>, version_id: String) -> CmdResu
 
 #[tauri::command]
 pub fn get_accounts(state: State<'_, AppState>) -> Vec<AccountView> {
-    state
-        .accounts
-        .lock()
-        .unwrap()
-        .iter()
-        .map(AccountView::from)
-        .collect()
+    // 每次从磁盘重新读取，确保微软登录完成后能立即看到新账号
+    let accounts = auth::load_accounts();
+    *state.accounts.lock().unwrap() = accounts.clone();
+    accounts.iter().map(AccountView::from).collect()
 }
 
 #[tauri::command]

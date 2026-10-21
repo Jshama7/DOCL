@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { openFolder } from "../api";
 import WoodButton from "../components/WoodButton.vue";
 import WoodProgress from "../components/WoodProgress.vue";
+import PlayerAvatar from "../components/PlayerAvatar.vue";
 import {
   launchVersion,
   selectedAccount,
@@ -124,6 +125,7 @@ function openGameDir() {
             variant="primary"
             size="lg"
             sheen
+            class="hero-cta"
             @click="store.page = 'download'"
           >
             去下载版本
@@ -133,6 +135,7 @@ function openGameDir() {
               variant="primary"
               size="lg"
               sheen
+              class="hero-cta"
               :disabled="isInstalling"
               @click="launchVersion()"
             >
@@ -151,6 +154,22 @@ function openGameDir() {
 
       <div class="hero__art" aria-hidden="true">
         <span class="hero__glow" />
+        <div class="hero__player">
+          <PlayerAvatar :account="account" :size="64" :radius="13" />
+          <div class="hero__player-text">
+            <span class="eyebrow">PLAYER</span>
+            <strong>{{ account?.name ?? "未登录" }}</strong>
+            <span>
+              {{
+                account
+                  ? account.kind === "microsoft"
+                    ? "微软账号"
+                    : "离线账号"
+                  : "到账号页添加"
+              }}
+            </span>
+          </div>
+        </div>
         <div class="hero__stage" :style="stageStyle">
           <div class="iso">
             <span class="iso__face iso__face--top" />
@@ -158,10 +177,10 @@ function openGameDir() {
             <span class="iso__face iso__face--right" />
           </div>
           <span class="hero__shadow" />
-          <span class="hero__bit hero__bit--a" />
-          <span class="hero__bit hero__bit--b" />
-          <span class="hero__bit hero__bit--c" />
         </div>
+        <span class="hero__bit hero__bit--a" />
+        <span class="hero__bit hero__bit--b" />
+        <span class="hero__bit hero__bit--c" />
       </div>
     </section>
 
@@ -335,27 +354,69 @@ function openGameDir() {
   margin-top: 6px;
 }
 
+.hero-cta {
+  min-width: 172px;
+}
+
 /* 立方体插画 */
 .hero__art {
   position: relative;
-  display: grid;
-  place-items: center;
-  min-height: 230px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 300px;
 }
 
 .hero__glow {
   position: absolute;
-  width: 260px;
-  height: 260px;
+  width: 280px;
+  height: 280px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(217, 160, 91, 0.35), transparent 66%);
+  background: radial-gradient(circle, rgba(217, 160, 91, 0.32), transparent 66%);
   filter: blur(18px);
+}
+
+.hero__player {
+  position: relative;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 268px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 253, 246, 0.78);
+  box-shadow: var(--shadow-1);
+}
+
+.hero__player-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.hero__player-text strong {
+  font-size: 16px;
+  color: var(--walnut-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hero__player-text > span:last-child {
+  font-size: 11.5px;
+  color: var(--muted);
 }
 
 .hero__stage {
   position: relative;
   width: 240px;
-  height: 240px;
+  height: 210px;
   display: grid;
   place-items: center;
   perspective: 700px;

@@ -4,6 +4,7 @@ import { openExternal } from "../api";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodModal from "../components/WoodModal.vue";
+import PlayerAvatar from "../components/PlayerAvatar.vue";
 import {
   beginMsLogin,
   createOffline,
@@ -113,7 +114,7 @@ watch(
             @click="selectAccount(account.id)"
             @keydown.enter="selectAccount(account.id)"
           >
-            <span class="account__avatar">{{ account.name.slice(0, 1).toUpperCase() }}</span>
+            <PlayerAvatar :account="account" :size="42" :radius="10" />
             <span class="account__info">
               <span class="row">
                 <strong>{{ account.name }}</strong>
@@ -127,6 +128,7 @@ watch(
               <WoodButton
                 variant="danger"
                 size="sm"
+                class="remove-action"
                 @click.stop="requestDelete(account.id)"
               >
                 {{ confirmId === account.id ? "确认移除" : "移除" }}
@@ -291,6 +293,10 @@ watch(
 
 .account__actions {
   flex-shrink: 0;
+}
+
+.remove-action {
+  width: 92px;
 }
 
 .add-title {

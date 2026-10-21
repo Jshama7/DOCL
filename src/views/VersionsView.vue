@@ -97,7 +97,12 @@ function openDir() {
           >
             设为当前
           </WoodButton>
-          <WoodButton variant="danger" size="sm" @click="requestDelete(item.id)">
+          <WoodButton
+            variant="danger"
+            size="sm"
+            class="delete-action"
+            @click="requestDelete(item.id)"
+          >
             {{ confirmId === item.id ? "确认删除" : "删除" }}
           </WoodButton>
         </div>
@@ -208,5 +213,9 @@ function openDir() {
   display: flex;
   gap: 8px;
   margin-top: 2px;
+}
+
+.delete-action {
+  width: 94px;
 }
 </style>

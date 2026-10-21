@@ -126,6 +126,7 @@ const percent = computed(() => {
               v-if="!item.installed"
               variant="soft"
               size="sm"
+              class="install-action"
               :disabled="!!store.installingId"
               @click="installVersion(item.id)"
             >
@@ -221,7 +222,6 @@ const percent = computed(() => {
 
 .version-row:hover {
   background: #f8efdf;
-  transform: translateX(2px);
 }
 
 .version-row__mark {
@@ -264,6 +264,10 @@ const percent = computed(() => {
 
 .version-row__action {
   flex-shrink: 0;
+}
+
+.install-action {
+  width: 96px;
 }
 
 .skeleton-list {

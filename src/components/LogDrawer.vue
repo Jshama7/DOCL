@@ -61,7 +61,7 @@ function clear() {
 <style scoped>
 .drawer {
   position: fixed;
-  left: 216px;
+  left: 0;
   right: 0;
   bottom: var(--statusbar);
   height: 280px;

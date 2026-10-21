@@ -219,7 +219,13 @@ function useAutoJava() {
         <div class="setting__control">
           <div class="row">
             <WoodSelect v-model="runtimeMajor" :options="javaOptions" />
-            <WoodButton variant="soft" size="sm" :disabled="runtimeBusy" @click="installRuntime">
+            <WoodButton
+              variant="soft"
+              size="sm"
+              class="runtime-action"
+              :disabled="runtimeBusy"
+              @click="installRuntime"
+            >
               {{ runtimeBusy ? "安装中…" : "下载并安装" }}
             </WoodButton>
           </div>
@@ -464,6 +470,10 @@ function useAutoJava() {
   flex-direction: column;
   gap: 6px;
   margin-top: 10px;
+}
+
+.runtime-action {
+  width: 118px;
 }
 
 .savebar {

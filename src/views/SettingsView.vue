@@ -7,13 +7,7 @@ import WoodProgress from "../components/WoodProgress.vue";
 import WoodSelect from "../components/WoodSelect.vue";
 import WoodSlider from "../components/WoodSlider.vue";
 import WoodToggle from "../components/WoodToggle.vue";
-import {
-  notify,
-  refreshConfig,
-  refreshJava,
-  saveConfig,
-  store,
-} from "../store";
+import { notify, refreshConfig, refreshJava, saveConfig, store } from "../store";
 
 const form = reactive<Config>({
   game_dir: "",
@@ -114,16 +108,25 @@ function useAutoJava() {
   <div class="page">
     <header class="page-head">
       <div>
+        <span class="eyebrow">DOCL / SETTINGS</span>
         <h1 class="page-title">设置</h1>
         <p class="page-sub">启动参数、Java 运行时与下载策略</p>
       </div>
-      <WoodButton variant="primary" :disabled="saving" @click="save">
+      <WoodButton variant="primary" sheen :disabled="saving" @click="save">
         {{ saving ? "保存中…" : "保存设置" }}
       </WoodButton>
     </header>
 
-    <section class="card card-pad">
-      <div class="section-title">游戏与启动</div>
+    <section class="card card-pad group reveal">
+      <div class="group-head">
+        <span class="group-no display">01</span>
+        <div class="group-titles">
+          <span class="eyebrow">GAME</span>
+          <div class="section-title">游戏与启动</div>
+        </div>
+        <span class="group-line" />
+      </div>
+
       <div class="setting">
         <div class="setting__label">
           <strong>游戏目录</strong>
@@ -151,13 +154,13 @@ function useAutoJava() {
           <span>游戏内分辨率，按需调整</span>
         </div>
         <div class="setting__control">
-          <div class="row">
+          <div class="row resolution">
             <WoodInput
               :model-value="String(form.window_width)"
               placeholder="宽"
               @update:model-value="form.window_width = Number($event) || 1280"
             />
-            <span class="muted">×</span>
+            <span class="muted resolution__x">×</span>
             <WoodInput
               :model-value="String(form.window_height)"
               placeholder="高"
@@ -168,11 +171,17 @@ function useAutoJava() {
       </div>
     </section>
 
-    <section class="card card-pad">
-      <div class="row-between">
-        <div class="section-title">Java 运行时</div>
+    <section class="card card-pad group reveal" style="--i: 1">
+      <div class="group-head">
+        <span class="group-no display">02</span>
+        <div class="group-titles">
+          <span class="eyebrow">RUNTIME</span>
+          <div class="section-title">Java 运行时</div>
+        </div>
+        <span class="group-line" />
         <WoodButton variant="ghost" size="sm" @click="rescanJava">重新检测</WoodButton>
       </div>
+
       <p class="muted small">
         启动器会按版本要求自动挑选 Java；手动选择后将优先使用指定路径。
       </p>
@@ -185,7 +194,7 @@ function useAutoJava() {
           :class="{ 'java-item--active': form.java_path === java.path }"
           @click="form.java_path = java.path"
         >
-          <span class="java-item__major">Java {{ java.major }}</span>
+          <span class="java-item__major display">Java {{ java.major }}</span>
           <span class="java-item__path mono">{{ java.path }}</span>
           <span class="tag">{{ java.source }}</span>
         </button>
@@ -202,7 +211,7 @@ function useAutoJava() {
 
       <div class="divider" />
 
-      <div class="setting">
+      <div class="setting setting--last">
         <div class="setting__label">
           <strong>下载官方 Java 运行时</strong>
           <span>由 Mojang 提供，安装到启动器数据目录，不影响系统环境</span>
@@ -223,8 +232,16 @@ function useAutoJava() {
       </div>
     </section>
 
-    <section class="card card-pad">
-      <div class="section-title">性能与参数</div>
+    <section class="card card-pad group reveal" style="--i: 2">
+      <div class="group-head">
+        <span class="group-no display">03</span>
+        <div class="group-titles">
+          <span class="eyebrow">PERFORMANCE</span>
+          <div class="section-title">性能与参数</div>
+        </div>
+        <span class="group-line" />
+      </div>
+
       <div class="setting">
         <div class="setting__label">
           <strong>最大内存</strong>
@@ -234,7 +251,7 @@ function useAutoJava() {
           <WoodSlider v-model="form.memory_mb" :min="1024" :max="16384" :step="512" />
         </div>
       </div>
-      <div class="setting">
+      <div class="setting setting--last">
         <div class="setting__label">
           <strong>额外 JVM 参数</strong>
           <span>空格分隔，例如 -XX:+UseZGC</span>
@@ -245,8 +262,16 @@ function useAutoJava() {
       </div>
     </section>
 
-    <section class="card card-pad">
-      <div class="section-title">下载与界面</div>
+    <section class="card card-pad group reveal" style="--i: 3">
+      <div class="group-head">
+        <span class="group-no display">04</span>
+        <div class="group-titles">
+          <span class="eyebrow">DOWNLOAD & UI</span>
+          <div class="section-title">下载与界面</div>
+        </div>
+        <span class="group-line" />
+      </div>
+
       <div class="setting">
         <div class="setting__label">
           <strong>下载源</strong>
@@ -265,7 +290,7 @@ function useAutoJava() {
           <WoodSlider v-model="form.concurrency" :min="1" :max="16" :step="1" />
         </div>
       </div>
-      <div class="setting">
+      <div class="setting setting--last">
         <div class="setting__label">
           <strong>界面动效</strong>
           <span>关闭后页面切换与控件过渡立即完成</span>
@@ -277,7 +302,7 @@ function useAutoJava() {
     </section>
 
     <div class="savebar">
-      <WoodButton variant="primary" :disabled="saving" @click="save">
+      <WoodButton variant="primary" sheen :disabled="saving" @click="save">
         {{ saving ? "保存中…" : "保存设置" }}
       </WoodButton>
     </div>
@@ -285,17 +310,45 @@ function useAutoJava() {
 </template>
 
 <style scoped>
+.group-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+
+.group-no {
+  font-size: 28px;
+  line-height: 1;
+  color: var(--line-strong);
+  min-width: 34px;
+}
+
+.group-titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.group-line {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--line), transparent);
+  margin: 0 4px;
+}
+
 .setting {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 13px 0;
+  padding: 14px 0;
   border-bottom: 1px dashed var(--line);
 }
 
-.setting:last-child {
+.setting--last {
   border-bottom: none;
+  padding-bottom: 2px;
 }
 
 .setting__label {
@@ -324,46 +377,68 @@ function useAutoJava() {
 
 .setting__control--wide {
   flex: 1;
-  max-width: 420px;
+  max-width: 430px;
+}
+
+.resolution {
+  width: 230px;
+}
+
+.resolution__x {
+  font-size: 13px;
 }
 
 .java-list {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 8px;
   margin: 12px 0;
 }
 
 .java-item {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 9px 12px;
-  border-radius: 8px;
+  gap: 13px;
+  padding: 10px 13px;
+  border-radius: 10px;
   border: 1px solid var(--line);
-  background: var(--panel);
+  background: linear-gradient(180deg, #fffdf6, #fcf6ea);
   text-align: left;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  position: relative;
+  overflow: hidden;
+  transition: transform var(--dur-2) var(--ease-out-expo),
+    border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
 }
 
 .java-item:hover {
-  border-color: var(--wood-light);
+  transform: translateY(-1px);
+  border-color: var(--walnut-light);
 }
 
 .java-item--active {
-  border-color: #c9d9bf;
-  background: #fbfdf8;
+  border-color: var(--moss);
+  box-shadow: 0 0 0 3px rgba(94, 123, 73, 0.1);
+}
+
+.java-item--active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--moss);
 }
 
 .java-item__major {
-  font-weight: 700;
-  color: var(--wood-dark);
-  min-width: 72px;
+  font-size: 18px;
+  color: var(--walnut-deep);
+  min-width: 84px;
 }
 
 .java-item__path {
   flex: 1;
-  font-size: 12px;
+  font-size: 11.5px;
   color: var(--ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -371,9 +446,10 @@ function useAutoJava() {
 }
 
 .java-empty {
-  padding: 16px;
-  border-radius: 8px;
+  padding: 18px;
+  border-radius: 10px;
   background: var(--panel-2);
+  border: 1px dashed var(--line-strong);
   color: var(--muted);
   font-size: 12.5px;
   text-align: center;
@@ -393,6 +469,6 @@ function useAutoJava() {
 .savebar {
   display: flex;
   justify-content: flex-end;
-  padding-bottom: 6px;
+  padding-bottom: 8px;
 }
 </style>

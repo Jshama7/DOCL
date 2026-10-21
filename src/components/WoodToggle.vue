@@ -12,40 +12,49 @@ defineEmits<{ (e: "update:modelValue", value: boolean): void }>();
     :disabled="disabled"
     @click="$emit('update:modelValue', !modelValue)"
   >
-    <span class="toggle__knob" />
+    <span class="toggle__track">
+      <span class="toggle__knob" />
+    </span>
   </button>
 </template>
 
 <style scoped>
 .toggle {
-  width: 42px;
-  height: 24px;
-  border-radius: 12px;
-  background: #ded2bd;
-  border: 1px solid #d0c0a6;
+  display: inline-flex;
+  padding: 0;
+  border-radius: 99px;
+}
+
+.toggle__track {
+  width: 46px;
+  height: 26px;
+  border-radius: 99px;
+  background: #ddcfb6;
+  border: 1px solid #cdbb9f;
   padding: 2px;
   display: flex;
   align-items: center;
-  transition: background 0.18s ease, border-color 0.18s ease;
-  flex-shrink: 0;
+  transition: background var(--dur-2) var(--ease-in-out),
+    border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
 }
 
 .toggle__knob {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
-  background: #fffdf7;
-  box-shadow: 0 1px 3px rgba(80, 58, 34, 0.28);
-  transition: transform 0.18s cubic-bezier(0.3, 0.9, 0.4, 1.2);
+  background: linear-gradient(180deg, #fffdf6, #f6ebd7);
+  box-shadow: 0 2px 5px rgba(80, 58, 34, 0.28), 0 1px 0 rgba(255, 255, 255, 0.8) inset;
+  transition: transform var(--dur-2) var(--ease-out-expo);
 }
 
-.toggle--on {
-  background: var(--grass);
-  border-color: var(--grass-dark);
+.toggle--on .toggle__track {
+  background: var(--moss);
+  border-color: var(--moss);
+  box-shadow: 0 0 0 3px rgba(94, 123, 73, 0.14);
 }
 
 .toggle--on .toggle__knob {
-  transform: translateX(18px);
+  transform: translateX(20px);
 }
 
 .toggle:disabled {

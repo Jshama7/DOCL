@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from "vue";
 
-withDefaults(defineProps<{ title: string; width?: number }>(), { width: 440 });
+withDefaults(defineProps<{ title: string; width?: number }>(), { width: 460 });
 const emit = defineEmits<{ (e: "close"): void }>();
 
 function onKey(event: KeyboardEvent) {
@@ -16,8 +16,12 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   <teleport to="body">
     <div class="overlay" @mousedown.self="$emit('close')">
       <div class="modal" :style="{ width: `${width}px` }">
+        <span class="modal__accent" />
         <header class="modal__head">
-          <h3 class="modal__title">{{ title }}</h3>
+          <div>
+            <span class="eyebrow">DOCL</span>
+            <h3 class="modal__title">{{ title }}</h3>
+          </div>
           <button class="modal__close" aria-label="关闭" @click="$emit('close')">
             <svg width="12" height="12" viewBox="0 0 12 12">
               <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" />
@@ -35,65 +39,76 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(58, 44, 28, 0.28);
-  backdrop-filter: blur(2px);
+  background: rgba(52, 38, 24, 0.32);
+  backdrop-filter: blur(3px);
   display: grid;
   place-items: center;
   z-index: 80;
-  animation: fade-in 0.15s ease;
+  animation: fade-in 180ms ease both;
 }
 
 .modal {
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  box-shadow: 0 18px 50px rgba(60, 42, 22, 0.24);
+  border-radius: 16px;
+  box-shadow: 0 30px 70px rgba(50, 34, 18, 0.32);
   max-width: 88vw;
-  max-height: 82vh;
+  max-height: 84vh;
   display: flex;
   flex-direction: column;
-  animation: pop-in 0.18s cubic-bezier(0.2, 0.9, 0.3, 1.1);
+  overflow: hidden;
+  animation: pop-in 300ms var(--ease-out-expo) both;
+}
+
+.modal__accent {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 4px;
+  background: linear-gradient(90deg, var(--moss), var(--moss-bright) 42%, var(--amber));
 }
 
 .modal__head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  padding: 16px 18px 12px;
-  border-bottom: 1px solid var(--line);
+  padding: 20px 20px 12px;
 }
 
 .modal__title {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--wood-dark);
+  font-size: 18px;
+  font-weight: 800;
+  color: var(--walnut-deep);
+  margin-top: 2px;
 }
 
 .modal__close {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
   display: grid;
   place-items: center;
   color: var(--ink-soft);
-  transition: background 0.13s ease;
+  transition: background var(--dur-1) ease, transform var(--dur-1) ease;
 }
 
 .modal__close:hover {
   background: var(--panel-2);
+  transform: rotate(90deg);
 }
 
 .modal__body {
-  padding: 18px;
+  padding: 8px 20px 20px;
   overflow-y: auto;
 }
 
 .modal__foot {
-  padding: 12px 18px 16px;
+  padding: 13px 20px 17px;
   display: flex;
   justify-content: flex-end;
   gap: 10px;
   border-top: 1px solid var(--line);
+  background: var(--panel-2);
 }
 
 @keyframes fade-in {
@@ -105,7 +120,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 @keyframes pop-in {
   from {
     opacity: 0;
-    transform: translateY(10px) scale(0.98);
+    transform: translateY(16px) scale(0.97);
   }
 }
 </style>

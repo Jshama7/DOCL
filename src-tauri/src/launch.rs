@@ -90,7 +90,7 @@ pub fn build(
 
     let mut vars: std::collections::HashMap<&str, String> = std::collections::HashMap::new();
     vars.insert("natives_directory", natives_dir.to_string_lossy().to_string());
-    vars.insert("launcher_name", "WoodLauncher".into());
+    vars.insert("launcher_name", "DOCL".into());
     vars.insert("launcher_version", env!("CARGO_PKG_VERSION").into());
     vars.insert("classpath", classpath.clone());
     vars.insert("classpath_separator", ";".into());

@@ -31,7 +31,7 @@ function onInput(event: Event) {
     :step="step"
     :value="modelValue"
     :style="{
-      background: `linear-gradient(90deg, var(--wood) 0 ${percent}%, var(--line) ${percent}% 100%)`,
+      background: `linear-gradient(90deg, var(--moss) 0 ${percent}%, #e2d4bb ${percent}% 100%)`,
     }"
     @input="onInput"
   />
@@ -43,32 +43,35 @@ function onInput(event: Event) {
   appearance: none;
   width: 100%;
   height: 6px;
-  border-radius: 3px;
+  border-radius: 99px;
   outline: none;
   cursor: pointer;
+  box-shadow: 0 1px 2px rgba(80, 58, 34, 0.12) inset;
 }
 
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 16px;
-  height: 16px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: #fffdf8;
-  border: 3px solid var(--wood);
-  box-shadow: 0 1px 4px rgba(80, 58, 34, 0.25);
-  transition: transform 0.12s ease;
+  background: linear-gradient(180deg, #fffdf6, #f5e9d4);
+  border: 3px solid var(--walnut);
+  box-shadow: 0 2px 6px rgba(70, 40, 18, 0.3);
+  transition: transform var(--dur-1) var(--ease-out-expo),
+    box-shadow var(--dur-2) ease;
 }
 
 .slider::-webkit-slider-thumb:hover {
-  transform: scale(1.15);
+  transform: scale(1.16);
+  box-shadow: 0 3px 10px rgba(70, 40, 18, 0.34);
 }
 
 .slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
-  background: #fffdf8;
-  border: 3px solid var(--wood);
+  background: #fffdf6;
+  border: 3px solid var(--walnut);
 }
 </style>

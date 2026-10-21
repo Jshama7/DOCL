@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { store, type Page } from "../store";
+import { store, selectedAccount, type Page } from "../store";
 
-const items: { key: Page; label: string }[] = [
-  { key: "home", label: "首页" },
-  { key: "versions", label: "版本管理" },
-  { key: "download", label: "下载版本" },
-  { key: "accounts", label: "账号" },
-  { key: "settings", label: "设置" },
+const items: { key: Page; label: string; idx: string }[] = [
+  { key: "home", label: "启动台", idx: "01" },
+  { key: "versions", label: "版本管理", idx: "02" },
+  { key: "download", label: "下载版本", idx: "03" },
+  { key: "accounts", label: "账号", idx: "04" },
+  { key: "settings", label: "设置", idx: "05" },
 ];
 
 function go(page: Page) {
@@ -16,17 +16,47 @@ function go(page: Page) {
 
 <template>
   <aside class="sidebar">
+    <div class="brand">
+      <span class="brand__mark" />
+      <div class="brand__text">
+        <strong>DOCL</strong>
+        <span>MINECRAFT LAUNCHER</span>
+      </div>
+    </div>
+
+    <div class="side-label">导航</div>
+
     <button
-      v-for="item in items"
+      v-for="(item, index) in items"
       :key="item.key"
       class="nav-item"
       :class="{ 'nav-item--active': store.page === item.key }"
+      :style="{ '--i': index }"
       @click="go(item.key)"
     >
-      {{ item.label }}
+      <span class="nav-item__idx">{{ item.idx }}</span>
+      <span>{{ item.label }}</span>
     </button>
 
     <div class="sidebar__spacer" />
+
+    <button class="side-account" @click="go('accounts')">
+      <span class="side-account__avatar">
+        {{ selectedAccount ? selectedAccount.name.slice(0, 1).toUpperCase() : "?" }}
+      </span>
+      <span class="side-account__text">
+        <strong>{{ selectedAccount?.name ?? "未登录" }}</strong>
+        <span>
+          {{
+            selectedAccount
+              ? selectedAccount.kind === "microsoft"
+                ? "微软账号"
+                : "离线账号"
+              : "点击添加账号"
+          }}
+        </span>
+      </span>
+    </button>
 
     <div class="sidebar__foot">
       <button
@@ -37,15 +67,13 @@ function go(page: Page) {
         <span class="statusbar__dot" :class="{ 'statusbar__dot--run': store.gameRunning }" />
         运行日志
       </button>
-      <div class="sidebar__version">v0.1.0</div>
+      <div class="sidebar__version">DOCL · v0.1.0</div>
     </div>
   </aside>
 </template>
 
 <style scoped>
-.sidebar__log--active {
-  border-color: var(--grass);
-  color: var(--grass-dark);
-  background: var(--grass-soft);
+.nav-item {
+  animation-delay: calc(var(--i, 0) * 40ms);
 }
 </style>

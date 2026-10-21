@@ -27,27 +27,30 @@ defineEmits<{ (e: "update:modelValue", value: string): void }>();
 <style scoped>
 .input {
   width: 100%;
-  height: 36px;
-  border-radius: 8px;
+  height: 38px;
+  border-radius: 9px;
   border: 1px solid var(--line-strong);
-  background: var(--panel);
-  padding: 0 12px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  background: linear-gradient(180deg, #fffdf6, #fbf4e7);
+  padding: 0 13px;
+  transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease,
+    background var(--dur-2) ease;
   color: var(--ink);
+  box-shadow: 0 1px 2px rgba(80, 58, 34, 0.05) inset;
 }
 
 .input::placeholder {
-  color: #b6a894;
+  color: #b7a68f;
 }
 
 .input:hover:not(:disabled) {
-  border-color: var(--wood-light);
+  border-color: var(--walnut-light);
 }
 
 .input:focus {
   outline: none;
-  border-color: var(--grass);
-  box-shadow: 0 0 0 3px rgba(111, 143, 90, 0.14);
+  border-color: var(--moss);
+  background: #fffef9;
+  box-shadow: 0 0 0 3px rgba(94, 123, 73, 0.14);
 }
 
 .input:disabled {
@@ -55,7 +58,7 @@ defineEmits<{ (e: "update:modelValue", value: string): void }>();
 }
 
 .input.mono {
-  font-family: "Cascadia Mono", "Consolas", monospace;
+  font-family: var(--font-mono);
   font-size: 12.5px;
 }
 </style>

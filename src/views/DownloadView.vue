@@ -54,13 +54,14 @@ const percent = computed(() => {
   <div class="page">
     <header class="page-head">
       <div>
+        <span class="eyebrow">DOCL / CATALOG</span>
         <h1 class="page-title">下载版本</h1>
-        <p class="page-sub">原版客户端，支持 BMCLAPI 镜像加速与 SHA1 校验</p>
+        <p class="page-sub">原版客户端，BMCLAPI 镜像加速与 SHA1 校验</p>
       </div>
       <WoodButton variant="ghost" size="sm" @click="refreshVersions(true)">刷新列表</WoodButton>
     </header>
 
-    <section v-if="progress" class="card card-pad download-progress">
+    <section v-if="progress" class="card card-pad download-progress reveal">
       <div class="row-between">
         <div class="row">
           <span class="tag tag--grass">安装中</span>
@@ -78,7 +79,7 @@ const percent = computed(() => {
       <p class="muted small">{{ progress.message }}</p>
     </section>
 
-    <section class="card">
+    <section class="card catalog reveal" style="--i: 1">
       <div class="toolbar">
         <div class="tabs">
           <button
@@ -96,17 +97,29 @@ const percent = computed(() => {
         </div>
       </div>
 
-      <div v-if="store.loadingVersions" class="list-empty">正在获取版本清单…</div>
+      <div v-if="store.loadingVersions" class="skeleton-list">
+        <div v-for="n in 9" :key="n" class="skeleton-row">
+          <span class="skeleton skeleton-row__title" />
+          <span class="skeleton skeleton-row__meta" />
+          <span class="skeleton skeleton-row__btn" />
+        </div>
+      </div>
       <div v-else-if="!filtered.length" class="list-empty">没有匹配的版本</div>
       <div v-else class="version-list">
-        <div v-for="item in filtered" :key="item.id" class="version-row">
+        <div
+          v-for="(item, index) in filtered"
+          :key="item.id"
+          class="version-row"
+          :style="{ '--i': index }"
+        >
+          <span class="version-row__mark" />
           <div class="version-row__main">
-            <strong>{{ item.id }}</strong>
+            <strong class="version-row__id">{{ item.id }}</strong>
             <span class="tag" :class="{ 'tag--grass': item.kind === 'release' }">
               {{ kindLabel(item.kind) }}
             </span>
             <span v-if="item.installed" class="tag tag--grass">已安装</span>
-            <span class="muted small">{{ formatDate(item.release_time) }}</span>
+            <span class="version-row__date mono">{{ formatDate(item.release_time) }}</span>
           </div>
           <div class="version-row__action">
             <WoodButton
@@ -118,12 +131,7 @@ const percent = computed(() => {
             >
               {{ store.installingId === item.id ? "安装中…" : "安装" }}
             </WoodButton>
-            <WoodButton
-              v-else
-              variant="ghost"
-              size="sm"
-              @click="store.page = 'versions'"
-            >
+            <WoodButton v-else variant="ghost" size="sm" @click="store.page = 'versions'">
               去管理
             </WoodButton>
           </div>
@@ -137,73 +145,100 @@ const percent = computed(() => {
       </div>
     </section>
 
-    <p class="muted small">
-      下载源会按设置自动选择，默认优先使用 BMCLAPI 镜像；失败时自动回退官方源。资源文件与依赖库均会校验 SHA1。
+    <p class="muted small footnote">
+      默认优先使用 BMCLAPI 镜像，连续失败后自动切换到官方源；资源文件与依赖库都会校验 SHA1。
     </p>
   </div>
 </template>
 
 <style scoped>
+.catalog {
+  overflow: hidden;
+}
+
 .toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 14px 16px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #fffdf6, #fbf4e7);
 }
 
 .tabs {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   padding: 3px;
-  background: var(--panel-2);
+  background: var(--paper-2);
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 10px;
 }
 
 .tab {
-  height: 28px;
-  padding: 0 14px;
-  border-radius: 6px;
+  height: 29px;
+  padding: 0 16px;
+  border-radius: 7px;
   color: var(--ink-soft);
-  font-size: 13px;
-  font-weight: 600;
-  transition: all 0.15s ease;
+  font-size: 12.5px;
+  font-weight: 700;
+  transition: background var(--dur-2) ease, color var(--dur-2) ease,
+    box-shadow var(--dur-2) ease;
 }
 
 .tab:hover {
-  color: var(--wood-dark);
+  color: var(--walnut-deep);
 }
 
 .tab--active {
   background: var(--panel);
-  color: var(--wood-dark);
-  box-shadow: var(--shadow-soft);
+  color: var(--walnut-deep);
+  box-shadow: var(--shadow-1);
 }
 
 .toolbar__search {
-  width: 280px;
+  width: 300px;
 }
 
 .version-list {
-  max-height: 520px;
+  max-height: 540px;
   overflow-y: auto;
-  padding: 6px 8px;
+  padding: 7px 9px;
 }
 
 .version-row {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  transition: background 0.13s ease;
+  padding: 11px 14px 11px 18px;
+  border-radius: 9px;
+  transition: background var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo);
+  animation: rise-in 460ms var(--ease-out-expo) both;
+  animation-delay: calc(var(--i, 0) * 18ms);
 }
 
 .version-row:hover {
-  background: #f8f1e3;
+  background: #f8efdf;
+  transform: translateX(2px);
+}
+
+.version-row__mark {
+  position: absolute;
+  left: 6px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  transform: translateY(-50%);
+  transition: background var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo);
+}
+
+.version-row:hover .version-row__mark {
+  background: var(--moss);
+  transform: translateY(-50%) scale(1.5);
 }
 
 .version-row__main {
@@ -213,18 +248,53 @@ const percent = computed(() => {
   min-width: 0;
 }
 
-.version-row__main strong {
+.version-row__id {
+  font-family: var(--font-display);
+  font-size: 16px;
   color: var(--ink);
-  font-size: 14px;
-  min-width: 120px;
+  min-width: 128px;
+  letter-spacing: 0.01em;
+}
+
+.version-row__date {
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
 }
 
 .version-row__action {
   flex-shrink: 0;
 }
 
+.skeleton-list {
+  padding: 8px 12px;
+}
+
+.skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 8px;
+}
+
+.skeleton-row__title {
+  width: 140px;
+  height: 16px;
+}
+
+.skeleton-row__meta {
+  width: 220px;
+  height: 12px;
+}
+
+.skeleton-row__btn {
+  margin-left: auto;
+  width: 70px;
+  height: 30px;
+}
+
 .list-empty {
-  padding: 42px;
+  padding: 46px;
   text-align: center;
   color: var(--muted);
 }
@@ -232,7 +302,7 @@ const percent = computed(() => {
 .load-more {
   display: flex;
   justify-content: center;
-  padding: 12px;
+  padding: 13px;
   border-top: 1px dashed var(--line);
 }
 
@@ -240,5 +310,9 @@ const percent = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.footnote {
+  padding-left: 2px;
 }
 </style>

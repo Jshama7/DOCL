@@ -42,6 +42,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
           :class="{ 'select__option--active': option.value === modelValue }"
           @click.stop="pick(option.value)"
         >
+          <span class="select__dot" />
           {{ option.label }}
         </button>
       </div>
@@ -52,26 +53,26 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
 <style scoped>
 .select {
   position: relative;
-  min-width: 120px;
+  min-width: 130px;
 }
 
 .select__value {
   width: 100%;
-  height: 36px;
-  border-radius: 8px;
+  height: 38px;
+  border-radius: 9px;
   border: 1px solid var(--line-strong);
-  background: var(--panel);
-  padding: 0 32px 0 12px;
+  background: linear-gradient(180deg, #fffdf6, #faf2e3);
+  padding: 0 34px 0 13px;
   text-align: left;
   position: relative;
   color: var(--ink);
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
 }
 
 .select__value:hover,
 .select--open .select__value {
-  border-color: var(--wood-light);
-  box-shadow: 0 0 0 3px rgba(139, 94, 52, 0.08);
+  border-color: var(--walnut-light);
+  box-shadow: 0 0 0 3px rgba(111, 66, 36, 0.08);
 }
 
 .select__text {
@@ -83,14 +84,14 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
 
 .select__chev {
   position: absolute;
-  right: 12px;
+  right: 13px;
   top: 50%;
   width: 7px;
   height: 7px;
-  border-right: 1.5px solid var(--ink-soft);
-  border-bottom: 1.5px solid var(--ink-soft);
+  border-right: 1.6px solid var(--ink-soft);
+  border-bottom: 1.6px solid var(--ink-soft);
   transform: translateY(-70%) rotate(45deg);
-  transition: transform 0.15s ease;
+  transition: transform var(--dur-2) var(--ease-out-expo);
 }
 
 .select--open .select__chev {
@@ -102,45 +103,60 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   z-index: 30;
   left: 0;
   right: 0;
-  top: calc(100% + 6px);
+  top: calc(100% + 7px);
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-radius: 8px;
-  padding: 4px;
-  box-shadow: 0 10px 26px rgba(80, 58, 34, 0.16);
-  max-height: 240px;
+  border-radius: 10px;
+  padding: 5px;
+  box-shadow: var(--shadow-3);
+  max-height: 260px;
   overflow-y: auto;
 }
 
 .select__option {
   width: 100%;
-  height: 32px;
+  height: 34px;
   padding: 0 10px;
-  border-radius: 6px;
+  border-radius: 7px;
   text-align: left;
   color: var(--ink-soft);
-  transition: background 0.12s ease, color 0.12s ease;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
 }
 
 .select__option:hover {
-  background: #f6ecda;
-  color: var(--wood-dark);
+  background: #f7eddc;
+  color: var(--walnut-deep);
+}
+
+.select__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: transparent;
+  transition: background var(--dur-1) ease;
 }
 
 .select__option--active {
-  background: var(--grass-soft);
-  color: var(--grass-dark);
-  font-weight: 600;
+  background: var(--moss-soft);
+  color: var(--moss);
+  font-weight: 700;
+}
+
+.select__option--active .select__dot {
+  background: var(--moss);
 }
 
 .drop-enter-active,
 .drop-leave-active {
-  transition: opacity 0.13s ease, transform 0.13s ease;
+  transition: opacity 140ms ease, transform 140ms var(--ease-out-expo);
 }
 
 .drop-enter-from,
 .drop-leave-to {
   opacity: 0;
-  transform: translateY(-4px);
+  transform: translateY(-5px) scale(0.99);
 }
 </style>

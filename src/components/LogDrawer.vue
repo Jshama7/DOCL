@@ -31,9 +31,9 @@ function clear() {
     <section v-if="store.logOpen" class="drawer">
       <header class="drawer__head">
         <div class="row">
-          <span class="statusbar__dot" :class="{ 'statusbar__dot--run': store.gameRunning }" />
-          <strong>运行日志</strong>
-          <span class="muted small">{{ store.log.length }} 行</span>
+          <span class="eyebrow">DOCL / LOG</span>
+          <strong class="drawer__title">运行日志</strong>
+          <span class="muted small mono">{{ store.log.length }} LINES</span>
         </div>
         <div class="row">
           <button class="drawer__btn" @click="clear">清空</button>
@@ -50,7 +50,8 @@ function clear() {
           class="drawer__line"
           :class="`drawer__line--${line.stream}`"
         >
-          {{ line.line }}
+          <span class="drawer__prefix">{{ line.stream === "stderr" ? "!" : line.stream === "system" ? "›" : "·" }}</span>
+          <span class="drawer__text">{{ line.line }}</span>
         </div>
       </div>
     </section>
@@ -60,74 +61,104 @@ function clear() {
 <style scoped>
 .drawer {
   position: fixed;
-  left: 176px;
+  left: 216px;
   right: 0;
   bottom: var(--statusbar);
-  height: 260px;
-  background: #fffdf8;
+  height: 280px;
+  background: var(--panel);
   border-top: 1px solid var(--line-strong);
-  box-shadow: 0 -8px 24px rgba(80, 58, 34, 0.1);
+  box-shadow: 0 -16px 40px rgba(70, 48, 26, 0.12);
   display: flex;
   flex-direction: column;
   z-index: 60;
 }
 
 .drawer__head {
-  height: 40px;
-  padding: 0 16px;
+  height: 44px;
+  padding: 0 20px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, #fffdf6, #faf2e3);
   flex-shrink: 0;
 }
 
+.drawer__title {
+  font-size: 13px;
+  color: var(--walnut-deep);
+}
+
 .drawer__btn {
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 6px;
+  height: 27px;
+  padding: 0 11px;
+  border-radius: 7px;
   border: 1px solid var(--line);
   color: var(--ink-soft);
   font-size: 12px;
-  transition: all 0.13s ease;
+  transition: all var(--dur-1) ease;
 }
 
 .drawer__btn:hover {
-  border-color: var(--wood-light);
-  color: var(--wood-dark);
+  border-color: var(--walnut-light);
+  color: var(--walnut-deep);
+  background: var(--panel-2);
 }
 
 .drawer__body {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 16px 16px;
-  font-size: 12px;
-  line-height: 1.55;
+  padding: 10px 20px 18px;
+  font-size: 11.5px;
+  line-height: 1.62;
+  background: #fffdf7;
 }
 
 .drawer__empty {
   color: var(--muted);
-  font-family: "Microsoft YaHei UI", sans-serif;
+  font-family: var(--font-ui);
+  padding: 12px 0;
 }
 
 .drawer__line {
+  display: flex;
+  gap: 8px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: #4c4034;
+  transition: background var(--dur-1) ease;
+}
+
+.drawer__line:hover {
+  background: #f7eddc;
+}
+
+.drawer__prefix {
+  color: var(--line-strong);
+  flex-shrink: 0;
+  width: 10px;
+  text-align: center;
+}
+
+.drawer__text {
   white-space: pre-wrap;
   word-break: break-all;
-  color: #4f4436;
 }
 
-.drawer__line--stderr {
-  color: #a8543c;
+.drawer__line--stderr .drawer__text,
+.drawer__line--stderr .drawer__prefix {
+  color: var(--danger);
 }
 
-.drawer__line--system {
-  color: var(--grass-dark);
-  font-weight: 600;
+.drawer__line--system .drawer__text,
+.drawer__line--system .drawer__prefix {
+  color: var(--moss);
+  font-weight: 700;
 }
 
 .drawer-enter-active,
 .drawer-leave-active {
-  transition: transform 0.18s ease, opacity 0.18s ease;
+  transition: transform 320ms var(--ease-out-expo), opacity 240ms ease;
 }
 
 .drawer-enter-from,

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { openExternal } from "../api";
+import AppIcon from "../components/AppIcon.vue";
+import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodModal from "../components/WoodModal.vue";
@@ -125,14 +127,13 @@ watch(
               <span class="muted small mono account__uuid">{{ account.uuid }}</span>
             </span>
             <span class="account__actions">
-              <WoodButton
+              <IconButton
+                icon="trash"
+                :label="confirmId === account.id ? '确认移除账号' : '移除账号'"
                 variant="danger"
-                size="sm"
-                class="remove-action"
+                :size="32"
                 @click.stop="requestDelete(account.id)"
-              >
-                {{ confirmId === account.id ? "确认移除" : "移除" }}
-              </WoodButton>
+              />
             </span>
           </div>
         </div>
@@ -145,7 +146,10 @@ watch(
           <p class="muted small">用户名 1–16 个字符，无需密码。</p>
           <div class="row add-row">
             <WoodInput v-model="name" placeholder="例如：Steve" @keyup.enter="addOffline" />
-            <WoodButton variant="primary" @click="addOffline">添加</WoodButton>
+            <WoodButton variant="primary" @click="addOffline">
+              <AppIcon name="plus" :size="14" />
+              添加
+            </WoodButton>
           </div>
         </section>
 
@@ -155,7 +159,10 @@ watch(
           <p class="muted small">
             设备码登录，不需要在启动器里输入密码。凭据只保存在本机，并用 Windows DPAPI 加密。
           </p>
-          <WoodButton variant="primary" block sheen @click="beginMsLogin">登录微软账号</WoodButton>
+          <WoodButton variant="primary" block sheen @click="beginMsLogin">
+            <AppIcon name="external" :size="15" />
+            登录微软账号
+          </WoodButton>
         </section>
       </div>
     </div>
@@ -176,10 +183,19 @@ watch(
         <p class="muted">在浏览器中打开下面的地址，输入验证码：</p>
         <div class="login-code__row">
           <code class="login-code__code display">{{ code?.user_code }}</code>
-          <WoodButton variant="soft" size="sm" @click="copyCode">复制</WoodButton>
+          <IconButton
+            icon="copy"
+            label="复制验证码"
+            variant="soft"
+            :size="36"
+            @click="copyCode"
+          />
         </div>
         <p class="login-code__url mono">{{ code?.verification_uri }}</p>
-        <WoodButton variant="primary" block sheen @click="openLink">打开登录页面</WoodButton>
+        <WoodButton variant="primary" block sheen @click="openLink">
+          <AppIcon name="external" :size="15" />
+          打开登录页面
+        </WoodButton>
         <p class="muted small">完成后请保持此窗口打开，启动器会自动完成登录。</p>
       </div>
     </WoodModal>
@@ -293,10 +309,6 @@ watch(
 
 .account__actions {
   flex-shrink: 0;
-}
-
-.remove-action {
-  width: 92px;
 }
 
 .add-title {

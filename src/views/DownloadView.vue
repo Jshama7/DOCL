@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
+import AppIcon from "../components/AppIcon.vue";
+import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodProgress from "../components/WoodProgress.vue";
@@ -58,7 +60,13 @@ const percent = computed(() => {
         <h1 class="page-title">下载版本</h1>
         <p class="page-sub">原版客户端，BMCLAPI 镜像加速与 SHA1 校验</p>
       </div>
-      <WoodButton variant="ghost" size="sm" @click="refreshVersions(true)">刷新列表</WoodButton>
+      <IconButton
+        icon="refresh"
+        label="刷新版本列表"
+        variant="soft"
+        :size="32"
+        @click="refreshVersions(true)"
+      />
     </header>
 
     <section v-if="progress" class="card card-pad download-progress reveal">
@@ -122,25 +130,29 @@ const percent = computed(() => {
             <span class="version-row__date mono">{{ formatDate(item.release_time) }}</span>
           </div>
           <div class="version-row__action">
-            <WoodButton
+            <IconButton
               v-if="!item.installed"
+              icon="download"
+              :label="store.installingId === item.id ? '正在安装' : `安装 ${item.id}`"
               variant="soft"
-              size="sm"
-              class="install-action"
+              :size="32"
               :disabled="!!store.installingId"
               @click="installVersion(item.id)"
-            >
-              {{ store.installingId === item.id ? "安装中…" : "安装" }}
-            </WoodButton>
-            <WoodButton v-else variant="ghost" size="sm" @click="store.page = 'versions'">
-              去管理
-            </WoodButton>
+            />
+            <IconButton
+              v-else
+              icon="check"
+              label="已安装，去版本管理"
+              :size="32"
+              @click="store.page = 'versions'"
+            />
           </div>
         </div>
       </div>
 
       <div v-if="filtered.length < totalMatched" class="load-more">
         <WoodButton variant="ghost" size="sm" @click="limit += 200">
+          <AppIcon name="chevron-down" :size="14" />
           加载更多（还有 {{ totalMatched - filtered.length }} 个）
         </WoodButton>
       </div>
@@ -264,10 +276,6 @@ const percent = computed(() => {
 
 .version-row__action {
   flex-shrink: 0;
-}
-
-.install-action {
-  width: 96px;
 }
 
 .skeleton-list {

@@ -1,14 +1,16 @@
 <script setup lang="ts">
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import AppIcon from "./AppIcon.vue";
+import IconButton from "./IconButton.vue";
 import PlayerAvatar from "./PlayerAvatar.vue";
 import { selectedAccount, store, type Page } from "../store";
 
-const items: { key: Page; label: string; idx: string }[] = [
-  { key: "home", label: "启动台", idx: "01" },
-  { key: "versions", label: "版本", idx: "02" },
-  { key: "download", label: "下载", idx: "03" },
-  { key: "accounts", label: "账号", idx: "04" },
-  { key: "settings", label: "设置", idx: "05" },
+const items: { key: Page; label: string; icon: string }[] = [
+  { key: "home", label: "启动台", icon: "home" },
+  { key: "versions", label: "版本", icon: "layers" },
+  { key: "download", label: "下载", icon: "download" },
+  { key: "accounts", label: "账号", icon: "user" },
+  { key: "settings", label: "设置", icon: "settings" },
 ];
 
 const win = getCurrentWindow();
@@ -46,7 +48,7 @@ function close() {
         :class="{ 'topnav__item--active': store.page === item.key }"
         @click="go(item.key)"
       >
-        <span class="topnav__idx mono">{{ item.idx }}</span>
+        <AppIcon :name="item.icon" :size="16" />
         <span>{{ item.label }}</span>
       </button>
     </nav>
@@ -59,38 +61,24 @@ function close() {
         <span class="account-chip__name">{{ selectedAccount?.name ?? "未登录" }}</span>
       </button>
 
-      <button
-        class="log-btn"
-        :class="{ 'log-btn--active': store.logOpen }"
+      <IconButton
+        icon="log"
+        label="运行日志"
+        variant="soft"
+        :active="store.logOpen"
+        :size="34"
         @click="store.logOpen = !store.logOpen"
-      >
-        <span class="statusbar__dot" :class="{ 'statusbar__dot--run': store.gameRunning }" />
-        日志
-      </button>
+      />
 
       <div class="window-controls">
         <button class="window-btn" title="最小化" @click="minimize">
-          <svg width="12" height="12" viewBox="0 0 12 12">
-            <path d="M2 6h8" stroke="currentColor" stroke-width="1.3" />
-          </svg>
+          <AppIcon name="minimize" :size="14" />
         </button>
         <button class="window-btn" title="最大化" @click="toggleMaximize">
-          <svg width="12" height="12" viewBox="0 0 12 12">
-            <rect
-              x="2.4"
-              y="2.4"
-              width="7.2"
-              height="7.2"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.2"
-            />
-          </svg>
+          <AppIcon name="maximize" :size="14" />
         </button>
         <button class="window-btn window-btn--close" title="关闭" @click="close">
-          <svg width="12" height="12" viewBox="0 0 12 12">
-            <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.2" />
-          </svg>
+          <AppIcon name="close" :size="14" />
         </button>
       </div>
     </div>
@@ -202,8 +190,17 @@ function close() {
   color: var(--walnut-deep);
 }
 
-.topnav__item:hover .topnav__idx {
-  color: var(--walnut-light);
+.topnav__item .icon {
+  color: var(--muted);
+  transition: color var(--dur-2) ease;
+}
+
+.topnav__item:hover .icon {
+  color: var(--walnut);
+}
+
+.topnav__item--active .icon {
+  color: var(--moss);
 }
 
 .topnav__item--active {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
+import IconButton from "./IconButton.vue";
 import { store } from "../store";
 
 const list = ref<HTMLElement | null>(null);
@@ -36,8 +37,13 @@ function clear() {
           <span class="muted small mono">{{ store.log.length }} LINES</span>
         </div>
         <div class="row">
-          <button class="drawer__btn" @click="clear">清空</button>
-          <button class="drawer__btn" @click="store.logOpen = false">收起</button>
+          <IconButton icon="trash" label="清空日志" :size="28" @click="clear" />
+          <IconButton
+            icon="chevron-down"
+            label="收起日志"
+            :size="28"
+            @click="store.logOpen = false"
+          />
         </div>
       </header>
       <div ref="list" class="drawer__body mono">

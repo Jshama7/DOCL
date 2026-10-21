@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { openFolder } from "../api";
+import AppIcon from "../components/AppIcon.vue";
+import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import {
   launchVersion,
@@ -41,8 +43,9 @@ function openDir() {
         <p class="page-sub">已安装的原版客户端，支持启动、切换与删除</p>
       </div>
       <div class="row">
-        <WoodButton variant="ghost" size="sm" @click="openDir">游戏目录</WoodButton>
+        <IconButton icon="folder" label="打开游戏目录" :size="32" @click="openDir" />
         <WoodButton variant="primary" size="sm" sheen @click="store.page = 'download'">
+          <AppIcon name="plus" :size="14" />
           安装新版本
         </WoodButton>
       </div>
@@ -54,7 +57,10 @@ function openDir() {
         <p class="empty__title">书架还是空的</p>
         <p class="muted small">前往下载页，选择一个正式版开始安装。</p>
       </div>
-      <WoodButton variant="primary" sheen @click="store.page = 'download'">去下载</WoodButton>
+      <WoodButton variant="primary" sheen @click="store.page = 'download'">
+        <AppIcon name="download" :size="15" />
+        去下载
+      </WoodButton>
     </section>
 
     <div v-else class="version-grid">
@@ -82,29 +88,27 @@ function openDir() {
         </div>
 
         <div class="version__actions">
-          <WoodButton
+          <IconButton
+            icon="play"
+            :label="`启动 ${item.id}`"
             variant="primary"
-            size="sm"
+            :size="34"
             @click="selectVersion(item.id); launchVersion(item.id)"
-          >
-            启动
-          </WoodButton>
-          <WoodButton
-            variant="ghost"
-            size="sm"
+          />
+          <IconButton
+            icon="check"
+            label="设为当前版本"
+            :size="34"
             :disabled="item.id === selectedVersion?.id"
             @click="selectVersion(item.id)"
-          >
-            设为当前
-          </WoodButton>
-          <WoodButton
+          />
+          <IconButton
+            icon="trash"
+            :label="confirmId === item.id ? '确认删除' : '删除版本'"
             variant="danger"
-            size="sm"
-            class="delete-action"
+            :size="34"
             @click="requestDelete(item.id)"
-          >
-            {{ confirmId === item.id ? "确认删除" : "删除" }}
-          </WoodButton>
+          />
         </div>
       </article>
     </div>
@@ -211,11 +215,7 @@ function openDir() {
 
 .version__actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   margin-top: 2px;
-}
-
-.delete-action {
-  width: 94px;
 }
 </style>

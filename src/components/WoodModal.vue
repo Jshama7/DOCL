@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from "vue";
+import AppIcon from "./AppIcon.vue";
 
 withDefaults(defineProps<{ title: string; width?: number }>(), { width: 460 });
 const emit = defineEmits<{ (e: "close"): void }>();
@@ -23,9 +24,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             <h3 class="modal__title">{{ title }}</h3>
           </div>
           <button class="modal__close" aria-label="关闭" @click="$emit('close')">
-            <svg width="12" height="12" viewBox="0 0 12 12">
-              <path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.6" />
-            </svg>
+            <AppIcon name="close" :size="14" />
           </button>
         </header>
         <div class="modal__body"><slot /></div>

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { api, pickDirectory, type Config } from "../api";
+import AppIcon from "../components/AppIcon.vue";
+import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodProgress from "../components/WoodProgress.vue";
@@ -113,6 +115,7 @@ function useAutoJava() {
         <p class="page-sub">启动参数、Java 运行时与下载策略</p>
       </div>
       <WoodButton variant="primary" sheen :disabled="saving" @click="save">
+        <AppIcon name="check" :size="15" />
         {{ saving ? "保存中…" : "保存设置" }}
       </WoodButton>
     </header>
@@ -135,7 +138,7 @@ function useAutoJava() {
         <div class="setting__control setting__control--wide">
           <div class="row">
             <WoodInput v-model="form.game_dir" mono />
-            <WoodButton variant="ghost" size="sm" @click="chooseDir">选择</WoodButton>
+            <IconButton icon="folder" label="选择游戏目录" :size="38" @click="chooseDir" />
           </div>
         </div>
       </div>
@@ -179,7 +182,10 @@ function useAutoJava() {
           <div class="section-title">Java 运行时</div>
         </div>
         <span class="group-line" />
-        <WoodButton variant="ghost" size="sm" @click="rescanJava">重新检测</WoodButton>
+        <WoodButton variant="ghost" size="sm" @click="rescanJava">
+          <AppIcon name="refresh" :size="14" />
+          重新检测
+        </WoodButton>
       </div>
 
       <p class="muted small">
@@ -196,6 +202,12 @@ function useAutoJava() {
         >
           <span class="java-item__major display">Java {{ java.major }}</span>
           <span class="java-item__path mono">{{ java.path }}</span>
+          <AppIcon
+            v-if="form.java_path === java.path"
+            name="check"
+            :size="16"
+            class="java-item__check"
+          />
           <span class="tag">{{ java.source }}</span>
         </button>
         <div v-if="!store.javaList.length" class="java-empty">
@@ -204,7 +216,10 @@ function useAutoJava() {
       </div>
 
       <div class="row java-actions">
-        <WoodButton variant="ghost" size="sm" @click="useAutoJava">恢复自动选择</WoodButton>
+        <WoodButton variant="ghost" size="sm" @click="useAutoJava">
+          <AppIcon name="refresh" :size="14" />
+          恢复自动选择
+        </WoodButton>
         <span class="muted small" v-if="form.java_path">指定：{{ form.java_path }}</span>
         <span class="muted small" v-else>当前：自动选择</span>
       </div>
@@ -226,6 +241,7 @@ function useAutoJava() {
               :disabled="runtimeBusy"
               @click="installRuntime"
             >
+              <AppIcon name="download" :size="14" />
               {{ runtimeBusy ? "安装中…" : "下载并安装" }}
             </WoodButton>
           </div>
@@ -309,6 +325,7 @@ function useAutoJava() {
 
     <div class="savebar">
       <WoodButton variant="primary" sheen :disabled="saving" @click="save">
+        <AppIcon name="check" :size="15" />
         {{ saving ? "保存中…" : "保存设置" }}
       </WoodButton>
     </div>
@@ -449,6 +466,10 @@ function useAutoJava() {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.java-item__check {
+  color: var(--moss);
 }
 
 .java-empty {

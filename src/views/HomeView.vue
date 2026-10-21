@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { openFolder } from "../api";
+import AppIcon from "../components/AppIcon.vue";
+import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodProgress from "../components/WoodProgress.vue";
 import PlayerAvatar from "../components/PlayerAvatar.vue";
@@ -128,6 +130,7 @@ function openGameDir() {
             class="hero-cta"
             @click="store.page = 'download'"
           >
+            <AppIcon name="download" :size="16" />
             去下载版本
           </WoodButton>
           <template v-else>
@@ -139,15 +142,10 @@ function openGameDir() {
               :disabled="isInstalling"
               @click="launchVersion()"
             >
-              <svg v-if="!store.gameRunning" width="12" height="14" viewBox="0 0 12 14" aria-hidden="true">
-                <path d="M1 1.2v11.6L11 7z" fill="currentColor" />
-              </svg>
-              <svg v-else width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
-                <rect x="2" y="2" width="8" height="8" fill="currentColor" />
-              </svg>
+              <AppIcon :name="store.gameRunning ? 'stop' : 'play'" :size="16" />
               {{ store.gameRunning ? "停止游戏" : "启动游戏" }}
             </WoodButton>
-            <WoodButton variant="ghost" size="md" @click="openGameDir">打开目录</WoodButton>
+            <IconButton icon="folder" label="打开游戏目录" :size="44" @click="openGameDir" />
           </template>
         </div>
       </div>
@@ -243,6 +241,7 @@ function openGameDir() {
       <div v-else class="shelf__empty">
         <p class="muted small">书架还是空的，去下载页放一本进来。</p>
         <WoodButton variant="soft" size="sm" @click="store.page = 'download'">
+          <AppIcon name="download" :size="14" />
           去下载
         </WoodButton>
       </div>

@@ -261,7 +261,7 @@ function openGameDir() {
   gap: 20px;
   padding: 28px 30px;
   overflow: hidden;
-  background: linear-gradient(128deg, #fffdf6 0%, #faf1e0 58%, #f2e4cb 100%);
+  background: linear-gradient(128deg, var(--hero-a) 0%, var(--hero-b) 58%, var(--hero-c) 100%);
   border-color: var(--line-strong);
   box-shadow: var(--shadow-2);
 }
@@ -272,7 +272,7 @@ function openGameDir() {
   inset: 0;
   background-image: repeating-linear-gradient(
     90deg,
-    rgba(111, 66, 36, 0.03) 0 1px,
+    rgba(var(--accent-rgb), 0.03) 0 1px,
     transparent 1px 46px
   );
   pointer-events: none;
@@ -373,7 +373,7 @@ function openGameDir() {
   width: 280px;
   height: 280px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(217, 160, 91, 0.32), transparent 66%);
+  background: radial-gradient(circle, rgba(var(--ambient-a), 0.32), transparent 66%);
   filter: blur(18px);
 }
 
@@ -388,7 +388,7 @@ function openGameDir() {
   padding: 10px 14px;
   border: 1px solid var(--line);
   border-radius: 14px;
-  background: rgba(255, 253, 246, 0.78);
+  background: rgba(var(--glass-rgb), 0.78);
   box-shadow: var(--shadow-1);
 }
 
@@ -608,7 +608,7 @@ function openGameDir() {
   padding: 0 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: linear-gradient(180deg, #fffdf6, #faf3e4);
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
   text-align: left;
   transition: transform var(--dur-2) var(--ease-out-expo),
     border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
@@ -644,8 +644,8 @@ function openGameDir() {
 
 .chip--active {
   border-color: var(--moss);
-  background: linear-gradient(180deg, #fbfdf7, var(--moss-soft));
-  box-shadow: 0 0 0 3px rgba(94, 123, 73, 0.1);
+  background: linear-gradient(180deg, var(--panel), var(--moss-soft));
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.08);
 }
 
 .chip--active .chip__idx,

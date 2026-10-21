@@ -13,20 +13,21 @@ withDefaults(
 );
 const emit = defineEmits<{ (e: "click", ev: MouseEvent): void }>();
 const root = ref<HTMLButtonElement | null>(null);
+const ripple = ref<HTMLSpanElement | null>(null);
 
 function onPointerDown(event: PointerEvent) {
   const button = root.value;
-  if (!button || button.disabled) return;
+  const wave = ripple.value;
+  if (!button || !wave || button.disabled) return;
   const rect = button.getBoundingClientRect();
   const size = Math.max(rect.width, rect.height) * 2;
-  const ripple = document.createElement("span");
-  ripple.className = "btn__ripple";
-  ripple.style.width = `${size}px`;
-  ripple.style.height = `${size}px`;
-  ripple.style.left = `${event.clientX - rect.left - size / 2}px`;
-  ripple.style.top = `${event.clientY - rect.top - size / 2}px`;
-  button.appendChild(ripple);
-  window.setTimeout(() => ripple.remove(), 620);
+  wave.style.width = `${size}px`;
+  wave.style.height = `${size}px`;
+  wave.style.left = `${event.clientX - rect.left - size / 2}px`;
+  wave.style.top = `${event.clientY - rect.top - size / 2}px`;
+  wave.classList.remove("is-active");
+  void wave.offsetWidth;
+  wave.classList.add("is-active");
 }
 
 function onClick(event: MouseEvent) {
@@ -47,6 +48,7 @@ function onClick(event: MouseEvent) {
     @pointerdown="onPointerDown"
     @click="onClick"
   >
+    <span ref="ripple" class="btn__ripple" />
     <span class="btn__label"><slot /></span>
   </button>
 </template>
@@ -93,13 +95,21 @@ function onClick(event: MouseEvent) {
   border-radius: 50%;
   pointer-events: none;
   transform: scale(0);
+  opacity: 0;
   background: radial-gradient(circle, rgba(255, 253, 246, 0.55), transparent 62%);
-  animation: ripple 600ms var(--ease-out-expo) forwards;
   z-index: 1;
 }
 
-@keyframes ripple {
-  to {
+.btn__ripple.is-active {
+  animation: btn-ripple 600ms var(--ease-out-expo) forwards;
+}
+
+@keyframes btn-ripple {
+  0% {
+    transform: scale(0);
+    opacity: 1;
+  }
+  100% {
     transform: scale(1);
     opacity: 0;
   }
@@ -149,15 +159,15 @@ function onClick(event: MouseEvent) {
 }
 
 .btn--primary {
-  color: #fff8ea;
-  background: linear-gradient(180deg, #8a5731 0%, #6f4224 55%, #5c341b 100%);
-  border-color: #4f2c15;
+  color: var(--btn-fg);
+  background: linear-gradient(180deg, var(--btn-a) 0%, var(--btn-b) 55%, var(--btn-c) 100%);
+  border-color: var(--btn-border);
   box-shadow: 0 2px 0 rgba(70, 40, 18, 0.3), 0 8px 18px rgba(70, 40, 18, 0.22),
     0 1px 0 rgba(255, 255, 255, 0.18) inset;
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, #96603a 0%, #7a4a28 55%, #653a1e 100%);
+  filter: brightness(1.07);
   box-shadow: 0 3px 0 rgba(70, 40, 18, 0.28), 0 12px 24px rgba(70, 40, 18, 0.26),
     0 1px 0 rgba(255, 255, 255, 0.22) inset;
   transform: translateY(-1px);
@@ -176,7 +186,7 @@ function onClick(event: MouseEvent) {
 }
 
 .btn--soft {
-  background: linear-gradient(180deg, #fffdf6, #f8efde);
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
   border-color: var(--line);
   color: var(--walnut);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;

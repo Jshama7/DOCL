@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
-import { api, pickDirectory, type Config } from "../api";
+import { api, pickDirectory, pickImage, type Config } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
@@ -9,7 +9,15 @@ import WoodProgress from "../components/WoodProgress.vue";
 import WoodSelect from "../components/WoodSelect.vue";
 import WoodSlider from "../components/WoodSlider.vue";
 import WoodToggle from "../components/WoodToggle.vue";
-import { notify, refreshConfig, refreshJava, saveConfig, store } from "../store";
+import {
+  applyTheme,
+  loadBackground,
+  notify,
+  refreshConfig,
+  refreshJava,
+  saveConfig,
+  store,
+} from "../store";
 
 const form = reactive<Config>({
   game_dir: "",
@@ -25,6 +33,11 @@ const form = reactive<Config>({
   version_isolation: true,
   selected_version: null,
   selected_account: null,
+  theme: "paper",
+  background_image: null,
+  background_blur: 18,
+  glass_opacity: 78,
+  glass_blur: 14,
 });
 
 watch(
@@ -38,6 +51,50 @@ watch(
 const runtimeMajor = ref("21");
 const saving = ref(false);
 const runtimeBusy = ref(false);
+
+const themes = [
+  { value: "paper", label: "纸木", colors: ["#f4ebdd", "#6f4224", "#5e7b49"] },
+  { value: "celadon", label: "青瓷", colors: ["#eef1e8", "#3f6b57", "#7a9b6d"] },
+  { value: "terracotta", label: "赤陶", colors: ["#f6e9dc", "#9b4f3a", "#7d8455"] },
+  { value: "moon", label: "月白", colors: ["#eef1f6", "#4b5d78", "#5f8892"] },
+  { value: "nocturne", label: "夜墨", colors: ["#1d1a16", "#c08a55", "#88a867"] },
+];
+
+watch(
+  () => form.theme,
+  (theme) => {
+    if (theme) applyTheme(theme);
+  }
+);
+
+watch(
+  () => [form.background_blur, form.glass_blur, form.glass_opacity],
+  () => {
+    if (!store.config) return;
+    store.config.background_blur = form.background_blur;
+    store.config.glass_blur = form.glass_blur;
+    store.config.glass_opacity = form.glass_opacity;
+  }
+);
+
+async function chooseBackground() {
+  const path = await pickImage();
+  if (!path) return;
+  try {
+    const info = await api.importBackground(path);
+    store.backgroundUrl = info.data_url;
+    form.background_image = info.path;
+    notify("背景已应用，保存后长期保留");
+  } catch (err) {
+    notify(`设置背景失败：${String(err)}`, "err");
+  }
+}
+
+function clearBackground() {
+  store.backgroundUrl = "";
+  form.background_image = null;
+  notify("已移除背景，保存后生效");
+}
 
 const sourceOptions = [
   { value: "auto", label: "自动（优先镜像）" },
@@ -94,6 +151,7 @@ async function save() {
   saving.value = true;
   try {
     await saveConfig({ ...form });
+    await loadBackground();
     notify("设置已保存");
   } finally {
     saving.value = false;
@@ -254,9 +312,108 @@ function useAutoJava() {
       </div>
     </section>
 
-    <section class="card card-pad group reveal" style="--i: 2">
+    <section class="card card-pad group reveal" :style="{ '--i': 2 }">
       <div class="group-head">
         <span class="group-no display">03</span>
+        <div class="group-titles">
+          <span class="eyebrow">APPEARANCE</span>
+          <div class="section-title">外观</div>
+        </div>
+        <span class="group-line" />
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>主题配色</strong>
+          <span>即时预览，保存后长期生效</span>
+        </div>
+        <div class="theme-grid">
+          <button
+            v-for="theme in themes"
+            :key="theme.value"
+            class="theme-chip"
+            :class="{ 'theme-chip--active': form.theme === theme.value }"
+            @click="form.theme = theme.value"
+          >
+            <span class="theme-chip__dots">
+              <i v-for="color in theme.colors" :key="color" :style="{ background: color }" />
+            </span>
+            <span class="theme-chip__label">{{ theme.label }}</span>
+            <AppIcon
+              v-if="form.theme === theme.value"
+              name="check"
+              :size="14"
+              class="theme-chip__check"
+            />
+          </button>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>背景图片</strong>
+          <span>PNG / JPG / WEBP / BMP / GIF，上限 24 MB</span>
+        </div>
+        <div class="setting__control">
+          <div class="row">
+            <span class="muted small">{{ form.background_image ? "已设置" : "未设置" }}</span>
+            <IconButton icon="image" label="选择背景图片" :size="34" @click="chooseBackground" />
+            <IconButton
+              icon="trash"
+              label="移除背景图片"
+              variant="danger"
+              :size="34"
+              :disabled="!form.background_image"
+              @click="clearBackground"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>背景模糊</strong>
+          <span>{{ form.background_blur }} px，越大越柔和</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <WoodSlider v-model="form.background_blur" :min="0" :max="30" :step="1" />
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>玻璃模糊</strong>
+          <span>{{ form.glass_blur }} px，磨砂面板的雾化程度</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <WoodSlider v-model="form.glass_blur" :min="0" :max="24" :step="1" />
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>玻璃不透明度</strong>
+          <span>{{ form.glass_opacity }}%，越低越透出背景</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <WoodSlider v-model="form.glass_opacity" :min="30" :max="95" :step="1" />
+        </div>
+      </div>
+
+      <div class="setting setting--last">
+        <div class="setting__label">
+          <strong>界面动效</strong>
+          <span>关闭后页面切换与控件过渡立即完成</span>
+        </div>
+        <div class="setting__control">
+          <WoodToggle v-model="form.animations" />
+        </div>
+      </div>
+    </section>
+
+    <section class="card card-pad group reveal" :style="{ '--i': 3 }">
+      <div class="group-head">
+        <span class="group-no display">04</span>
         <div class="group-titles">
           <span class="eyebrow">PERFORMANCE</span>
           <div class="section-title">性能与参数</div>
@@ -284,12 +441,12 @@ function useAutoJava() {
       </div>
     </section>
 
-    <section class="card card-pad group reveal" style="--i: 3">
+    <section class="card card-pad group reveal" :style="{ '--i': 4 }">
       <div class="group-head">
-        <span class="group-no display">04</span>
+        <span class="group-no display">05</span>
         <div class="group-titles">
-          <span class="eyebrow">DOWNLOAD & UI</span>
-          <div class="section-title">下载与界面</div>
+          <span class="eyebrow">DOWNLOAD</span>
+          <div class="section-title">下载</div>
         </div>
         <span class="group-line" />
       </div>
@@ -303,22 +460,13 @@ function useAutoJava() {
           <WoodSelect v-model="form.download_source" :options="sourceOptions" />
         </div>
       </div>
-      <div class="setting">
+      <div class="setting setting--last">
         <div class="setting__label">
           <strong>并发下载数</strong>
           <span>当前 {{ form.concurrency }}；网络不稳定时建议降低</span>
         </div>
         <div class="setting__control setting__control--wide">
           <WoodSlider v-model="form.concurrency" :min="1" :max="16" :step="1" />
-        </div>
-      </div>
-      <div class="setting setting--last">
-        <div class="setting__label">
-          <strong>界面动效</strong>
-          <span>关闭后页面切换与控件过渡立即完成</span>
-        </div>
-        <div class="setting__control">
-          <WoodToggle v-model="form.animations" />
         </div>
       </div>
     </section>
@@ -425,7 +573,7 @@ function useAutoJava() {
   padding: 10px 13px;
   border-radius: 10px;
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, #fffdf6, #fcf6ea);
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
   text-align: left;
   position: relative;
   overflow: hidden;
@@ -495,6 +643,58 @@ function useAutoJava() {
 
 .runtime-action {
   width: 118px;
+}
+
+.theme-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+  max-width: 470px;
+}
+
+.theme-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color var(--dur-2) ease, background var(--dur-2) ease,
+    transform var(--dur-2) var(--ease-out-expo);
+}
+
+.theme-chip:hover {
+  border-color: var(--walnut-light);
+  transform: translateY(-1px);
+}
+
+.theme-chip--active {
+  border-color: var(--moss);
+  background: var(--moss-soft);
+  color: var(--moss);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.08);
+}
+
+.theme-chip__dots {
+  display: flex;
+  gap: 2px;
+}
+
+.theme-chip__dots i {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+.theme-chip__check {
+  color: var(--moss);
 }
 
 .savebar {

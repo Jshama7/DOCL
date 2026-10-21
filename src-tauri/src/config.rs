@@ -24,6 +24,12 @@ pub struct Config {
     pub version_isolation: bool,
     pub selected_version: Option<String>,
     pub selected_account: Option<String>,
+    /// paper / celadon / terracotta / moon / nocturne
+    pub theme: String,
+    pub background_image: Option<String>,
+    pub background_blur: u32,
+    pub glass_opacity: u32,
+    pub glass_blur: u32,
 }
 
 impl Default for Config {
@@ -42,6 +48,11 @@ impl Default for Config {
             version_isolation: true,
             selected_version: None,
             selected_account: None,
+            theme: "paper".into(),
+            background_image: None,
+            background_blur: 18,
+            glass_opacity: 78,
+            glass_blur: 14,
         }
     }
 }

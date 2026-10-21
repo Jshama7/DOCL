@@ -248,7 +248,7 @@ watch(
   border: 1px solid var(--line);
   border-radius: 11px;
   text-align: left;
-  background: linear-gradient(180deg, #fffdf6, #fcf6ea);
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
   position: relative;
   overflow: hidden;
   transition: transform var(--dur-2) var(--ease-out-expo),
@@ -320,7 +320,7 @@ watch(
 }
 
 .ms-card {
-  background: linear-gradient(150deg, #fffdf6, #f6ecd9);
+  background: linear-gradient(150deg, var(--panel), var(--panel-2));
 }
 
 .login-state {

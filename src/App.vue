@@ -11,6 +11,15 @@ import { initApp, selectedAccount, selectedVersion, store, type Page } from "./s
 
 onMounted(initApp);
 
+const appStyle = computed(
+  () =>
+    ({
+      "--bg-blur": `${store.config?.background_blur ?? 18}px`,
+      "--glass-blur": `${store.config?.glass_blur ?? 14}px`,
+      "--glass-alpha": String((store.config?.glass_opacity ?? 78) / 100),
+    }) as Record<string, string>
+);
+
 const views = {
   home: markRaw(HomeView),
   versions: markRaw(VersionsView),
@@ -36,7 +45,19 @@ const statusText = computed(() => {
 </script>
 
 <template>
-  <div class="app" :class="{ 'no-anim': store.config && !store.config.animations }">
+  <div
+    class="app"
+    :class="{
+      'no-anim': store.config && !store.config.animations,
+      glass: !!store.backgroundUrl,
+    }"
+    :style="appStyle"
+  >
+    <div v-if="store.backgroundUrl" class="wallpaper" aria-hidden="true">
+      <img :src="store.backgroundUrl" alt="" />
+      <span class="wallpaper__tint" />
+    </div>
+
     <div class="ambient" aria-hidden="true">
       <span class="ambient__orb ambient__orb--a" />
       <span class="ambient__orb ambient__orb--b" />

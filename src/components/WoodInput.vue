@@ -30,7 +30,7 @@ defineEmits<{ (e: "update:modelValue", value: string): void }>();
   height: 38px;
   border-radius: 9px;
   border: 1px solid var(--line-strong);
-  background: linear-gradient(180deg, #fffdf6, #fbf4e7);
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
   padding: 0 13px;
   transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease,
     background var(--dur-2) ease;
@@ -49,7 +49,7 @@ defineEmits<{ (e: "update:modelValue", value: string): void }>();
 .input:focus {
   outline: none;
   border-color: var(--moss);
-  background: #fffef9;
+  background: var(--panel);
   box-shadow: 0 0 0 3px rgba(94, 123, 73, 0.14);
 }
 

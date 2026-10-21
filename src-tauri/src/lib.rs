@@ -52,6 +52,8 @@ pub fn run() {
             commands::install_java,
             commands::launch_version,
             commands::kill_game,
+            commands::import_background,
+            commands::background_data_url,
         ])
         .run(tauri::generate_context!())
         .expect("启动器运行失败");

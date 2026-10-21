@@ -93,7 +93,7 @@ function close() {
   align-items: center;
   gap: 10px;
   padding-left: 18px;
-  background: linear-gradient(180deg, #f8efdf, #f0e3cd);
+  background: linear-gradient(180deg, var(--bar-a), var(--bar-b));
   border-bottom: 1px solid var(--line-strong);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset, 0 4px 14px rgba(80, 58, 32, 0.05);
   position: relative;
@@ -114,7 +114,7 @@ function close() {
   width: 30px;
   height: 30px;
   border-radius: 8px;
-  background: linear-gradient(180deg, var(--moss) 0 42%, #7a5230 42% 100%);
+  background: linear-gradient(180deg, var(--moss) 0 42%, var(--walnut) 42% 100%);
   border: 1px solid var(--walnut-deep);
   box-shadow: 0 3px 8px rgba(70, 48, 26, 0.22), 0 1px 0 rgba(255, 255, 255, 0.4) inset;
   position: relative;
@@ -186,7 +186,7 @@ function close() {
 }
 
 .topnav__item:hover {
-  background: rgba(111, 66, 36, 0.06);
+  background: rgba(var(--accent-rgb), 0.06);
   color: var(--walnut-deep);
 }
 
@@ -263,7 +263,7 @@ function close() {
 }
 
 .account-chip:hover {
-  background: rgba(255, 253, 246, 0.7);
+  background: rgba(var(--glass-rgb), 0.7);
   border-color: var(--line);
 }
 
@@ -319,7 +319,7 @@ function close() {
 }
 
 .window-btn:hover {
-  background: rgba(111, 66, 36, 0.08);
+  background: rgba(var(--accent-rgb), 0.08);
   color: var(--walnut-deep);
 }
 

@@ -174,7 +174,7 @@ function openDir() {
   top: 6px;
   font-size: 64px;
   line-height: 1;
-  color: rgba(111, 66, 36, 0.07);
+  color: rgba(var(--accent-rgb), 0.08);
   pointer-events: none;
 }
 

@@ -61,7 +61,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   height: 38px;
   border-radius: 9px;
   border: 1px solid var(--line-strong);
-  background: linear-gradient(180deg, #fffdf6, #faf2e3);
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
   padding: 0 34px 0 13px;
   text-align: left;
   position: relative;
@@ -127,7 +127,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
 }
 
 .select__option:hover {
-  background: #f7eddc;
+  background: var(--panel-2);
   color: var(--walnut-deep);
 }
 

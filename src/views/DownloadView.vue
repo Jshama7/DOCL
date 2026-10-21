@@ -176,7 +176,7 @@ const percent = computed(() => {
   gap: 16px;
   padding: 14px 18px;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, #fffdf6, #fbf4e7);
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
 }
 
 .tabs {
@@ -233,7 +233,7 @@ const percent = computed(() => {
 }
 
 .version-row:hover {
-  background: #f8efdf;
+  background: var(--hover);
 }
 
 .version-row__mark {

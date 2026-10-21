@@ -86,7 +86,7 @@ function clear() {
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, #fffdf6, #faf2e3);
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
   flex-shrink: 0;
 }
 
@@ -117,7 +117,7 @@ function clear() {
   padding: 10px 20px 18px;
   font-size: 11.5px;
   line-height: 1.62;
-  background: #fffdf7;
+  background: var(--panel);
 }
 
 .drawer__empty {
@@ -131,12 +131,12 @@ function clear() {
   gap: 8px;
   padding: 1px 6px;
   border-radius: 4px;
-  color: #4c4034;
+  color: var(--ink-soft);
   transition: background var(--dur-1) ease;
 }
 
 .drawer__line:hover {
-  background: #f7eddc;
+  background: var(--hover);
 }
 
 .drawer__prefix {

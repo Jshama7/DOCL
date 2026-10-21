@@ -24,7 +24,7 @@ const width = computed(() => (props.indeterminate ? 38 : Math.min(100, Math.max(
 .bar {
   width: 100%;
   border-radius: 99px;
-  background: #e7dac2;
+  background: var(--paper-2);
   overflow: hidden;
   box-shadow: 0 1px 2px rgba(80, 58, 34, 0.12) inset;
 }

@@ -17,6 +17,16 @@ export interface Config {
   version_isolation: boolean;
   selected_version: string | null;
   selected_account: string | null;
+  theme: string;
+  background_image: string | null;
+  background_blur: number;
+  glass_opacity: number;
+  glass_blur: number;
+}
+
+export interface BackgroundInfo {
+  path: string;
+  data_url: string;
 }
 
 export interface VersionSummary {
@@ -95,6 +105,10 @@ export const api = {
   installJava: (major: number) => invoke<JavaInfo>("install_java", { major }),
   launchVersion: (versionId: string) => invoke<number>("launch_version", { versionId }),
   killGame: () => invoke<void>("kill_game"),
+  importBackground: (path: string) =>
+    invoke<BackgroundInfo>("import_background", { path }),
+  backgroundDataUrl: (path: string) =>
+    invoke<string>("background_data_url", { path }),
 };
 
 export function onInstallProgress(cb: (p: ProgressSnapshot) => void): Promise<UnlistenFn> {
@@ -121,6 +135,18 @@ export function onMsLogin(
 
 export async function pickDirectory(): Promise<string | null> {
   const result = await open({ directory: true, multiple: false, title: "选择游戏目录" });
+  return typeof result === "string" ? result : null;
+}
+
+export async function pickImage(): Promise<string | null> {
+  const result = await open({
+    directory: false,
+    multiple: false,
+    title: "选择背景图片",
+    filters: [
+      { name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] },
+    ],
+  });
   return typeof result === "string" ? result : null;
 }
 

@@ -286,3 +286,67 @@ pub fn kill_game(state: State<'_, AppState>) -> CmdResult<()> {
     }
     Ok(())
 }
+
+#[derive(serde::Serialize)]
+pub struct BackgroundInfo {
+    pub path: String,
+    pub data_url: String,
+}
+
+fn image_mime(path: &std::path::Path) -> Option<&'static str> {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "webp" => Some("image/webp"),
+        "bmp" => Some("image/bmp"),
+        "gif" => Some("image/gif"),
+        _ => None,
+    }
+}
+
+fn encode_background(path: &std::path::Path) -> CmdResult<String> {
+    let meta = std::fs::metadata(path).map_err(err)?;
+    if meta.len() > 24 * 1024 * 1024 {
+        return Err("背景图片过大（上限 24 MB）".into());
+    }
+    let mime = image_mime(path).ok_or_else(|| "仅支持 PNG / JPG / WEBP / BMP / GIF 图片".to_string())?;
+    let bytes = std::fs::read(path).map_err(err)?;
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{mime};base64,{encoded}"))
+}
+
+#[tauri::command]
+pub fn import_background(path: String) -> CmdResult<BackgroundInfo> {
+    let source = std::path::PathBuf::from(&path);
+    encode_background(&source)?;
+    let ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png")
+        .to_lowercase();
+    let dir = crate::config::data_dir();
+    std::fs::create_dir_all(&dir).map_err(err)?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let target = dir.join(format!("background-{stamp}.{ext}"));
+    std::fs::copy(&source, &target).map_err(err)?;
+    let data_url = encode_background(&target)?;
+    Ok(BackgroundInfo {
+        path: target.to_string_lossy().to_string(),
+        data_url,
+    })
+}
+
+#[tauri::command]
+pub fn background_data_url(path: String) -> CmdResult<String> {
+    encode_background(std::path::Path::new(&path))
+}

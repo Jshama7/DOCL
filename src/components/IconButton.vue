@@ -132,15 +132,15 @@ onBeforeUnmount(() => {
 }
 
 .icon-btn--primary {
-  color: #fff8ea;
-  background: linear-gradient(180deg, #8a5731 0%, #6f4224 60%, #5c341b 100%);
-  border-color: #4f2c15;
+  color: var(--btn-fg);
+  background: linear-gradient(180deg, var(--btn-a) 0%, var(--btn-b) 60%, var(--btn-c) 100%);
+  border-color: var(--btn-border);
   box-shadow: 0 2px 8px rgba(70, 40, 18, 0.2);
 }
 
 .icon-btn--primary:hover:not(:disabled) {
-  background: linear-gradient(180deg, #96603a 0%, #7a4a28 60%, #653a1e 100%);
-  color: #fff8ea;
+  filter: brightness(1.07);
+  color: var(--btn-fg);
 }
 
 .icon-btn--active {

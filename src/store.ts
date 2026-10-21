@@ -31,6 +31,7 @@ export const store = reactive({
   log: [] as LogLine[],
   logOpen: false,
   gameRunning: false,
+  backgroundUrl: "",
   toast: null as { text: string; kind: "ok" | "err" } | null,
   msLogin: null as {
     code: DeviceCode | null;
@@ -92,11 +93,45 @@ export async function saveConfig(patch: Partial<Config>) {
   const next = { ...store.config, ...patch };
   try {
     store.config = await api.saveConfig(next);
+    applyTheme(store.config.theme);
     await refreshInstalled();
     await refreshJava();
   } catch (err) {
     notify(`保存设置失败：${String(err)}`, "err");
   }
+}
+
+export function applyTheme(theme?: string | null) {
+  document.documentElement.dataset.theme = theme || "paper";
+}
+
+export async function loadBackground() {
+  const path = store.config?.background_image;
+  if (!path) {
+    store.backgroundUrl = "";
+    return;
+  }
+  try {
+    store.backgroundUrl = await api.backgroundDataUrl(path);
+  } catch {
+    store.backgroundUrl = "";
+  }
+}
+
+export async function setBackground(path: string) {
+  try {
+    const info = await api.importBackground(path);
+    store.backgroundUrl = info.data_url;
+    await saveConfig({ background_image: info.path });
+    notify("背景图片已应用");
+  } catch (err) {
+    notify(`设置背景失败：${String(err)}`, "err");
+  }
+}
+
+export async function clearBackground() {
+  store.backgroundUrl = "";
+  await saveConfig({ background_image: null });
 }
 
 export async function installVersion(id: string) {
@@ -219,6 +254,8 @@ export async function initApp() {
 
   try {
     store.config = await api.getConfig();
+    applyTheme(store.config.theme);
+    await loadBackground();
   } catch (err) {
     notify(`读取配置失败：${String(err)}`, "err");
   }

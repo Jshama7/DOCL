@@ -175,6 +175,20 @@ export async function clearBackground() {
   await saveConfig({ background_image: null });
 }
 
+function primeProgress(stage: string, message: string) {
+  store.progress = {
+    stage,
+    message,
+    files_done: 0,
+    files_total: 0,
+    bytes_done: 0,
+    bytes_total: 0,
+    elapsed_ms: 0,
+    active: true,
+  };
+  store.lastProgress = store.progress;
+}
+
 export async function installVersion(id: string) {
   if (store.installingId) {
     notify("已有安装任务正在进行", "err");
@@ -186,6 +200,7 @@ export async function installVersion(id: string) {
   store.lastJobError = null;
   store.lastJobTitle = id;
   store.downloadPanel = "open";
+  primeProgress("install", `准备安装 ${id}…`);
   try {
     await api.installVersion(id);
     await refreshInstalled();
@@ -213,6 +228,7 @@ export async function installLoader(versionId: string, loader: string) {
   store.lastJobError = null;
   store.lastJobTitle = `${versionId} · ${loader}`;
   store.downloadPanel = "open";
+  primeProgress("install", `准备安装 ${loader}…`);
   try {
     await api.installLoader(versionId, loader);
     await refreshInstalled();
@@ -240,6 +256,7 @@ export async function installJava(major: number) {
   store.lastJobError = null;
   store.lastJobTitle = `Java ${major}`;
   store.downloadPanel = "open";
+  primeProgress("java", `准备安装 Java ${major}…`);
   try {
     const info = await api.installJava(major);
     await refreshJava();
@@ -367,7 +384,7 @@ export async function initApp() {
 
   await onInstallProgress((p) => {
     store.progress = p;
-    if (p.active) store.lastProgress = p;
+    store.lastProgress = p;
   });
 
   await onGameLog((line) => {

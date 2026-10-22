@@ -49,10 +49,10 @@ impl Default for Config {
             selected_version: None,
             selected_account: None,
             theme: "paper".into(),
-            background_image: None,
-            background_blur: 18,
-            glass_opacity: 78,
-            glass_blur: 14,
+            background_image: Some("builtin:forest".into()),
+            background_blur: 4,
+            glass_opacity: 62,
+            glass_blur: 18,
         }
     }
 }

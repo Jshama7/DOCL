@@ -60,6 +60,12 @@ const themes = [
   { value: "nocturne", label: "夜墨", colors: ["#1d1a16", "#c08a55", "#88a867"] },
 ];
 
+const builtinBackgrounds = [
+  { value: "forest", label: "林间晨雾" },
+  { value: "dune", label: "赤陶沙丘" },
+  { value: "night", label: "夜航星空" },
+];
+
 watch(
   () => form.theme,
   (theme) => {
@@ -82,6 +88,7 @@ async function chooseBackground() {
   if (!path) return;
   try {
     const info = await api.importBackground(path);
+    store.backgroundPreset = "";
     store.backgroundUrl = info.data_url;
     form.background_image = info.path;
     notify("背景已应用，保存后长期保留");
@@ -90,8 +97,19 @@ async function chooseBackground() {
   }
 }
 
+function previewBuiltin(name: string) {
+  store.backgroundPreset = name;
+  store.backgroundUrl = "";
+  form.background_image = `builtin:${name}`;
+  // 旧默认值偏保守，首次选择内置底图时切到更能看出磨砂质感的一组参数
+  if (form.background_blur === 18) form.background_blur = 4;
+  if (form.glass_blur === 14) form.glass_blur = 18;
+  if (form.glass_opacity === 78) form.glass_opacity = 62;
+}
+
 function clearBackground() {
   store.backgroundUrl = "";
+  store.backgroundPreset = "";
   form.background_image = null;
   notify("已移除背景，保存后生效");
 }
@@ -351,12 +369,43 @@ function useAutoJava() {
 
       <div class="setting">
         <div class="setting__label">
+          <strong>内置底图</strong>
+          <span>点选即可预览磨砂玻璃效果，无需本地图片</span>
+        </div>
+        <div class="setting__control">
+          <div class="bg-presets">
+            <button
+              v-for="bg in builtinBackgrounds"
+              :key="bg.value"
+              class="bg-chip"
+              :class="{
+                'bg-chip--active': form.background_image === `builtin:${bg.value}`,
+              }"
+              @click="previewBuiltin(bg.value)"
+            >
+              <span class="bg-chip__swatch" :class="`bg-chip__swatch--${bg.value}`" />
+              {{ bg.label }}
+            </button>
+            <button
+              class="bg-chip"
+              :class="{ 'bg-chip--active': !form.background_image }"
+              @click="clearBackground"
+            >
+              <span class="bg-chip__swatch bg-chip__swatch--none" />
+              无背景
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
           <strong>背景图片</strong>
           <span>PNG / JPG / WEBP / BMP / GIF，上限 24 MB</span>
         </div>
         <div class="setting__control">
           <div class="row">
-            <span class="muted small">{{ form.background_image ? "已设置" : "未设置" }}</span>
+            <span class="muted small">{{ form.background_image && !form.background_image.startsWith("builtin:") ? "已设置" : "未设置" }}</span>
             <IconButton icon="image" label="选择背景图片" :size="34" @click="chooseBackground" />
             <IconButton
               icon="trash"
@@ -695,6 +744,63 @@ function useAutoJava() {
 
 .theme-chip__check {
   color: var(--moss);
+}
+
+.bg-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.bg-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  transition: border-color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo);
+}
+
+.bg-chip:hover {
+  border-color: var(--walnut-light);
+  transform: translateY(-1px);
+}
+
+.bg-chip--active {
+  border-color: var(--moss);
+  color: var(--moss);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.08);
+}
+
+.bg-chip__swatch {
+  width: 22px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background-size: cover;
+}
+
+.bg-chip__swatch--forest {
+  background-image: linear-gradient(180deg, #b7ccb0 0 40%, #7d9a6b 41% 60%, #45603c 61%);
+}
+
+.bg-chip__swatch--dune {
+  background-image: linear-gradient(180deg, #f7dfc0 0 40%, #d9a97f 41% 60%, #a8623f 61%);
+}
+
+.bg-chip__swatch--night {
+  background-image: linear-gradient(180deg, #141d2e 0 46%, #1e2c42 47% 72%, #16202e 73%);
+}
+
+.bg-chip__swatch--none {
+  background-image: linear-gradient(135deg, var(--panel) 0 50%, var(--panel-2) 50%);
 }
 
 .savebar {

@@ -14,9 +14,9 @@ onMounted(initApp);
 const appStyle = computed(
   () =>
     ({
-      "--bg-blur": `${store.config?.background_blur ?? 18}px`,
-      "--glass-blur": `${store.config?.glass_blur ?? 14}px`,
-      "--glass-alpha": String((store.config?.glass_opacity ?? 78) / 100),
+      "--bg-blur": `${store.config?.background_blur ?? 4}px`,
+      "--glass-blur": `${store.config?.glass_blur ?? 18}px`,
+      "--glass-alpha": String((store.config?.glass_opacity ?? 62) / 100),
     }) as Record<string, string>
 );
 
@@ -49,12 +49,18 @@ const statusText = computed(() => {
     class="app"
     :class="{
       'no-anim': store.config && !store.config.animations,
-      glass: !!store.backgroundUrl,
+      glass: !!store.backgroundUrl || !!store.backgroundPreset,
     }"
     :style="appStyle"
   >
-    <div v-if="store.backgroundUrl" class="wallpaper" aria-hidden="true">
-      <img :src="store.backgroundUrl" alt="" />
+    <div
+      v-if="store.backgroundUrl || store.backgroundPreset"
+      class="wallpaper"
+      :class="store.backgroundPreset ? `wallpaper--${store.backgroundPreset}` : ''"
+      aria-hidden="true"
+    >
+      <img v-if="store.backgroundUrl" :src="store.backgroundUrl" alt="" />
+      <span v-else class="wallpaper__builtin" />
       <span class="wallpaper__tint" />
     </div>
 

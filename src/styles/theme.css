@@ -1041,12 +1041,65 @@ a {
   pointer-events: none;
 }
 
-.wallpaper img {
+.wallpaper img,
+.wallpaper__builtin {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
   transform: scale(1.06);
-  filter: blur(var(--bg-blur, 18px)) saturate(1.04);
+  filter: blur(var(--bg-blur, 4px)) saturate(1.08);
+}
+
+.wallpaper__builtin {
+  position: absolute;
+  inset: 0;
+  background-size: cover;
+  background-position: center;
+}
+
+.wallpaper--forest .wallpaper__builtin {
+  background-image: radial-gradient(
+      circle at 78% 20%,
+      rgba(255, 244, 214, 0.95) 0 3.2%,
+      rgba(255, 244, 214, 0.32) 3.3% 8%,
+      transparent 9%
+    ),
+    linear-gradient(180deg, #b7ccb0 0%, #d6e1c8 34%, #9cb187 35%, #7d9a6b 52%, #5d7a4e 53%, #45603c 100%),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 68px,
+      rgba(32, 52, 28, 0.18) 68px 76px,
+      transparent 76px 132px
+    );
+}
+
+.wallpaper--dune .wallpaper__builtin {
+  background-image: radial-gradient(
+      circle at 22% 18%,
+      rgba(255, 245, 220, 0.9) 0 2.6%,
+      rgba(255, 245, 220, 0.28) 2.7% 7%,
+      transparent 8%
+    ),
+    radial-gradient(ellipse 90% 55% at 12% 108%, #c28157 0 58%, transparent 59%),
+    radial-gradient(ellipse 105% 62% at 92% 116%, #a8623f 0 60%, transparent 61%),
+    linear-gradient(180deg, #f7dfc0 0%, #ecc9a7 48%, #d9a97f 100%);
+}
+
+.wallpaper--night .wallpaper__builtin {
+  background-image: radial-gradient(
+      circle at 74% 16%,
+      rgba(247, 236, 208, 0.92) 0 3.4%,
+      rgba(247, 236, 208, 0.18) 3.5% 7%,
+      transparent 8%
+    ),
+    radial-gradient(1.4px 1.4px at 12% 22%, rgba(255, 255, 255, 0.85) 50%, transparent 51%),
+    radial-gradient(1.2px 1.2px at 28% 34%, rgba(255, 255, 255, 0.7) 50%, transparent 51%),
+    radial-gradient(1.6px 1.6px at 44% 16%, rgba(255, 255, 255, 0.9) 50%, transparent 51%),
+    radial-gradient(1.2px 1.2px at 62% 30%, rgba(255, 255, 255, 0.65) 50%, transparent 51%),
+    radial-gradient(1.4px 1.4px at 84% 42%, rgba(255, 255, 255, 0.75) 50%, transparent 51%),
+    radial-gradient(1.1px 1.1px at 18% 48%, rgba(255, 255, 255, 0.6) 50%, transparent 51%),
+    linear-gradient(180deg, #141d2e 0%, #1e2c42 52%, #16202e 100%);
 }
 
 .wallpaper__tint {
@@ -1054,19 +1107,31 @@ a {
   inset: 0;
   background: linear-gradient(
       180deg,
-      rgba(var(--glass-rgb), 0.24),
-      rgba(var(--glass-rgb), 0.34)
+      rgba(var(--glass-rgb), 0.1),
+      rgba(var(--glass-rgb), 0.2)
     ),
-    radial-gradient(900px 600px at 80% 0%, rgba(var(--ambient-a), 0.16), transparent 60%);
+    radial-gradient(900px 600px at 80% 0%, rgba(var(--ambient-a), 0.12), transparent 60%);
 }
 
 .app.glass .card,
 .app.glass .topbar,
 .app.glass .statusbar,
 .app.glass .drawer {
-  background: rgba(var(--glass-rgb), var(--glass-alpha, 0.78));
-  backdrop-filter: blur(var(--glass-blur, 14px)) saturate(1.06);
+  background: linear-gradient(
+    150deg,
+    rgba(var(--glass-rgb), calc(var(--glass-alpha, 0.62) + 0.08)),
+    rgba(var(--glass-rgb), var(--glass-alpha, 0.62)) 55%,
+    rgba(var(--glass-rgb), calc(var(--glass-alpha, 0.62) - 0.08))
+  );
+  backdrop-filter: blur(var(--glass-blur, 18px)) saturate(1.22);
+  border-color: rgba(var(--glass-rgb), 0.5);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45), 0 14px 34px rgba(40, 28, 16, 0.12);
+}
+
+.app.glass .topbar,
+.app.glass .statusbar {
   border-color: var(--line-strong);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.3) inset;
 }
 
 .app.glass .hero {

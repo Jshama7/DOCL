@@ -32,6 +32,7 @@ export const store = reactive({
   logOpen: false,
   gameRunning: false,
   backgroundUrl: "",
+  backgroundPreset: "",
   toast: null as { text: string; kind: "ok" | "err" } | null,
   msLogin: null as {
     code: DeviceCode | null;
@@ -109,8 +110,15 @@ export async function loadBackground() {
   const path = store.config?.background_image;
   if (!path) {
     store.backgroundUrl = "";
+    store.backgroundPreset = "";
     return;
   }
+  if (path.startsWith("builtin:")) {
+    store.backgroundPreset = path.slice("builtin:".length);
+    store.backgroundUrl = "";
+    return;
+  }
+  store.backgroundPreset = "";
   try {
     store.backgroundUrl = await api.backgroundDataUrl(path);
   } catch {
@@ -118,10 +126,17 @@ export async function loadBackground() {
   }
 }
 
+export async function useBuiltinBackground(name: string) {
+  store.backgroundPreset = name;
+  store.backgroundUrl = "";
+  await saveConfig({ background_image: `builtin:${name}` });
+}
+
 export async function setBackground(path: string) {
   try {
     const info = await api.importBackground(path);
     store.backgroundUrl = info.data_url;
+    store.backgroundPreset = "";
     await saveConfig({ background_image: info.path });
     notify("背景图片已应用");
   } catch (err) {
@@ -131,6 +146,7 @@ export async function setBackground(path: string) {
 
 export async function clearBackground() {
   store.backgroundUrl = "";
+  store.backgroundPreset = "";
   await saveConfig({ background_image: null });
 }
 

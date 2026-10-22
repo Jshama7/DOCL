@@ -1,5 +1,6 @@
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::download::{self, FileTask, ProgressState};
+use crate::launch;
 use crate::models::*;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -634,6 +635,289 @@ pub struct LoaderOption {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct BmclForgePromo {
+    name: String,
+    build: BmclForgeBuild,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BmclForgeBuild {
+    version: String,
+}
+
+async fn forge_recommended(
+    client: &reqwest::Client,
+    game_version: &str,
+) -> Result<String> {
+    let list: Vec<BmclForgePromo> = download::get_json(
+        client,
+        "https://bmclapi2.bangbang93.com/forge/promos",
+        false,
+    )
+    .await?;
+    let recommended = format!("{game_version}-recommended");
+    let latest = format!("{game_version}-latest");
+    list.iter()
+        .find(|entry| entry.name == recommended)
+        .or_else(|| list.iter().find(|entry| entry.name == latest))
+        .map(|entry| entry.build.version.clone())
+        .ok_or_else(|| anyhow!("Forge 没有适配 {game_version} 的版本"))
+}
+
+fn xml_versions(text: &str) -> Vec<String> {
+    text.split("<version>")
+        .skip(1)
+        .filter_map(|chunk| chunk.split("</version>").next())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
+}
+
+fn version_key(value: &str) -> Vec<u64> {
+    value
+        .split('.')
+        .map(|part| part.parse::<u64>().unwrap_or(0))
+        .collect()
+}
+
+async fn fetch_maven_metadata(client: &reqwest::Client, path: &str) -> Result<Vec<String>> {
+    let mirrors = [
+        format!("https://bmclapi2.bangbang93.com/maven/{path}"),
+        format!("https://maven.neoforged.net/releases/{path}"),
+    ];
+    for url in mirrors {
+        if let Ok(bytes) = download::get_bytes(client, &url, false).await {
+            let text = String::from_utf8_lossy(&bytes);
+            let versions = xml_versions(&text);
+            if !versions.is_empty() {
+                return Ok(versions);
+            }
+        }
+    }
+    bail!("无法获取 NeoForge 版本列表")
+}
+
+/// 返回 (安装器坐标版本, 下载地址, 文件名)
+async fn neoforge_installer(
+    client: &reqwest::Client,
+    game_version: &str,
+) -> Result<(String, String, String)> {
+    if game_version == "1.20.1" {
+        let versions =
+            fetch_maven_metadata(client, "net/neoforged/forge/maven-metadata.xml").await?;
+        let pick = versions
+            .iter()
+            .filter(|v| v.starts_with("1.20.1-") && !v.contains("beta"))
+            .max_by_key(|v| version_key(v))
+            .ok_or_else(|| anyhow!("NeoForge 没有适配 1.20.1 的版本"))?
+            .clone();
+        let file = format!("forge-{pick}-installer.jar");
+        return Ok((
+            pick.clone(),
+            format!(
+                "https://bmclapi2.bangbang93.com/maven/net/neoforged/forge/{pick}/{file}"
+            ),
+            file,
+        ));
+    }
+
+    let prefix = game_version
+        .strip_prefix("1.")
+        .unwrap_or(game_version)
+        .to_string();
+    let mut versions =
+        fetch_maven_metadata(client, "net/neoforged/neoforge/maven-metadata.xml").await?;
+    versions.retain(|v| {
+        v.starts_with(&format!("{prefix}."))
+            && !v.contains('-')
+            && v.split('.').all(|part| part.chars().all(|c| c.is_ascii_digit()))
+    });
+    let pick = versions
+        .into_iter()
+        .max_by_key(|v| version_key(v))
+        .ok_or_else(|| anyhow!("NeoForge 没有适配 {game_version} 的版本"))?;
+    let file = format!("neoforge-{pick}-installer.jar");
+    Ok((
+        pick.clone(),
+        format!(
+            "https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/{pick}/{file}"
+        ),
+        file,
+    ))
+}
+
+async fn forge_installer(
+    client: &reqwest::Client,
+    game_version: &str,
+) -> Result<(String, String, String)> {
+    let version = forge_recommended(client, game_version).await?;
+    let coordinate = format!("{game_version}-{version}");
+    let file = format!("forge-{coordinate}-installer.jar");
+    Ok((
+        version,
+        format!(
+            "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/{coordinate}/{file}"
+        ),
+        file,
+    ))
+}
+
+async fn install_forge_like(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &Config,
+    game_version: &str,
+    loader: &str,
+    progress: Arc<ProgressState>,
+) -> Result<InstalledVersion> {
+    let required = read_installed_detail(cfg, game_version)?.required_java();
+    let java = launch::find_java(cfg, required)?;
+
+    progress.set_message(format!("正在获取 {loader} 安装器地址…"));
+    let (version, url, file_name) = if loader == "neoforge" {
+        neoforge_installer(client, game_version).await?
+    } else {
+        forge_installer(client, game_version).await?
+    };
+
+    let cache = config::data_dir().join("installers");
+    tokio::fs::create_dir_all(&cache).await?;
+    let installer_path = cache.join(&file_name);
+    if !installer_path.exists() {
+        progress.set_message(format!("正在下载 {loader} 安装器…"));
+        let bytes = download::get_bytes(client, &url, false)
+            .await
+            .with_context(|| format!("下载 {loader} 安装器失败"))?;
+        tokio::fs::write(&installer_path, bytes).await?;
+    }
+
+    progress.set_message(format!(
+        "正在运行 {loader} 安装器（可能需要几分钟）…"
+    ));
+    progress.files_total.store(1, Ordering::Relaxed);
+    progress.files_done.store(0, Ordering::Relaxed);
+    progress.active.store(true, Ordering::Relaxed);
+    download::emit_now(app, &progress);
+
+    let mut command = tokio::process::Command::new(&java.path);
+    command
+        .arg("-jar")
+        .arg(&installer_path)
+        .arg("--installClient")
+        .arg(cfg.game_root());
+    if cfg.use_mirror() {
+        command
+            .arg("--mirror")
+            .arg("https://bmclapi2.bangbang93.com/maven");
+    }
+    command
+        .current_dir(cfg.game_root())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
+    let mut child = command.spawn().context("启动 Forge/NeoForge 安装器失败")?;
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let read_stream = |stream: Option<tokio::process::ChildStdout>,
+                       progress: Arc<ProgressState>| async move {
+        if let Some(stream) = stream {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            let mut lines = BufReader::new(stream).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let text = line.trim();
+                if !text.is_empty() {
+                    progress.set_message(text.chars().take(120).collect::<String>());
+                }
+            }
+        }
+    };
+    let read_err = |stream: Option<tokio::process::ChildStderr>,
+                    progress: Arc<ProgressState>| async move {
+        if let Some(stream) = stream {
+            use tokio::io::{AsyncBufReadExt, BufReader};
+            let mut lines = BufReader::new(stream).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let text = line.trim();
+                if !text.is_empty() {
+                    progress.set_message(text.chars().take(120).collect::<String>());
+                }
+            }
+        }
+    };
+
+    let out_task = tokio::spawn(read_stream(stdout, progress.clone()));
+    let err_task = tokio::spawn(read_err(stderr, progress.clone()));
+
+    let status = tokio::time::timeout(std::time::Duration::from_secs(900), child.wait())
+        .await
+        .map_err(|_| anyhow!("{loader} 安装器运行超时"))??;
+    let _ = out_task.await;
+    let _ = err_task.await;
+    if !status.success() {
+        bail!(
+            "{} 安装器退出码：{}，请查看安装器输出或改用离线安装",
+            loader,
+            status.code().unwrap_or(-1)
+        );
+    }
+
+    progress.files_done.store(1, Ordering::Relaxed);
+    progress.set_message(format!("{loader} 安装完成"));
+
+    let target = installed_loaders(cfg, game_version)
+        .into_iter()
+        .find(|(name, _)| name == loader)
+        .map(|(_, id)| id)
+        .ok_or_else(|| anyhow!("安装器已结束，但没有找到 {loader} 版本，请检查游戏目录"))?;
+
+    if let Some(parent_natives) = {
+        let path = natives_dir(cfg, game_version);
+        path.exists().then_some(path)
+    } {
+        let dest = natives_dir(cfg, &target);
+        if !dest.exists() {
+            tokio::fs::create_dir_all(&dest).await?;
+            let source = parent_natives;
+            let dest_clone = dest.clone();
+            tokio::task::spawn_blocking(move || copy_dir_all(&source, &dest_clone)).await??;
+        }
+    }
+
+    let detail = resolve_detail(cfg, &target)?;
+    let jar_size = detail
+        .jar_id
+        .as_ref()
+        .and_then(|jar_id| {
+            std::fs::metadata(
+                cfg.game_root()
+                    .join("versions")
+                    .join(jar_id)
+                    .join(format!("{jar_id}.jar")),
+            )
+            .ok()
+        })
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let _ = version;
+    Ok(InstalledVersion {
+        id: target,
+        kind: "modded".into(),
+        jar_size,
+        has_jar: true,
+        last_modified: std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        java_major: detail.detail.required_java(),
+    })
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct FabricLoaderEntry {
     loader: FabricLoaderVersion,
 }
@@ -675,6 +959,13 @@ async fn pick_loader_version(
     loader: &str,
     game_version: &str,
 ) -> Result<String> {
+    if loader == "forge" {
+        return forge_recommended(client, game_version).await;
+    }
+    if loader == "neoforge" {
+        let (version, _, _) = neoforge_installer(client, game_version).await?;
+        return Ok(version);
+    }
     let url = loader_list_url(loader, game_version)
         .ok_or_else(|| anyhow!("不支持的加载器：{loader}"))?;
     let list: Vec<FabricLoaderEntry> =
@@ -707,6 +998,10 @@ fn installed_loaders(cfg: &Config, game_version: &str) -> Vec<(String, String)> 
             "fabric"
         } else if id.starts_with("quilt-loader") {
             "quilt"
+        } else if id.contains("neoforge") {
+            "neoforge"
+        } else if id.contains("forge") {
+            "forge"
         } else {
             continue;
         };
@@ -724,8 +1019,8 @@ pub async fn loader_options(
     let loaders = [
         ("fabric", "Fabric", true),
         ("quilt", "Quilt", true),
-        ("forge", "Forge", false),
-        ("neoforge", "NeoForge", false),
+        ("forge", "Forge", true),
+        ("neoforge", "NeoForge", true),
         ("optifine", "OptiFine", false),
     ];
     let mut result = Vec::new();
@@ -785,6 +1080,10 @@ pub async fn install_loader(
     if !is_installed(cfg, game_version) {
         progress.set_message(format!("正在安装原版 {game_version}…"));
         install_version(app, client, cfg, game_version, progress.clone()).await?;
+    }
+
+    if loader == "forge" || loader == "neoforge" {
+        return install_forge_like(app, client, cfg, game_version, loader, progress).await;
     }
 
     progress.set_message(format!("正在获取 {loader} 加载器版本…"));

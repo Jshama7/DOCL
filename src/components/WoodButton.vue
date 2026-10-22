@@ -67,6 +67,7 @@ function onClick(event: MouseEvent) {
   letter-spacing: 0.01em;
   overflow: hidden;
   isolation: isolate;
+  backdrop-filter: blur(12px) saturate(1.18);
   transition: background var(--dur-2) var(--ease-out-quart),
     border-color var(--dur-2) ease, transform var(--dur-1) var(--ease-out-quart),
     box-shadow var(--dur-2) var(--ease-out-quart), color var(--dur-2) ease;
@@ -96,7 +97,7 @@ function onClick(event: MouseEvent) {
   pointer-events: none;
   transform: scale(0);
   opacity: 0;
-  background: radial-gradient(circle, rgba(255, 253, 246, 0.55), transparent 62%);
+  background: radial-gradient(circle, rgba(var(--glass-rgb), 0.5), transparent 62%);
   z-index: 1;
 }
 
@@ -159,52 +160,73 @@ function onClick(event: MouseEvent) {
 }
 
 .btn--primary {
-  color: var(--btn-fg);
-  background: linear-gradient(180deg, var(--btn-a) 0%, var(--btn-b) 55%, var(--btn-c) 100%);
-  border-color: var(--btn-border);
-  box-shadow: 0 2px 0 rgba(70, 40, 18, 0.3), 0 8px 18px rgba(70, 40, 18, 0.22),
-    0 1px 0 rgba(255, 255, 255, 0.18) inset;
+  color: var(--walnut-deep);
+  background: linear-gradient(
+    180deg,
+    rgba(var(--accent-rgb), 0.14),
+    rgba(var(--accent-rgb), 0.26)
+  );
+  border-color: rgba(var(--accent-rgb), 0.3);
+  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.7) inset,
+    0 8px 20px rgba(70, 40, 18, 0.08);
 }
 
 .btn--primary:hover:not(:disabled) {
-  filter: brightness(1.07);
-  box-shadow: 0 3px 0 rgba(70, 40, 18, 0.28), 0 12px 24px rgba(70, 40, 18, 0.26),
-    0 1px 0 rgba(255, 255, 255, 0.22) inset;
+  background: linear-gradient(
+    180deg,
+    rgba(var(--accent-rgb), 0.2),
+    rgba(var(--accent-rgb), 0.34)
+  );
+  border-color: rgba(var(--accent-rgb), 0.42);
+  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.8) inset,
+    0 12px 26px rgba(70, 40, 18, 0.12);
   transform: translateY(-1px);
 }
 
 .btn--ghost {
-  background: transparent;
-  border-color: var(--line-strong);
+  background: rgba(var(--glass-rgb), 0.18);
+  border-color: rgba(var(--accent-rgb), 0.18);
   color: var(--ink-soft);
 }
 
 .btn--ghost:hover:not(:disabled) {
-  border-color: var(--walnut-light);
+  border-color: rgba(var(--accent-rgb), 0.34);
   color: var(--walnut-deep);
-  background: rgba(111, 66, 36, 0.05);
+  background: rgba(var(--glass-rgb), 0.34);
 }
 
 .btn--soft {
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
-  border-color: var(--line);
+  background: linear-gradient(
+    180deg,
+    rgba(var(--glass-rgb), 0.55),
+    rgba(var(--glass-rgb), 0.34)
+  );
+  border-color: rgba(var(--glass-rgb), 0.62);
   color: var(--walnut);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.7) inset;
+  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.72) inset,
+    0 6px 16px rgba(70, 40, 18, 0.06);
 }
 
 .btn--soft:hover:not(:disabled) {
-  border-color: var(--walnut-light);
+  border-color: rgba(var(--accent-rgb), 0.32);
   color: var(--walnut-deep);
-  box-shadow: var(--shadow-1);
+  background: linear-gradient(
+    180deg,
+    rgba(var(--glass-rgb), 0.7),
+    rgba(var(--glass-rgb), 0.48)
+  );
+  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.85) inset,
+    0 10px 22px rgba(70, 40, 18, 0.1);
 }
 
 .btn--danger {
-  background: var(--danger-soft);
-  border-color: #e7cfc5;
+  background: rgba(190, 92, 70, 0.1);
+  border-color: rgba(190, 92, 70, 0.24);
   color: var(--danger);
 }
 
 .btn--danger:hover:not(:disabled) {
-  background: #eed6cd;
+  background: rgba(190, 92, 70, 0.16);
+  border-color: rgba(190, 92, 70, 0.36);
 }
 </style>

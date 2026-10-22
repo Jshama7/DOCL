@@ -5,6 +5,7 @@ use crate::install::{self, InstalledVersion, LoaderOption};
 use crate::java::{self, JavaInfo};
 use crate::launch;
 use crate::models::*;
+use crate::skins;
 use crate::AppState;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, State};
@@ -222,6 +223,104 @@ pub fn select_account(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     let mut cfg = state.config.lock().unwrap();
     cfg.selected_account = Some(id);
     config::save(&cfg).map_err(err)
+}
+
+#[derive(serde::Serialize)]
+pub struct AccountSkinView {
+    pub data_url: String,
+    pub model: String,
+    pub source: String,
+}
+
+fn find_account(account_id: &str) -> CmdResult<Account> {
+    auth::load_accounts()
+        .into_iter()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| "账号不存在".into())
+}
+
+#[tauri::command]
+pub async fn get_account_skin(
+    state: State<'_, AppState>,
+    account_id: String,
+) -> CmdResult<AccountSkinView> {
+    let account = find_account(&account_id)?;
+    let (data_url, model, source) = skins::load_skin(&state.client, &account).await;
+    Ok(AccountSkinView {
+        data_url,
+        model,
+        source,
+    })
+}
+
+#[tauri::command]
+pub fn save_account_skin(
+    state: State<'_, AppState>,
+    account_id: String,
+    png_base64: String,
+    model: String,
+) -> CmdResult<AccountView> {
+    let path = skins::save_local(&account_id, &png_base64).map_err(err)?;
+    let mut accounts = auth::load_accounts();
+    let account = accounts
+        .iter_mut()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| "账号不存在".to_string())?;
+    account.skin_path = Some(path.to_string_lossy().to_string());
+    account.skin_model = model;
+    let view = AccountView::from(&*account);
+    auth::save_accounts(&accounts).map_err(err)?;
+    *state.accounts.lock().unwrap() = accounts;
+    Ok(view)
+}
+
+#[tauri::command]
+pub fn clear_account_skin(
+    state: State<'_, AppState>,
+    account_id: String,
+) -> CmdResult<AccountView> {
+    let mut accounts = auth::load_accounts();
+    let account = accounts
+        .iter_mut()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| "账号不存在".to_string())?;
+    if let Some(path) = account.skin_path.take() {
+        let _ = std::fs::remove_file(path);
+    }
+    account.skin_model = "classic".into();
+    let view = AccountView::from(&*account);
+    auth::save_accounts(&accounts).map_err(err)?;
+    *state.accounts.lock().unwrap() = accounts;
+    Ok(view)
+}
+
+#[tauri::command]
+pub fn export_account_skin(account_id: String, target_path: String) -> CmdResult<()> {
+    let account = find_account(&account_id)?;
+    skins::export_bytes(&account, &target_path).map_err(err)
+}
+
+#[tauri::command]
+pub async fn upload_account_skin(
+    state: State<'_, AppState>,
+    account_id: String,
+    png_base64: String,
+    model: String,
+) -> CmdResult<AccountView> {
+    let mut account = find_account(&account_id)?;
+    skins::upload_skin(&state.client, &account, &png_base64, &model)
+        .await
+        .map_err(err)?;
+    let path = skins::save_local(&account_id, &png_base64).map_err(err)?;
+    account.skin_path = Some(path.to_string_lossy().to_string());
+    account.skin_model = model;
+    let mut accounts = auth::load_accounts();
+    if let Some(slot) = accounts.iter_mut().find(|a| a.id == account_id) {
+        *slot = account.clone();
+    }
+    auth::save_accounts(&accounts).map_err(err)?;
+    *state.accounts.lock().unwrap() = accounts;
+    Ok(AccountView::from(&account))
 }
 
 #[tauri::command]

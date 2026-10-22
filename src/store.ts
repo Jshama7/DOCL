@@ -7,6 +7,7 @@ import {
   onMsLogin,
   onMsLoginAccount,
   type AccountView,
+  type AccountSkin,
   type Config,
   type DeviceCode,
   type InstalledVersion,
@@ -33,6 +34,13 @@ export const store = reactive({
   gameRunning: false,
   backgroundUrl: "",
   backgroundPreset: "",
+  downloadPanel: "hidden" as "hidden" | "open" | "ball",
+  lastProgress: null as ProgressSnapshot | null,
+  lastJobTitle: "",
+  lastJobError: null as string | null,
+  accountSkin: null as AccountSkin | null,
+  skinLoading: false,
+  skinEditorOpen: false,
   toast: null as { text: string; kind: "ok" | "err" } | null,
   msLogin: null as {
     code: DeviceCode | null;
@@ -71,6 +79,23 @@ export async function refreshInstalled() {
 
 export async function refreshAccounts() {
   store.accounts = await api.getAccounts();
+  await loadSelectedSkin();
+}
+
+export async function loadSelectedSkin() {
+  const account = selectedAccount.value;
+  if (!account) {
+    store.accountSkin = null;
+    return;
+  }
+  store.skinLoading = true;
+  try {
+    store.accountSkin = await api.getAccountSkin(account.id);
+  } catch {
+    store.accountSkin = null;
+  } finally {
+    store.skinLoading = false;
+  }
 }
 
 export async function refreshJava() {
@@ -157,12 +182,17 @@ export async function installVersion(id: string) {
   }
   store.installingId = id;
   store.progress = null;
+  store.lastProgress = null;
+  store.lastJobError = null;
+  store.lastJobTitle = id;
+  store.downloadPanel = "open";
   try {
     await api.installVersion(id);
     await refreshInstalled();
     await refreshConfig();
     notify(`${id} 安装完成`);
   } catch (err) {
+    store.lastJobError = String(err);
     notify(`安装失败：${String(err)}`, "err");
   } finally {
     store.installingId = null;
@@ -179,13 +209,47 @@ export async function installLoader(versionId: string, loader: string) {
   }
   store.installingId = `${versionId} · ${loader}`;
   store.progress = null;
+  store.lastProgress = null;
+  store.lastJobError = null;
+  store.lastJobTitle = `${versionId} · ${loader}`;
+  store.downloadPanel = "open";
   try {
     await api.installLoader(versionId, loader);
     await refreshInstalled();
     await refreshConfig();
     notify(`${loader} 安装完成`);
   } catch (err) {
+    store.lastJobError = String(err);
     notify(`安装失败：${String(err)}`, "err");
+  } finally {
+    store.installingId = null;
+    window.setTimeout(() => {
+      if (!store.progress?.active) store.progress = null;
+    }, 800);
+  }
+}
+
+export async function installJava(major: number) {
+  if (store.installingId) {
+    notify("已有安装任务正在进行", "err");
+    return;
+  }
+  store.installingId = `Java ${major}`;
+  store.progress = null;
+  store.lastProgress = null;
+  store.lastJobError = null;
+  store.lastJobTitle = `Java ${major}`;
+  store.downloadPanel = "open";
+  try {
+    const info = await api.installJava(major);
+    await refreshJava();
+    await refreshConfig();
+    notify(`Java ${major} 已安装`);
+    return info;
+  } catch (err) {
+    store.lastJobError = String(err);
+    notify(`安装 Java 失败：${String(err)}`, "err");
+    return null;
   } finally {
     store.installingId = null;
     window.setTimeout(() => {
@@ -206,6 +270,7 @@ export async function selectVersion(id: string) {
 export async function selectAccount(id: string) {
   await api.selectAccount(id);
   await refreshConfig();
+  await loadSelectedSkin();
 }
 
 export async function createOffline(name: string) {
@@ -302,6 +367,7 @@ export async function initApp() {
 
   await onInstallProgress((p) => {
     store.progress = p;
+    if (p.active) store.lastProgress = p;
   });
 
   await onGameLog((line) => {

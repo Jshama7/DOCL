@@ -182,18 +182,6 @@ function openGameDir() {
       </div>
     </section>
 
-    <section v-if="progress" class="card card-pad progress-card reveal">
-      <div class="row-between">
-        <div class="row">
-          <span class="tag tag--grass">安装中</span>
-          <strong>{{ store.installingId }}</strong>
-        </div>
-        <span class="muted small">{{ speed }}</span>
-      </div>
-      <WoodProgress :value="percent" />
-      <p class="muted small">{{ progress.message }}</p>
-    </section>
-
     <section class="stat-strip card reveal" style="--i: 1">
       <div class="stat">
         <span class="stat__num display">{{ String(store.installed.length).padStart(2, "0") }}</span>

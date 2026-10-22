@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, markRaw, onMounted } from "vue";
 import TitleBar from "./components/TitleBar.vue";
+import DownloadCenter from "./components/DownloadCenter.vue";
 import LogDrawer from "./components/LogDrawer.vue";
 import HomeView from "./views/HomeView.vue";
 import VersionsView from "./views/VersionsView.vue";
@@ -94,6 +95,7 @@ const statusText = computed(() => {
       </div>
     </footer>
 
+    <DownloadCenter />
     <LogDrawer />
 
     <Transition name="toast">

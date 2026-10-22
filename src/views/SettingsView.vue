@@ -1,16 +1,16 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from "vue";
+import { nextTick, reactive, ref, watch } from "vue";
 import { api, pickDirectory, pickImage, type Config } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
-import WoodProgress from "../components/WoodProgress.vue";
 import WoodSelect from "../components/WoodSelect.vue";
 import WoodSlider from "../components/WoodSlider.vue";
 import WoodToggle from "../components/WoodToggle.vue";
 import {
   applyTheme,
+  installJava,
   loadBackground,
   notify,
   refreshConfig,
@@ -144,14 +144,6 @@ const javaOptions = [
   { value: "25", label: "Java 25" },
 ];
 
-const javaProgress = computed(() => {
-  const p = store.progress;
-  if (!p || p.stage !== "java" || !p.active) return null;
-  if (p.bytes_total > 0) return Math.min(100, (p.bytes_done / p.bytes_total) * 100);
-  if (p.files_total > 0) return Math.min(100, (p.files_done / p.files_total) * 100);
-  return 0;
-});
-
 async function chooseDir() {
   const dir = await pickDirectory();
   if (dir) form.game_dir = dir;
@@ -166,13 +158,7 @@ async function installRuntime() {
   if (runtimeBusy.value) return;
   runtimeBusy.value = true;
   try {
-    const major = Number(runtimeMajor.value);
-    const info = await api.installJava(major);
-    await refreshJava();
-    await refreshConfig();
-    notify(`Java ${major} 已安装：${info.path}`);
-  } catch (err) {
-    notify(`安装 Java 失败：${String(err)}`, "err");
+    await installJava(Number(runtimeMajor.value));
   } finally {
     runtimeBusy.value = false;
   }
@@ -355,11 +341,6 @@ function useAutoJava() {
             </WoodButton>
           </div>
         </div>
-      </div>
-
-      <div v-if="javaProgress !== null" class="java-progress">
-        <WoodProgress :value="javaProgress" />
-        <span class="muted small">{{ store.progress?.message }}</span>
       </div>
     </section>
 
@@ -564,13 +545,6 @@ function useAutoJava() {
         </div>
       </div>
     </section>
-
-    <div class="savebar">
-      <WoodButton variant="primary" sheen :disabled="saving" @click="save">
-        <AppIcon name="check" :size="15" />
-        {{ saving ? "保存中…" : "保存设置" }}
-      </WoodButton>
-    </div>
       </div>
     </div>
   </div>
@@ -914,11 +888,5 @@ function useAutoJava() {
 
 .bg-chip__swatch--none {
   background-image: linear-gradient(135deg, var(--panel) 0 50%, var(--panel-2) 50%);
-}
-
-.savebar {
-  display: flex;
-  justify-content: flex-end;
-  padding-bottom: 8px;
 }
 </style>

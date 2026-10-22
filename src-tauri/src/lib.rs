@@ -8,6 +8,7 @@ mod java;
 mod launch;
 mod mirror;
 mod models;
+mod skins;
 
 use std::sync::Mutex;
 
@@ -49,6 +50,11 @@ pub fn run() {
             commands::create_offline_account,
             commands::remove_account,
             commands::select_account,
+            commands::get_account_skin,
+            commands::save_account_skin,
+            commands::clear_account_skin,
+            commands::export_account_skin,
+            commands::upload_account_skin,
             commands::ms_login_begin,
             commands::detect_java,
             commands::install_java,

@@ -96,6 +96,8 @@ const icons: Record<string, string[]> = {
     "M12 3v2.2M12 18.8V21M3 12h2.2M18.8 12H21M5.6 5.6l1.6 1.6M16.8 16.8l1.6 1.6M18.4 5.6l-1.6 1.6M7.2 16.8l-1.6 1.6",
   ],
   "chevron-left": ["M14.5 6 9 12l5.5 6"],
+  undo: ["M9 7 4.5 11.5 9 16", "M4.5 11.5H14a5 5 0 0 1 0 10h-2"],
+  redo: ["M15 7l4.5 4.5L15 16", "M19.5 11.5H10a5 5 0 0 0 0 10h2"],
 };
 
 const paths = computed(() => icons[props.name] ?? []);

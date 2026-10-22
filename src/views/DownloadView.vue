@@ -206,24 +206,6 @@ function launchLoader(id: string | null) {
         </template>
 
         <template v-else-if="detailId">
-          <section v-if="progress" class="card card-pad download-progress reveal">
-            <div class="row-between">
-              <div class="row">
-                <span class="tag tag--grass">安装中</span>
-                <strong>{{ store.installingId }}</strong>
-              </div>
-              <div class="row">
-                <span class="muted small">
-                  {{ formatSpeed(progress.bytes_done, progress.elapsed_ms) }} ·
-                  {{ formatBytes(progress.bytes_done) }} / {{ formatBytes(progress.bytes_total) }}
-                </span>
-                <WoodButton variant="danger" size="sm" @click="cancelInstall">取消</WoodButton>
-              </div>
-            </div>
-            <WoodProgress :value="percent" />
-            <p class="muted small">{{ progress.message }}</p>
-          </section>
-
           <div class="detail-head">
             <IconButton
               icon="chevron-left"
@@ -333,24 +315,6 @@ function launchLoader(id: string | null) {
         </template>
 
         <template v-else>
-          <section v-if="progress" class="card card-pad download-progress reveal">
-            <div class="row-between">
-              <div class="row">
-                <span class="tag tag--grass">安装中</span>
-                <strong>{{ store.installingId }}</strong>
-              </div>
-              <div class="row">
-                <span class="muted small">
-                  {{ formatSpeed(progress.bytes_done, progress.elapsed_ms) }} ·
-                  {{ formatBytes(progress.bytes_done) }} / {{ formatBytes(progress.bytes_total) }}
-                </span>
-                <WoodButton variant="danger" size="sm" @click="cancelInstall">取消</WoodButton>
-              </div>
-            </div>
-            <WoodProgress :value="percent" />
-            <p class="muted small">{{ progress.message }}</p>
-          </section>
-
           <section class="card catalog reveal" style="--i: 1">
             <div class="toolbar">
               <div class="tabs">

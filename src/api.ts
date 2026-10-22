@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 
 export interface Config {
@@ -67,6 +67,14 @@ export interface AccountView {
   kind: string;
   name: string;
   uuid: string;
+  skin_path: string | null;
+  skin_model: string;
+}
+
+export interface AccountSkin {
+  data_url: string;
+  model: string;
+  source: "local" | "official" | "default";
 }
 
 export interface DeviceCode {
@@ -114,6 +122,16 @@ export const api = {
   createOfflineAccount: (name: string) => invoke<AccountView>("create_offline_account", { name }),
   removeAccount: (id: string) => invoke<void>("remove_account", { id }),
   selectAccount: (id: string) => invoke<void>("select_account", { id }),
+  getAccountSkin: (accountId: string) =>
+    invoke<AccountSkin>("get_account_skin", { accountId }),
+  saveAccountSkin: (accountId: string, pngBase64: string, model: string) =>
+    invoke<AccountView>("save_account_skin", { accountId, pngBase64, model }),
+  clearAccountSkin: (accountId: string) =>
+    invoke<AccountView>("clear_account_skin", { accountId }),
+  exportAccountSkin: (accountId: string, targetPath: string) =>
+    invoke<void>("export_account_skin", { accountId, targetPath }),
+  uploadAccountSkin: (accountId: string, pngBase64: string, model: string) =>
+    invoke<AccountView>("upload_account_skin", { accountId, pngBase64, model }),
   msLoginBegin: () => invoke<DeviceCode>("ms_login_begin"),
   detectJava: () => invoke<JavaInfo[]>("detect_java"),
   installJava: (major: number) => invoke<JavaInfo>("install_java", { major }),
@@ -160,6 +178,15 @@ export async function pickImage(): Promise<string | null> {
     filters: [
       { name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] },
     ],
+  });
+  return typeof result === "string" ? result : null;
+}
+
+export async function saveSkinDialog(defaultName = "skin.png"): Promise<string | null> {
+  const result = await save({
+    title: "导出皮肤",
+    defaultPath: defaultName,
+    filters: [{ name: "Minecraft 皮肤", extensions: ["png"] }],
   });
   return typeof result === "string" ? result : null;
 }

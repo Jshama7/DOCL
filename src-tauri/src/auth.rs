@@ -21,6 +21,8 @@ pub struct Account {
     pub access_token: String,
     pub refresh_token: String,
     pub expires_at: u64,
+    pub skin_path: Option<String>,
+    pub skin_model: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -29,6 +31,8 @@ pub struct AccountView {
     pub kind: String,
     pub name: String,
     pub uuid: String,
+    pub skin_path: Option<String>,
+    pub skin_model: String,
 }
 
 impl From<&Account> for AccountView {
@@ -38,8 +42,14 @@ impl From<&Account> for AccountView {
             kind: a.kind.clone(),
             name: a.name.clone(),
             uuid: a.uuid.clone(),
+            skin_path: a.skin_path.clone(),
+            skin_model: a.skin_model.clone(),
         }
     }
+}
+
+fn default_skin_model() -> String {
+    "classic".into()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -51,6 +61,10 @@ struct StoredAccount {
     access_token: String,
     refresh_token: String,
     expires_at: u64,
+    #[serde(default)]
+    skin_path: Option<String>,
+    #[serde(default = "default_skin_model")]
+    skin_model: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -161,6 +175,8 @@ pub fn create_offline(name: &str) -> Result<Account> {
         access_token: "0".into(),
         refresh_token: String::new(),
         expires_at: u64::MAX,
+        skin_path: None,
+        skin_model: "classic".into(),
     })
 }
 
@@ -184,6 +200,8 @@ pub fn load_accounts() -> Vec<Account> {
                 access_token: access,
                 refresh_token: refresh,
                 expires_at: s.expires_at,
+                skin_path: s.skin_path,
+                skin_model: s.skin_model,
             })
         })
         .collect()
@@ -208,6 +226,8 @@ pub fn save_accounts(accounts: &[Account]) -> Result<()> {
                 encrypt(&a.refresh_token).unwrap_or_else(|_| a.refresh_token.clone())
             },
             expires_at: a.expires_at,
+            skin_path: a.skin_path.clone(),
+            skin_model: a.skin_model.clone(),
         })
         .collect();
     std::fs::create_dir_all(config::data_dir())?;
@@ -411,6 +431,8 @@ pub async fn refresh(client: &reqwest::Client, account: &Account) -> Result<Acco
         access_token: mc_token,
         refresh_token: new_refresh,
         expires_at: now_secs() + expires_in,
+        skin_path: account.skin_path.clone(),
+        skin_model: account.skin_model.clone(),
     })
 }
 
@@ -435,6 +457,8 @@ pub async fn poll_device_login(
         access_token: mc_token,
         refresh_token,
         expires_at: now_secs() + mc_expires,
+        skin_path: None,
+        skin_model: "classic".into(),
     };
     let mut accounts = load_accounts();
     accounts.retain(|a| a.id != account.id);

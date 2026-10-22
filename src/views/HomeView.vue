@@ -32,6 +32,13 @@ const serial = computed(() => {
   return String(index + 1).padStart(2, "0");
 });
 
+const versionLabel = computed(() => {
+  const current = version.value;
+  if (!current) return "";
+  const name = store.metas[current.id]?.display_name;
+  return name && name.trim() ? name : current.id;
+});
+
 const javaLabel = computed(() => {
   const v = version.value;
   if (!v) return "—";
@@ -62,6 +69,11 @@ function openGameDir() {
 function pickVersion(id: string) {
   selectVersion(id);
   pickerOpen.value = false;
+}
+
+function versionName(id: string) {
+  const name = store.metas[id]?.display_name;
+  return name && name.trim() ? name : id;
 }
 
 function onDocClick(event: MouseEvent) {
@@ -99,7 +111,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
         </div>
 
         <h2 class="hero__title display" :class="{ 'hero__title--empty': !version }">
-          {{ version?.id ?? "空白存档" }}
+          {{ version ? versionLabel : "空白存档" }}
         </h2>
 
         <p class="hero__desc">
@@ -167,7 +179,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
                     :class="{ 'vpick__item--active': item.id === version?.id }"
                     @click="pickVersion(item.id)"
                   >
-                    <span class="vpick__name">{{ item.id }}</span>
+                    <span class="vpick__name">{{ versionName(item.id) }}</span>
                     <span class="vpick__kind">{{ kindLabel(item.kind) }}</span>
                     <AppIcon
                       v-if="item.id === version?.id"

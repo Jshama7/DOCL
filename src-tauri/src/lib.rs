@@ -5,6 +5,7 @@ mod curseforge;
 mod download;
 mod http;
 mod install;
+mod instance;
 mod java;
 mod launch;
 mod mirror;
@@ -49,6 +50,14 @@ pub fn run() {
             commands::loader_versions,
             commands::install_loader,
             commands::delete_version,
+            commands::instance_info,
+            commands::instance_metas,
+            commands::instance_save_meta,
+            commands::instance_files,
+            commands::instance_toggle_file,
+            commands::instance_delete_file,
+            commands::instance_import_files,
+            commands::instance_paths,
             commands::instance_context,
             commands::cf_search,
             commands::cf_game_versions,

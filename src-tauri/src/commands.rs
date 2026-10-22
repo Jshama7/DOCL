@@ -3,6 +3,7 @@ use crate::config::{self, Config};
 use crate::curseforge;
 use crate::download::{self, ProgressState};
 use crate::install::{self, InstalledVersion, LoaderOption};
+use crate::instance::{self, InstanceFile, InstanceInfo, InstanceMeta, InstancePaths};
 use crate::java::{self, JavaInfo};
 use crate::launch;
 use crate::models::*;
@@ -195,7 +196,85 @@ pub fn delete_version(state: State<'_, AppState>, version_id: String) -> CmdResu
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(err)?;
     }
+    let _ = instance::remove(&version_id);
     Ok(())
+}
+
+#[tauri::command]
+pub fn instance_info(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<InstanceInfo> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::info(&cfg, &version_id).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_metas() -> std::collections::HashMap<String, InstanceMeta> {
+    instance::all()
+}
+
+#[tauri::command]
+pub fn instance_save_meta(
+    state: State<'_, AppState>,
+    version_id: String,
+    meta: InstanceMeta,
+) -> CmdResult<InstanceInfo> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::save(&version_id, &meta).map_err(err)?;
+    instance::info(&cfg, &version_id).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_files(
+    state: State<'_, AppState>,
+    version_id: String,
+    kind: String,
+) -> CmdResult<Vec<InstanceFile>> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::list_files(&cfg, &version_id, &kind).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_toggle_file(
+    state: State<'_, AppState>,
+    version_id: String,
+    kind: String,
+    name: String,
+) -> CmdResult<()> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::toggle_file(&cfg, &version_id, &kind, &name).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_delete_file(
+    state: State<'_, AppState>,
+    version_id: String,
+    kind: String,
+    name: String,
+) -> CmdResult<()> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::delete_file(&cfg, &version_id, &kind, &name).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_import_files(
+    state: State<'_, AppState>,
+    version_id: String,
+    kind: String,
+    paths: Vec<String>,
+) -> CmdResult<u32> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::import_paths(&cfg, &version_id, &kind, &paths).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_paths(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> InstancePaths {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::paths(&cfg, &version_id)
 }
 
 #[derive(serde::Serialize)]
@@ -562,7 +641,8 @@ pub async fn launch_version(
     state: State<'_, AppState>,
     version_id: String,
 ) -> CmdResult<u32> {
-    let cfg = state.config.lock().unwrap().clone();
+    // 版本级启动设置覆盖全局配置
+    let cfg = instance::apply(&state.config.lock().unwrap().clone(), &version_id);
     let accounts = state.accounts.lock().unwrap().clone();
     let selected = cfg
         .selected_account

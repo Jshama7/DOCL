@@ -72,6 +72,58 @@ export interface InstanceContext {
   loader: string;
 }
 
+export interface InstanceMeta {
+  display_name: string | null;
+  description: string;
+  icon: string;
+  category: string;
+  favorite: boolean;
+  memory_mb: number | null;
+  java_path: string | null;
+  java_args: string | null;
+  window_width: number | null;
+  window_height: number | null;
+  fullscreen: boolean | null;
+}
+
+export interface InstanceCounts {
+  mods: number;
+  resourcepacks: number;
+  shaderpacks: number;
+  saves: number;
+  screenshots: number;
+}
+
+export interface InstanceInfo extends InstanceMeta {
+  id: string;
+  game_version: string;
+  loader: string;
+  kind: string;
+  java_major: number;
+  path: string;
+  installed_at: number;
+  counts: InstanceCounts;
+}
+
+export interface InstanceFile {
+  name: string;
+  display_name: string;
+  size: number;
+  modified: number;
+  enabled: boolean;
+  is_dir: boolean;
+}
+
+export interface InstancePaths {
+  version: string;
+  mods: string;
+  resourcepacks: string;
+  shaderpacks: string;
+  saves: string;
+  screenshots: string;
+  game_dir: string;
+}
+
 export interface CfProject {
   source: "curseforge" | "modrinth" | string;
   id: string;
@@ -161,6 +213,21 @@ export const api = {
     invoke<InstalledVersion>("install_loader", { versionId, loader, loaderVersion }),
   instanceContext: (versionId: string) =>
     invoke<InstanceContext>("instance_context", { versionId }),
+  instanceInfo: (versionId: string) =>
+    invoke<InstanceInfo>("instance_info", { versionId }),
+  instanceMetas: () => invoke<Record<string, InstanceMeta>>("instance_metas"),
+  instanceSaveMeta: (versionId: string, meta: InstanceMeta) =>
+    invoke<InstanceInfo>("instance_save_meta", { versionId, meta }),
+  instanceFiles: (versionId: string, kind: string) =>
+    invoke<InstanceFile[]>("instance_files", { versionId, kind }),
+  instanceToggleFile: (versionId: string, kind: string, name: string) =>
+    invoke<void>("instance_toggle_file", { versionId, kind, name }),
+  instanceDeleteFile: (versionId: string, kind: string, name: string) =>
+    invoke<void>("instance_delete_file", { versionId, kind, name }),
+  instanceImportFiles: (versionId: string, kind: string, paths: string[]) =>
+    invoke<number>("instance_import_files", { versionId, kind, paths }),
+  instancePaths: (versionId: string) =>
+    invoke<InstancePaths>("instance_paths", { versionId }),
   cfSearch: (
     classId: number,
     query: string,

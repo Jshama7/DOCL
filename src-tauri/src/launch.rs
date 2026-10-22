@@ -204,6 +204,9 @@ pub fn build(
         .clone()
         .unwrap_or_else(|| "net.minecraft.client.main.Main".into());
     command_args.push(main_class);
+    if cfg.fullscreen && !game_args.iter().any(|arg| arg == "--fullscreen") {
+        game_args.push("--fullscreen".into());
+    }
     command_args.extend(game_args);
 
     Ok((PathBuf::from(java.path), command_args, Vec::new()))

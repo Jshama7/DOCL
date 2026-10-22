@@ -7,6 +7,7 @@ import HomeView from "./views/HomeView.vue";
 import VersionsView from "./views/VersionsView.vue";
 import DownloadView from "./views/DownloadView.vue";
 import AccountsView from "./views/AccountsView.vue";
+import InstanceView from "./views/InstanceView.vue";
 import SettingsView from "./views/SettingsView.vue";
 import { initApp, selectedAccount, selectedVersion, store, type Page } from "./store";
 
@@ -26,6 +27,7 @@ const views = {
   versions: markRaw(VersionsView),
   download: markRaw(DownloadView),
   accounts: markRaw(AccountsView),
+  instance: markRaw(InstanceView),
   settings: markRaw(SettingsView),
 };
 

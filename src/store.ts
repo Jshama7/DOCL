@@ -11,16 +11,19 @@ import {
   type Config,
   type DeviceCode,
   type InstalledVersion,
+  type InstanceMeta,
   type JavaInfo,
   type LogLine,
   type ProgressSnapshot,
   type VersionSummary,
 } from "./api";
 
-export type Page = "home" | "versions" | "download" | "accounts" | "settings";
+export type Page = "home" | "versions" | "download" | "accounts" | "instance" | "settings";
 
 export const store = reactive({
   page: "home" as Page,
+  instanceId: null as string | null,
+  metas: {} as Record<string, InstanceMeta>,
   config: null as Config | null,
   versions: [] as VersionSummary[],
   installed: [] as InstalledVersion[],
@@ -75,6 +78,19 @@ export async function refreshConfig() {
 
 export async function refreshInstalled() {
   store.installed = await api.installedVersions();
+}
+
+export async function refreshInstanceMetas() {
+  try {
+    store.metas = await api.instanceMetas();
+  } catch {
+    store.metas = {};
+  }
+}
+
+export function openInstance(id: string) {
+  store.instanceId = id;
+  store.page = "instance";
 }
 
 export async function refreshAccounts() {
@@ -396,6 +412,7 @@ export async function uninstallVersion(id: string) {
     if (store.config?.selected_version === id) {
       await saveConfig({ selected_version: store.installed[0]?.id ?? null });
     }
+    await refreshInstanceMetas();
     notify(`已删除 ${id}`);
   } catch (err) {
     notify(`删除失败：${String(err)}`, "err");
@@ -416,7 +433,12 @@ export async function initApp() {
     notify(`读取配置失败：${String(err)}`, "err");
   }
 
-  await Promise.allSettled([refreshInstalled(), refreshAccounts(), refreshJava()]);
+  await Promise.allSettled([
+    refreshInstalled(),
+    refreshAccounts(),
+    refreshJava(),
+    refreshInstanceMetas(),
+  ]);
 
   await onInstallProgress((p) => {
     store.progress = p;

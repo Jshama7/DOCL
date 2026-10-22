@@ -6,6 +6,7 @@ import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import {
   launchVersion,
+  openInstance,
   selectVersion,
   selectedVersion,
   store,
@@ -31,6 +32,26 @@ function requestDelete(id: string) {
 
 function openDir() {
   if (store.config?.game_dir) openFolder(store.config.game_dir);
+}
+
+function displayName(id: string) {
+  const name = store.metas[id]?.display_name;
+  return name && name.trim() ? name : id;
+}
+
+const CATEGORY_LABELS: Record<string, string> = {
+  survival: "生存",
+  creative: "创造",
+  pvp: "PvP",
+  modpack: "整合包",
+  tech: "生电",
+  build: "建筑",
+  other: "其他",
+};
+
+function categoryLabel(value?: string) {
+  if (!value) return "";
+  return CATEGORY_LABELS[value] ?? value;
 }
 </script>
 
@@ -81,8 +102,17 @@ function openDir() {
         <span class="version__no display">{{ String(index + 1).padStart(2, "0") }}</span>
 
         <div class="version__head">
-          <strong class="version__id display">{{ item.id }}</strong>
+          <div class="version__titles">
+            <strong class="version__id display">{{ displayName(item.id) }}</strong>
+            <span class="version__sub mono">
+              {{ item.id }}
+              <template v-if="store.metas[item.id]?.category && store.metas[item.id]?.category !== 'auto'">
+                · {{ categoryLabel(store.metas[item.id]?.category) }}
+              </template>
+            </span>
+          </div>
           <div class="row">
+            <span v-if="store.metas[item.id]?.favorite" class="tag tag--grass">收藏</span>
             <span v-if="item.id === selectedVersion?.id" class="tag tag--grass">当前</span>
             <span class="tag">{{ kindLabel(item.kind) }}</span>
           </div>
@@ -108,6 +138,13 @@ function openDir() {
             :size="34"
             :disabled="item.id === selectedVersion?.id"
             @click="selectVersion(item.id)"
+          />
+          <IconButton
+            icon="settings"
+            label="版本设置"
+            variant="soft"
+            :size="34"
+            @click="openInstance(item.id)"
           />
           <IconButton
             icon="trash"
@@ -207,6 +244,19 @@ function openDir() {
   gap: 12px;
   position: relative;
   z-index: 1;
+}
+
+.version__titles {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.version__sub {
+  font-size: 10.5px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
 }
 
 .version__id {

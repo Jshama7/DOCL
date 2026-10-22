@@ -11,7 +11,7 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use zip::ZipArchive;
 
 /* ---------- 预览 ---------- */
@@ -670,6 +670,380 @@ fn extract_entries(
             .fetch_add(entry.size(), Ordering::Relaxed);
     }
     Ok(written)
+}
+
+/* ---------- 导出 ---------- */
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportEntry {
+    pub key: String,
+    pub label: String,
+    pub file_count: u32,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportPreview {
+    pub instance_id: String,
+    pub name: String,
+    pub version: String,
+    pub game_version: String,
+    pub loader: String,
+    pub loader_version: Option<String>,
+    pub entries: Vec<ExportEntry>,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct ExportOptions {
+    pub name: String,
+    pub version: String,
+    pub format: String,
+    pub groups: Vec<String>,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExportResult {
+    pub paths: Vec<String>,
+    pub bytes: u64,
+    pub file_count: u32,
+}
+
+const EXPORT_GROUPS: &[(&str, &str)] = &[
+    ("options", "游戏设置"),
+    ("personal", "个人信息"),
+    ("mods", "Mod"),
+    ("config", "配置与脚本"),
+    ("maps", "地图与坐标"),
+    ("jei", "JEI / 手册"),
+    ("resourcepacks", "资源包"),
+    ("shaderpacks", "光影"),
+    ("saves", "存档"),
+    ("screenshots", "截图"),
+];
+
+fn group_roots(group: &str) -> (Vec<&'static str>, Vec<&'static str>) {
+    match group {
+        "options" => (Vec::new(), vec!["options.txt"]),
+        "personal" => (
+            Vec::new(),
+            vec!["servers.dat", "command_history.txt"],
+        ),
+        "mods" => (vec!["mods"], Vec::new()),
+        "config" => (
+            vec!["config", "defaultconfigs", "scripts", "kubejs", "datapacks"],
+            Vec::new(),
+        ),
+        "maps" => (
+            vec![
+                "journeymap",
+                "xaero",
+                "XaeroWaypoints",
+                "XaeroWorldMap",
+                "map",
+            ],
+            Vec::new(),
+        ),
+        "jei" => (vec!["jei", "emi", "patchouli"], Vec::new()),
+        "resourcepacks" => (vec!["resourcepacks"], Vec::new()),
+        "shaderpacks" => (vec!["shaderpacks"], vec!["optionsshaders.txt"]),
+        "saves" => (vec!["saves"], Vec::new()),
+        "screenshots" => (vec!["screenshots"], Vec::new()),
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+fn walk_collect(root: &Path, relative: &Path, out: &mut Vec<(PathBuf, PathBuf)>) {
+    let dir = root.join(relative);
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name_text = name.to_string_lossy();
+        if name_text == "session.lock" || name_text.ends_with(".part") {
+            continue;
+        }
+        let rel = relative.join(&name);
+        if path.is_dir() {
+            walk_collect(root, &rel, out);
+        } else {
+            out.push((path, rel));
+        }
+    }
+}
+
+fn collect_group_files(
+    root: &Path,
+    groups: &[String],
+) -> Vec<(PathBuf, PathBuf)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut files = Vec::new();
+    for group in groups {
+        let (dirs, names) = group_roots(group);
+        for name in names {
+            let path = root.join(name);
+            if path.is_file() && seen.insert(name.to_string()) {
+                files.push((path, PathBuf::from(name)));
+            }
+        }
+        for dir in dirs {
+            let mut collected = Vec::new();
+            walk_collect(root, Path::new(dir), &mut collected);
+            for (path, rel) in collected {
+                let key = rel.to_string_lossy().to_string();
+                if seen.insert(key) {
+                    files.push((path, rel));
+                }
+            }
+        }
+    }
+    files
+}
+
+fn loader_key(loader: &str) -> Option<&'static str> {
+    match loader {
+        "fabric" => Some("fabric-loader"),
+        "quilt" => Some("quilt-loader"),
+        "forge" => Some("forge"),
+        "neoforge" => Some("neoforge"),
+        _ => None,
+    }
+}
+
+fn loader_version_of(cfg: &Config, version_id: &str, loader: &str) -> Option<String> {
+    let merged = install::resolve_detail(cfg, version_id).ok()?;
+    for id in merged.chain.iter().skip(1) {
+        let lower = id.to_lowercase();
+        match loader {
+            "fabric" => {
+                if let Some(rest) = lower.strip_prefix("fabric-loader-") {
+                    let parts: Vec<&str> = rest.split('-').collect();
+                    if parts.len() >= 2 {
+                        return Some(parts[0].to_string());
+                    }
+                    return Some(rest.to_string());
+                }
+            }
+            "quilt" => {
+                if let Some(rest) = lower.strip_prefix("quilt-loader-") {
+                    let parts: Vec<&str> = rest.split('-').collect();
+                    if parts.len() >= 2 {
+                        return Some(parts[0].to_string());
+                    }
+                    return Some(rest.to_string());
+                }
+            }
+            "forge" => {
+                if let Some((_, rest)) = lower.split_once("forge-") {
+                    return Some(rest.to_string());
+                }
+            }
+            "neoforge" => {
+                if let Some((_, rest)) = lower.split_once("neoforge-") {
+                    return Some(rest.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+pub fn export_preview(cfg: &Config, version_id: &str) -> Result<ExportPreview> {
+    let detail = instance::info(cfg, version_id)?;
+    let root = instance::game_dir(cfg, version_id);
+    let mut entries = Vec::new();
+    let mut all = std::collections::HashSet::new();
+    let mut total_bytes = 0u64;
+    for (key, label) in EXPORT_GROUPS {
+        let files = collect_group_files(&root, &[key.to_string()]);
+        let bytes: u64 = files
+            .iter()
+            .map(|(path, _)| std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
+            .sum();
+        for (_, rel) in &files {
+            all.insert(rel.to_string_lossy().to_string());
+        }
+        entries.push(ExportEntry {
+            key: key.to_string(),
+            label: label.to_string(),
+            file_count: files.len() as u32,
+            bytes,
+        });
+    }
+    for (key, _) in EXPORT_GROUPS {
+        let files = collect_group_files(&root, &[key.to_string()]);
+        for (path, rel) in files {
+            if all.remove(&rel.to_string_lossy().to_string()) {
+                total_bytes += std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
+            }
+        }
+    }
+    Ok(ExportPreview {
+        instance_id: version_id.to_string(),
+        name: detail.display_name,
+        version: "1.0.0".into(),
+        game_version: detail.game_version,
+        loader: detail.loader.clone(),
+        loader_version: loader_version_of(cfg, version_id, &detail.loader),
+        entries,
+        total_bytes,
+    })
+}
+
+fn sanitize_entry(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+pub async fn export(
+    app: &AppHandle,
+    cfg: &Config,
+    version_id: &str,
+    options: &ExportOptions,
+    progress: Arc<ProgressState>,
+) -> Result<ExportResult> {
+    let preview = export_preview(cfg, version_id)?;
+    let root = instance::game_dir(cfg, version_id);
+    let groups: Vec<String> = if options.groups.is_empty() {
+        EXPORT_GROUPS.iter().map(|(key, _)| key.to_string()).collect()
+    } else {
+        options.groups.clone()
+    };
+    let files = collect_group_files(&root, &groups);
+    if files.is_empty() {
+        bail!("没有可导出的文件");
+    }
+
+    let name = if options.name.trim().is_empty() {
+        preview.name.clone()
+    } else {
+        options.name.trim().to_string()
+    };
+    let version = if options.version.trim().is_empty() {
+        "1.0.0".to_string()
+    } else {
+        options.version.trim().to_string()
+    };
+    let format = if options.format.is_empty() {
+        "zip"
+    } else {
+        options.format.as_str()
+    };
+    let target = PathBuf::from(&options.target);
+    let target = match target.extension().and_then(|ext| ext.to_str()) {
+        Some(ext) if ext.eq_ignore_ascii_case("zip") || ext.eq_ignore_ascii_case("mrpack") => target,
+        _ => target.with_extension(if format == "mrpack" { "mrpack" } else { "zip" }),
+    };
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let total_bytes: u64 = files
+        .iter()
+        .map(|(path, _)| std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
+        .sum();
+    progress.set_message("正在打包整合包…");
+    progress.files_total.store(files.len() as u64, Ordering::Relaxed);
+    progress.files_done.store(0, Ordering::Relaxed);
+    progress.bytes_total.store(total_bytes, Ordering::Relaxed);
+    progress.bytes_done.store(0, Ordering::Relaxed);
+    progress.active.store(true, Ordering::Relaxed);
+
+    let folder = slugify(&name);
+    let target_text = target.to_string_lossy().to_string();
+    let tmp_path = PathBuf::from(format!("{target_text}.part"));
+    let _ = std::fs::remove_file(&tmp_path);
+
+    let mut written_bytes = 0u64;
+    {
+        let file = std::fs::File::create(&tmp_path)?;
+        let mut zip = zip::ZipWriter::new(file);
+        let entry_options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+
+        if format == "mrpack" {
+            let mut dependencies = serde_json::Map::new();
+            dependencies.insert(
+                "minecraft".into(),
+                serde_json::Value::String(preview.game_version.clone()),
+            );
+            if let Some(key) = loader_key(&preview.loader) {
+                if let Some(loader_version) = &preview.loader_version {
+                    dependencies.insert(
+                        key.into(),
+                        serde_json::Value::String(loader_version.clone()),
+                    );
+                }
+            }
+            let index = serde_json::json!({
+                "formatVersion": 1,
+                "game": "minecraft",
+                "versionId": version,
+                "name": name,
+                "summary": "",
+                "files": [],
+                "dependencies": dependencies,
+            });
+            zip.start_file("modrinth.index.json", entry_options)?;
+            use std::io::Write;
+            zip.write_all(serde_json::to_string_pretty(&index)?.as_bytes())?;
+        } else {
+            let manifest = serde_json::json!({
+                "name": name,
+                "version": version,
+                "base": preview.game_version,
+                "loader": preview.loader,
+                "loader_version": preview.loader_version,
+                "groups": groups,
+            });
+            zip.start_file(format!("{folder}/manifest.docl.json"), entry_options)?;
+            use std::io::Write;
+            zip.write_all(serde_json::to_string_pretty(&manifest)?.as_bytes())?;
+        }
+
+        for (path, rel) in &files {
+            if progress.is_cancelled() {
+                drop(zip);
+                let _ = std::fs::remove_file(&tmp_path);
+                bail!("导出已取消");
+            }
+            let relative = sanitize_entry(&rel.to_string_lossy());
+            let archive_path = if format == "mrpack" {
+                format!("overrides/{relative}")
+            } else {
+                format!("{folder}/.minecraft/{relative}")
+            };
+            let meta = std::fs::metadata(path)?;
+            zip.start_file(archive_path, entry_options)?;
+            let mut input = std::fs::File::open(path)?;
+            std::io::copy(&mut input, &mut zip)?;
+            written_bytes += meta.len();
+            progress.files_done.fetch_add(1, Ordering::Relaxed);
+            progress.bytes_done.fetch_add(meta.len(), Ordering::Relaxed);
+        }
+        zip.finish()?;
+    }
+
+    if target.exists() {
+        std::fs::remove_file(&target)?;
+    }
+    std::fs::rename(&tmp_path, &target)?;
+    progress.active.store(false, Ordering::Relaxed);
+
+    let _ = app.emit(
+        "modpack-export-done",
+        serde_json::json!({ "path": target_text }),
+    );
+
+    Ok(ExportResult {
+        paths: vec![target_text],
+        bytes: written_bytes,
+        file_count: files.len() as u32,
+    })
 }
 
 pub async fn import(

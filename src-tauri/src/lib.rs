@@ -65,6 +65,8 @@ pub fn run() {
             commands::instance_paths,
             commands::modpack_inspect,
             commands::modpack_import,
+            commands::modpack_export_preview,
+            commands::modpack_export,
             commands::instance_context,
             commands::cf_search,
             commands::cf_game_versions,

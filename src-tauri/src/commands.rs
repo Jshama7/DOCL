@@ -392,6 +392,44 @@ pub async fn modpack_import(
     }
 }
 
+#[tauri::command]
+pub fn modpack_export_preview(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<modpack::ExportPreview> {
+    let cfg = state.config.lock().unwrap().clone();
+    modpack::export_preview(&cfg, &version_id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn modpack_export(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: String,
+    options: modpack::ExportOptions,
+) -> CmdResult<modpack::ExportResult> {
+    let cfg = state.config.lock().unwrap().clone();
+    {
+        let guard = state.progress.lock().unwrap();
+        if let Some(progress) = guard.as_ref() {
+            if progress.active.load(Ordering::Relaxed) {
+                return Err("已有任务正在进行".into());
+            }
+        }
+    }
+    let progress = ProgressState::new("install");
+    progress.set_message("准备导出整合包…");
+    *state.progress.lock().unwrap() = Some(progress.clone());
+
+    let result = modpack::export(&app, &cfg, &version_id, &options, progress.clone()).await;
+
+    progress.active.store(false, Ordering::Relaxed);
+    download::emit_now(&app, &progress);
+    *state.progress.lock().unwrap() = None;
+
+    result.map_err(err)
+}
+
 #[derive(serde::Serialize)]
 pub struct InstanceContext {
     pub game_version: String,

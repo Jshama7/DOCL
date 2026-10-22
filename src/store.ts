@@ -356,6 +356,38 @@ export async function importModpack(
   }
 }
 
+export async function exportModpack(
+  versionId: string,
+  options: import("./api").ExportOptions,
+  title: string
+) {
+  if (store.installingId) {
+    notify("已有任务正在进行", "err");
+    return null;
+  }
+  store.installingId = `导出 · ${title}`;
+  store.progress = null;
+  store.lastProgress = null;
+  store.lastJobError = null;
+  store.lastJobTitle = `导出整合包 · ${title}`;
+  store.downloadPanel = "open";
+  primeProgress("install", "准备导出整合包…");
+  try {
+    const result = await api.modpackExport(versionId, options);
+    notify(`已导出到 ${result.paths[0] ?? options.target}`);
+    return result;
+  } catch (err) {
+    store.lastJobError = String(err);
+    notify(`导出失败：${String(err)}`, "err");
+    return null;
+  } finally {
+    store.installingId = null;
+    window.setTimeout(() => {
+      if (!store.progress?.active) store.progress = null;
+    }, 800);
+  }
+}
+
 export async function installJava(major: number) {
   if (store.installingId) {
     notify("已有安装任务正在进行", "err");

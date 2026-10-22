@@ -4,6 +4,9 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   api,
   openFolder,
+  revealFile,
+  savePackDialog,
+  type ExportPreview,
   type InstanceFile,
   type InstanceInfo,
   type InstanceMeta,
@@ -15,6 +18,7 @@ import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodSelect from "../components/WoodSelect.vue";
 import {
+  exportModpack,
   launchVersion,
   notify,
   openCommunity,
@@ -60,6 +64,22 @@ const filesLoading = ref(false);
 const fileQuery = ref("");
 const confirmName = ref<string | null>(null);
 let confirmTimer: number | undefined;
+
+const showExport = ref(false);
+const exportPreview = ref<ExportPreview | null>(null);
+const exportBusy = ref(false);
+const exportForm = reactive({
+  name: "",
+  version: "1.0.0",
+  format: "zip",
+  groups: [] as string[],
+  target: "",
+});
+
+const exportFormats = [
+  { value: "zip", label: "通用 ZIP（兼容各启动器）" },
+  { value: "mrpack", label: "Modrinth .mrpack" },
+];
 
 const iconPresets = [
   { value: "auto", label: "自动", color: "#8b9d6f" },
@@ -398,6 +418,88 @@ function downloadMore() {
   openCommunity(kind, info.value.id, info.value.game_version, info.value.loader);
 }
 
+async function openExport() {
+  if (!info.value || exportBusy.value) return;
+  exportBusy.value = true;
+  try {
+    const preview = await api.modpackExportPreview(info.value.id);
+    exportPreview.value = preview;
+    exportForm.name = preview.name;
+    exportForm.version = preview.version || "1.0.0";
+    exportForm.format = "zip";
+    exportForm.target = "";
+    exportForm.groups = preview.entries
+      .filter(
+        (entry) =>
+          entry.file_count > 0 &&
+          !["personal", "saves", "screenshots"].includes(entry.key)
+      )
+      .map((entry) => entry.key);
+    showExport.value = true;
+  } catch (err) {
+    notify(`读取导出内容失败：${String(err)}`, "err");
+  } finally {
+    exportBusy.value = false;
+  }
+}
+
+function toggleExportGroup(key: string) {
+  const index = exportForm.groups.indexOf(key);
+  if (index >= 0) {
+    exportForm.groups.splice(index, 1);
+  } else {
+    exportForm.groups.push(key);
+  }
+}
+
+function selectAllGroups() {
+  if (!exportPreview.value) return;
+  exportForm.groups = exportPreview.value.entries
+    .filter((entry) => entry.file_count > 0)
+    .map((entry) => entry.key);
+}
+
+function clearGroups() {
+  exportForm.groups = [];
+}
+
+async function pickExportTarget() {
+  const extension = exportForm.format === "mrpack" ? "mrpack" : "zip";
+  const name = (exportForm.name || "整合包").replace(/[<>:"/\\|?*]/g, "-");
+  const path = await savePackDialog(
+    `${name}-${exportForm.version || "1.0.0"}.${extension}`,
+    exportForm.format
+  );
+  if (path) exportForm.target = path;
+}
+
+async function startExport() {
+  if (!info.value || !exportPreview.value) return;
+  if (!exportForm.groups.length) {
+    notify("至少选择一项导出内容", "err");
+    return;
+  }
+  if (!exportForm.target) {
+    notify("请先选择保存位置", "err");
+    return;
+  }
+  const result = await exportModpack(
+    info.value.id,
+    {
+      name: exportForm.name,
+      version: exportForm.version,
+      format: exportForm.format,
+      groups: exportForm.groups,
+      target: exportForm.target,
+    },
+    exportForm.name
+  );
+  if (result) {
+    showExport.value = false;
+    revealFile(result.paths[0] ?? exportForm.target);
+  }
+}
+
 function launch() {
   if (info.value) launchVersion(info.value.id);
 }
@@ -596,6 +698,10 @@ function launch() {
               <WoodButton variant="soft" @click="goTab('screenshots')">
                 <AppIcon name="folder" :size="15" />
                 截图文件夹
+              </WoodButton>
+              <WoodButton variant="soft" :disabled="exportBusy" @click="openExport">
+                <AppIcon name="download" :size="15" />
+                导出整合包
               </WoodButton>
             </div>
           </section>
@@ -845,6 +951,111 @@ function launch() {
         </section>
       </div>
     </div>
+
+    <Teleport to="body">
+      <Transition name="pack-modal">
+        <div v-if="showExport && exportPreview" class="pack-modal">
+          <div class="pack-modal__mask" @click="showExport = false" />
+          <div class="pack-modal__card">
+            <header class="pack-modal__head">
+              <div>
+                <span class="eyebrow">DOCL / EXPORT</span>
+                <h2 class="pack-modal__title">导出整合包</h2>
+                <p class="muted small">
+                  {{ exportPreview.game_version }} · {{ exportPreview.loader }}
+                  <template v-if="exportPreview.loader_version">
+                    {{ exportPreview.loader_version }}
+                  </template>
+                </p>
+              </div>
+              <IconButton icon="close" label="关闭" :size="32" @click="showExport = false" />
+            </header>
+
+            <div class="pack-modal__body">
+              <div class="export-two">
+                <label class="pack-field">
+                  <span class="pack-field__label">整合包名称</span>
+                  <WoodInput v-model="exportForm.name" />
+                </label>
+                <label class="pack-field">
+                  <span class="pack-field__label">整合包版本</span>
+                  <WoodInput v-model="exportForm.version" mono />
+                </label>
+              </div>
+
+              <label class="pack-field">
+                <span class="pack-field__label">导出格式</span>
+                <WoodSelect v-model="exportForm.format" :options="exportFormats" />
+              </label>
+
+              <div class="export-head">
+                <span class="pack-field__label">导出内容</span>
+                <div class="row">
+                  <button class="export-link" @click="selectAllGroups">全选</button>
+                  <button class="export-link" @click="clearGroups">清空</button>
+                  <span class="muted small">
+                    共 {{ formatBytes(exportPreview.total_bytes) }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="export-groups">
+                <button
+                  v-for="entry in exportPreview.entries"
+                  :key="entry.key"
+                  class="export-group"
+                  :class="{ 'export-group--on': exportForm.groups.includes(entry.key) }"
+                  @click="toggleExportGroup(entry.key)"
+                >
+                  <span class="export-group__box">
+                    <AppIcon
+                      v-if="exportForm.groups.includes(entry.key)"
+                      name="check"
+                      :size="12"
+                    />
+                  </span>
+                  <span class="export-group__label">{{ entry.label }}</span>
+                  <span class="export-group__meta mono">
+                    {{ entry.file_count }} 个 · {{ formatBytes(entry.bytes) }}
+                  </span>
+                </button>
+              </div>
+
+              <div class="export-target">
+                <div>
+                  <span class="pack-field__label">保存位置</span>
+                  <p class="mono small export-target__path">
+                    {{ exportForm.target || "尚未选择" }}
+                  </p>
+                </div>
+                <WoodButton variant="soft" size="sm" @click="pickExportTarget">
+                  <AppIcon name="folder" :size="14" />
+                  选择位置
+                </WoodButton>
+              </div>
+            </div>
+
+            <footer class="pack-modal__foot">
+              <span class="muted small">
+                存档、截图与个人信息默认不导出，可在上方手动勾选。
+              </span>
+              <div class="row">
+                <WoodButton variant="ghost" @click="showExport = false">取消</WoodButton>
+                <WoodButton
+                  variant="primary"
+                  sheen
+                  :disabled="!!store.installingId || !exportForm.groups.length || !exportForm.target"
+                  @click="startExport"
+                >
+                  <AppIcon name="download" :size="15" />
+                  开始导出
+                </WoodButton>
+              </div>
+            </footer>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -1298,5 +1509,202 @@ function launch() {
   .count-strip {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+}
+
+/* 导出弹层 */
+.pack-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+}
+
+.pack-modal__mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(28, 20, 12, 0.38);
+  backdrop-filter: blur(3px);
+}
+
+.pack-modal__card {
+  position: relative;
+  width: min(620px, calc(100vw - 56px));
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
+  padding: 20px 22px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: rgba(var(--glass-rgb), 0.97);
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pack-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pack-modal__title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  line-height: 1.1;
+  color: var(--walnut-deep);
+  margin: 2px 0;
+}
+
+.pack-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pack-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.pack-field__label {
+  font-size: 11.5px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.export-two {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.export-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 2px;
+}
+
+.export-link {
+  font-size: 11.5px;
+  color: var(--moss);
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.export-link:hover {
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.export-groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.export-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  text-align: left;
+  color: var(--ink-soft);
+  transition: border-color var(--dur-2) ease;
+}
+
+.export-group:hover {
+  border-color: var(--walnut-light);
+}
+
+.export-group--on {
+  border-color: var(--moss);
+  color: var(--walnut-deep);
+}
+
+.export-group__box {
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  border: 1px solid var(--line-strong);
+  display: grid;
+  place-items: center;
+  color: #fbf6ea;
+  flex-shrink: 0;
+  transition: background var(--dur-1) ease, border-color var(--dur-1) ease;
+}
+
+.export-group--on .export-group__box {
+  background: var(--moss);
+  border-color: var(--moss);
+}
+
+.export-group__label {
+  flex: 1;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.export-group__meta {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.export-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.export-target__path {
+  margin-top: 3px;
+  color: var(--ink-soft);
+  word-break: break-all;
+}
+
+.pack-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.pack-modal__foot > .muted {
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+.pack-modal-enter-active,
+.pack-modal-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.pack-modal-enter-active .pack-modal__card,
+.pack-modal-leave-active .pack-modal__card {
+  transition: transform 220ms var(--ease-out-expo);
+}
+
+.pack-modal-enter-from,
+.pack-modal-leave-to {
+  opacity: 0;
+}
+
+.pack-modal-enter-from .pack-modal__card,
+.pack-modal-leave-to .pack-modal__card {
+  transform: translateY(10px) scale(0.98);
 }
 </style>

@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { openPath, openUrl } from "@tauri-apps/plugin-opener";
+import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 
 export interface GameDirEntry {
   name: string;
@@ -174,6 +174,38 @@ export interface ModpackImportResult {
   failed: string[];
 }
 
+export interface ExportEntry {
+  key: string;
+  label: string;
+  file_count: number;
+  bytes: number;
+}
+
+export interface ExportPreview {
+  instance_id: string;
+  name: string;
+  version: string;
+  game_version: string;
+  loader: string;
+  loader_version: string | null;
+  entries: ExportEntry[];
+  total_bytes: number;
+}
+
+export interface ExportOptions {
+  name: string;
+  version: string;
+  format: string;
+  groups: string[];
+  target: string;
+}
+
+export interface ExportResult {
+  paths: string[];
+  bytes: number;
+  file_count: number;
+}
+
 export interface CfProject {
   source: "curseforge" | "modrinth" | string;
   id: string;
@@ -285,6 +317,10 @@ export const api = {
   modpackInspect: (path: string) => invoke<PackPreview>("modpack_inspect", { path }),
   modpackImport: (path: string, options: ModpackImportOptions) =>
     invoke<ModpackImportResult>("modpack_import", { path, options }),
+  modpackExportPreview: (versionId: string) =>
+    invoke<ExportPreview>("modpack_export_preview", { versionId }),
+  modpackExport: (versionId: string, options: ExportOptions) =>
+    invoke<ExportResult>("modpack_export", { versionId, options }),
   cfSearch: (
     classId: number,
     query: string,
@@ -408,6 +444,28 @@ export async function saveSkinDialog(defaultName = "skin.png"): Promise<string |
     filters: [{ name: "Minecraft 皮肤", extensions: ["png"] }],
   });
   return typeof result === "string" ? result : null;
+}
+
+export async function savePackDialog(
+  defaultName: string,
+  format: string
+): Promise<string | null> {
+  const mrpack = format === "mrpack";
+  const result = await save({
+    title: "导出整合包",
+    defaultPath: defaultName,
+    filters: [
+      {
+        name: mrpack ? "Modrinth 整合包" : "整合包 ZIP",
+        extensions: [mrpack ? "mrpack" : "zip"],
+      },
+    ],
+  });
+  return typeof result === "string" ? result : null;
+}
+
+export function revealFile(path: string) {
+  return revealItemInDir(path);
 }
 
 export function openFolder(path: string) {

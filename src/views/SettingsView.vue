@@ -316,7 +316,7 @@ function useAutoJava() {
         <span class="group-line" />
       </div>
 
-      <div class="setting">
+      <div class="setting setting--stack">
         <div class="setting__label">
           <strong>游戏目录</strong>
           <span>versions / assets / libraries 都放在这里</span>
@@ -328,7 +328,7 @@ function useAutoJava() {
           </div>
         </div>
       </div>
-      <div class="setting">
+      <div class="setting setting--stack">
         <div class="setting__label">
           <strong>游戏目录列表</strong>
           <span>可以保存多个 .minecraft 文件夹，随时切换</span>
@@ -795,6 +795,30 @@ function useAutoJava() {
   padding-bottom: 2px;
 }
 
+/* 目录这类内容较长的设置改为上下布局，避免左右互相挤压 */
+.setting--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.setting--stack .setting__control {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+  max-width: none;
+}
+
+.setting--stack .row {
+  width: 100%;
+}
+
+.setting--stack .row .input {
+  flex: 1;
+  min-width: 0;
+}
+
 .setting__label {
   display: flex;
   flex-direction: column;
@@ -836,6 +860,7 @@ function useAutoJava() {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  width: 100%;
 }
 
 .dir-row {

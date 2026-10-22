@@ -415,11 +415,10 @@ function launch() {
         <WoodButton
           variant="primary"
           sheen
-          :disabled="!!store.gameRunning"
           @click="launch"
         >
           <AppIcon :name="store.gameRunning ? 'stop' : 'play'" :size="15" />
-          {{ store.gameRunning ? "游戏运行中" : "启动游戏" }}
+          {{ store.gameRunning ? "停止游戏" : "启动游戏" }}
         </WoodButton>
       </div>
     </header>

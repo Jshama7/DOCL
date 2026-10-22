@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { openPath, openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 export interface GameDirEntry {
   name: string;
@@ -464,12 +464,18 @@ export async function savePackDialog(
   return typeof result === "string" ? result : null;
 }
 
+function reportOpenError(err: unknown) {
+  window.dispatchEvent(
+    new CustomEvent("docl-open-error", { detail: String(err) })
+  );
+}
+
 export function revealFile(path: string) {
-  return revealItemInDir(path);
+  return invoke<void>("reveal_file", { path }).catch(reportOpenError);
 }
 
 export function openFolder(path: string) {
-  return openPath(path);
+  return invoke<void>("open_folder", { path }).catch(reportOpenError);
 }
 
 export function openExternal(url: string) {

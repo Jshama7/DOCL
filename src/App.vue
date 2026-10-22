@@ -9,9 +9,14 @@ import DownloadView from "./views/DownloadView.vue";
 import AccountsView from "./views/AccountsView.vue";
 import InstanceView from "./views/InstanceView.vue";
 import SettingsView from "./views/SettingsView.vue";
-import { initApp, selectedAccount, selectedVersion, store, type Page } from "./store";
+import { initApp, notify, selectedAccount, selectedVersion, store, type Page } from "./store";
 
-onMounted(initApp);
+onMounted(() => {
+  initApp();
+  window.addEventListener("docl-open-error", (event) => {
+    notify((event as CustomEvent<string>).detail, "err");
+  });
+});
 
 const appStyle = computed(
   () =>

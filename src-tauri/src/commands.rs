@@ -20,6 +20,57 @@ fn err<E: std::fmt::Display>(e: E) -> String {
 }
 
 #[tauri::command]
+pub fn open_folder(path: String) -> CmdResult<()> {
+    let target = std::path::PathBuf::from(path.trim());
+    if !target.exists() {
+        return Err(format!("目录不存在：{}", target.display()));
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(&target)
+            .spawn()
+            .map_err(err)?;
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&target)
+            .spawn()
+            .map_err(err)?;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn reveal_file(path: String) -> CmdResult<()> {
+    let target = std::path::PathBuf::from(path.trim());
+    if !target.exists() {
+        return Err(format!("文件不存在：{}", target.display()));
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg("/select,")
+            .arg(&target)
+            .spawn()
+            .map_err(err)?;
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        if let Some(parent) = target.parent() {
+            std::process::Command::new("xdg-open")
+                .arg(parent)
+                .spawn()
+                .map_err(err)?;
+        }
+        Ok(())
+    }
+}
+
+#[tauri::command]
 pub fn get_config(state: State<'_, AppState>) -> Config {
     state.config.lock().unwrap().clone()
 }

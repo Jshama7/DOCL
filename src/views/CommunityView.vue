@@ -273,6 +273,13 @@ function resetSearch() {
   search(true);
 }
 
+function switchSource(value: string) {
+  const next = value as "all" | SourceKey;
+  if (source.value === next) return;
+  source.value = next;
+  search(true);
+}
+
 async function loadMore() {
   if (loading.value) return;
   const targets = activeSources.value.filter(
@@ -439,9 +446,19 @@ async function confirmImport() {
       </div>
 
       <div class="cf-fields">
-        <label class="cf-field">
+        <label class="cf-field cf-field--source">
           <span class="cf-field__label">来源</span>
-          <WoodSelect v-model="source" :options="sourceOptions" />
+          <div class="cf-source-tabs">
+            <button
+              v-for="option in sourceOptions"
+              :key="option.value"
+              class="cf-source-tab"
+              :class="{ 'cf-source-tab--on': source === option.value }"
+              @click="switchSource(option.value)"
+            >
+              {{ option.label }}
+            </button>
+          </div>
         </label>
 
         <label class="cf-field cf-field--wide">
@@ -595,14 +612,14 @@ async function confirmImport() {
         <WoodButton variant="ghost" size="sm" @click="search(true)">重试</WoodButton>
       </div>
 
-      <div v-else-if="loading && !items.length" class="card cf-list">
-        <div v-for="n in 8" :key="n" class="cf-row cf-row--skeleton">
-          <span class="skeleton cf-skeleton__logo" />
-          <div class="cf-row__body">
-            <span class="skeleton cf-skeleton__title" />
-            <span class="skeleton cf-skeleton__line" />
-            <span class="skeleton cf-skeleton__line cf-skeleton__line--short" />
+      <div v-else-if="loading && !items.length" class="cf-grid">
+        <div v-for="n in 8" :key="n" class="cf-card cf-card--skeleton">
+          <div class="cf-card__head">
+            <span class="skeleton cf-card__logo" />
           </div>
+          <span class="skeleton cf-skeleton__title" />
+          <span class="skeleton cf-skeleton__line" />
+          <span class="skeleton cf-skeleton__line cf-skeleton__line--short" />
         </div>
       </div>
 
@@ -614,53 +631,56 @@ async function confirmImport() {
         </div>
       </div>
 
-      <div v-else class="card cf-list">
+      <div v-else class="cf-grid">
         <button
           v-for="(project, i) in items"
           :key="`${project.source}-${project.id}`"
-          class="cf-row"
+          class="cf-card"
           :style="{ '--i': i }"
           @click="openProject(project)"
         >
-          <img
-            v-if="project.logo_url"
-            class="cf-row__logo"
-            :src="project.logo_url"
-            alt=""
-            loading="lazy"
-          />
-          <span v-else class="cf-row__logo cf-row__logo--empty">
-            {{ project.name.slice(0, 1) }}
-          </span>
-          <div class="cf-row__body">
-            <div class="cf-row__title">
-              <strong>{{ project.name }}</strong>
-              <span
-                v-for="category in project.categories.slice(0, 3)"
-                :key="category"
-                class="chip"
-              >
-                {{ category }}
-              </span>
-            </div>
-            <p class="cf-row__summary">{{ project.summary }}</p>
-            <div class="cf-row__meta">
-              <span class="cf-row__meta-item">
-                <AppIcon name="user" :size="12" />
-                {{ project.author || "未知作者" }}
-              </span>
-              <span class="cf-row__meta-item">
-                <AppIcon name="download" :size="12" />
-                {{ compactNumber(project.download_count) }}
-              </span>
-              <span v-if="project.updated" class="cf-row__meta-item">
-                <AppIcon name="refresh" :size="12" />
-                {{ updatedLabel(project.updated) }}
-              </span>
-              <span class="cf-row__source">{{ sourceLabel(project.source) }}</span>
-            </div>
+          <div class="cf-card__head">
+            <img
+              v-if="project.logo_url"
+              class="cf-card__logo"
+              :src="project.logo_url"
+              alt=""
+              loading="lazy"
+            />
+            <span v-else class="cf-card__logo cf-card__logo--empty">
+              {{ project.name.slice(0, 1) }}
+            </span>
+            <span class="cf-card__source">{{ sourceLabel(project.source) }}</span>
           </div>
-          <AppIcon name="chevron-left" :size="15" class="cf-row__chev" />
+
+          <strong class="cf-card__name">{{ project.name }}</strong>
+
+          <div class="cf-card__chips">
+            <span
+              v-for="category in project.categories.slice(0, 3)"
+              :key="category"
+              class="chip"
+            >
+              {{ category }}
+            </span>
+          </div>
+
+          <p class="cf-card__summary">{{ project.summary }}</p>
+
+          <div class="cf-card__meta">
+            <span class="cf-card__meta-item">
+              <AppIcon name="user" :size="12" />
+              {{ project.author || "未知作者" }}
+            </span>
+            <span class="cf-card__meta-item">
+              <AppIcon name="download" :size="12" />
+              {{ compactNumber(project.download_count) }}
+            </span>
+            <span v-if="project.updated" class="cf-card__meta-item">
+              <AppIcon name="refresh" :size="12" />
+              {{ updatedLabel(project.updated) }}
+            </span>
+          </div>
         </button>
       </div>
 
@@ -818,8 +838,8 @@ async function confirmImport() {
 
 .cf-fields {
   display: grid;
-  grid-template-columns: 0.9fr 1.7fr 1fr 0.9fr 1fr;
-  gap: 14px;
+  grid-template-columns: 1.25fr 1.45fr 0.9fr 0.8fr 1fr;
+  gap: 12px;
 }
 
 .cf-field {
@@ -852,75 +872,146 @@ async function confirmImport() {
   margin-left: 4px;
 }
 
-/* 结果列表 */
-.cf-list {
-  padding: 6px;
-}
-
-.cf-row {
-  position: relative;
-  width: 100%;
+/* 来源切换 */
+.cf-source-tabs {
   display: flex;
   align-items: center;
-  gap: 13px;
-  padding: 11px 12px;
+  gap: 2px;
+  height: 38px;
+  padding: 3px;
+  border: 1px solid var(--line);
   border-radius: 9px;
-  text-align: left;
-  color: var(--ink);
-  transition: background var(--dur-2) ease;
-  animation: rise-in 420ms var(--ease-out-expo) both;
-  animation-delay: calc(var(--i, 0) * 14ms);
-}
-
-.cf-row:hover {
-  background: var(--hover);
-}
-
-.cf-row + .cf-row {
-  border-top: 1px dashed var(--line);
-}
-
-.cf-row__logo {
-  width: 50px;
-  height: 50px;
-  border-radius: 10px;
-  object-fit: cover;
-  flex-shrink: 0;
   background: var(--paper-2);
 }
 
-.cf-row__logo--empty {
+.cf-source-tab {
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  white-space: nowrap;
+  transition: background var(--dur-2) ease, color var(--dur-2) ease,
+    box-shadow var(--dur-2) ease;
+}
+
+.cf-source-tab:hover {
+  color: var(--walnut-deep);
+}
+
+.cf-source-tab--on {
+  background: var(--panel);
+  color: var(--walnut-deep);
+  box-shadow: var(--shadow-1);
+}
+
+/* 结果卡片 */
+.cf-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(312px, 1fr));
+  gap: 12px;
+}
+
+.cf-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 15px 16px 13px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  text-align: left;
+  color: var(--ink);
+  background: linear-gradient(
+    150deg,
+    rgba(var(--glass-rgb), 0.6),
+    rgba(var(--glass-rgb), 0.28)
+  );
+  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.5) inset;
+  transition: transform var(--dur-3) var(--ease-out-expo),
+    border-color var(--dur-2) ease, box-shadow var(--dur-3) ease;
+  animation: rise-in 440ms var(--ease-out-expo) both;
+  animation-delay: calc(var(--i, 0) * 18ms);
+  overflow: hidden;
+}
+
+.cf-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    rgba(var(--accent-rgb), 0.5),
+    transparent 62%
+  );
+  opacity: 0;
+  transition: opacity var(--dur-2) ease;
+}
+
+.cf-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(var(--accent-rgb), 0.32);
+  box-shadow: var(--shadow-2);
+}
+
+.cf-card:hover::before {
+  opacity: 1;
+}
+
+.cf-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cf-card__logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 11px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: var(--paper-2);
+  box-shadow: 0 2px 8px rgba(60, 40, 20, 0.08);
+}
+
+.cf-card__logo--empty {
   display: grid;
   place-items: center;
   font-family: var(--font-display);
-  font-size: 21px;
+  font-size: 20px;
   color: var(--moss);
   background: var(--moss-soft);
 }
 
-.cf-row__body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
+.cf-card__source {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 3px 6px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: rgba(var(--glass-rgb), 0.4);
 }
 
-.cf-row__title {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  flex-wrap: wrap;
-}
-
-.cf-row__title strong {
-  font-size: 14.5px;
+.cf-card__name {
+  font-size: 15px;
   color: var(--walnut-deep);
-  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 46%;
+  white-space: nowrap;
+}
+
+.cf-card__chips {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  min-height: 18px;
 }
 
 .chip {
@@ -933,54 +1024,37 @@ async function confirmImport() {
   white-space: nowrap;
 }
 
-.cf-row__summary {
+.cf-card__summary {
   font-size: 12px;
   color: var(--ink-soft);
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-height: 36px;
 }
 
-.cf-row__meta {
+.cf-card__meta {
   display: flex;
   align-items: center;
-  gap: 13px;
+  gap: 12px;
   flex-wrap: wrap;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
   font-size: 10.5px;
   color: var(--muted);
 }
 
-.cf-row__meta-item {
+.cf-card__meta-item {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
-.cf-row__source {
-  color: var(--walnut-light);
-  letter-spacing: 0.04em;
-}
-
-.cf-row__chev {
-  transform: rotate(180deg);
-  color: var(--line-strong);
-  flex-shrink: 0;
-  transition: color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo);
-}
-
-.cf-row:hover .cf-row__chev {
-  color: var(--moss);
-  transform: rotate(180deg) translateX(-2px);
-}
-
-.cf-row--skeleton {
+.cf-card--skeleton {
   pointer-events: none;
-}
-
-.cf-skeleton__logo {
-  width: 50px;
-  height: 50px;
-  border-radius: 10px;
+  min-height: 178px;
 }
 
 .cf-skeleton__title {
@@ -989,12 +1063,12 @@ async function confirmImport() {
 }
 
 .cf-skeleton__line {
-  width: 78%;
+  width: 90%;
   height: 10px;
 }
 
 .cf-skeleton__line--short {
-  width: 46%;
+  width: 56%;
 }
 
 /* 空态 / 错误 */
@@ -1288,12 +1362,9 @@ async function confirmImport() {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 
+  .cf-field--source,
   .cf-field--wide {
     grid-column: span 2;
-  }
-
-  .cf-row__title strong {
-    max-width: 100%;
   }
 
   .cf-file__date {

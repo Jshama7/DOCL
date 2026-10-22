@@ -43,6 +43,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
+            commands::open_folder,
+            commands::reveal_file,
             commands::game_dirs,
             commands::add_game_dir,
             commands::switch_game_dir,

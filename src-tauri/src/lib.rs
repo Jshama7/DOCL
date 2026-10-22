@@ -1,6 +1,7 @@
 mod auth;
 mod commands;
 mod config;
+mod curseforge;
 mod download;
 mod http;
 mod install;
@@ -44,8 +45,13 @@ pub fn run() {
             commands::install_version,
             commands::cancel_install,
             commands::loader_options,
+            commands::loader_versions,
             commands::install_loader,
             commands::delete_version,
+            commands::instance_context,
+            commands::cf_search,
+            commands::cf_files,
+            commands::cf_install_file,
             commands::get_accounts,
             commands::create_offline_account,
             commands::remove_account,

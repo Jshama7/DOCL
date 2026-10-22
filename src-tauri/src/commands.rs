@@ -1,5 +1,6 @@
 use crate::auth::{self, Account, AccountView, DeviceCode};
 use crate::config::{self, Config};
+use crate::curseforge;
 use crate::download::{self, ProgressState};
 use crate::install::{self, InstalledVersion, LoaderOption};
 use crate::java::{self, JavaInfo};
@@ -120,11 +121,24 @@ pub async fn loader_options(
 }
 
 #[tauri::command]
+pub async fn loader_versions(
+    state: State<'_, AppState>,
+    version_id: String,
+    loader: String,
+) -> CmdResult<Vec<install::LoaderVersion>> {
+    let cfg = state.config.lock().unwrap().clone();
+    install::loader_versions(&state.client, &cfg, &version_id, &loader)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
 pub async fn install_loader(
     app: AppHandle,
     state: State<'_, AppState>,
     version_id: String,
     loader: String,
+    loader_version: Option<String>,
 ) -> CmdResult<InstalledVersion> {
     let cfg = state.config.lock().unwrap().clone();
     {
@@ -139,9 +153,16 @@ pub async fn install_loader(
     progress.set_message(format!("准备安装 {loader}…"));
     *state.progress.lock().unwrap() = Some(progress.clone());
 
-    let result =
-        install::install_loader(&app, &state.client, &cfg, &version_id, &loader, progress.clone())
-            .await;
+    let result = install::install_loader(
+        &app,
+        &state.client,
+        &cfg,
+        &version_id,
+        &loader,
+        loader_version.as_deref(),
+        progress.clone(),
+    )
+    .await;
 
     progress.active.store(false, Ordering::Relaxed);
     download::emit_now(&app, &progress);
@@ -175,6 +196,106 @@ pub fn delete_version(state: State<'_, AppState>, version_id: String) -> CmdResu
         std::fs::remove_dir_all(&dir).map_err(err)?;
     }
     Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct InstanceContext {
+    pub game_version: String,
+    pub loader: String,
+}
+
+#[tauri::command]
+pub fn instance_context(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<InstanceContext> {
+    let cfg = state.config.lock().unwrap().clone();
+    let (game_version, loader) =
+        install::instance_context(&cfg, &version_id).map_err(err)?;
+    Ok(InstanceContext {
+        game_version,
+        loader,
+    })
+}
+
+#[tauri::command]
+pub async fn cf_search(
+    state: State<'_, AppState>,
+    class_id: i64,
+    query: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+    index: u32,
+) -> CmdResult<curseforge::CfSearchResult> {
+    curseforge::search(
+        &state.client,
+        class_id,
+        &query,
+        game_version.as_deref(),
+        loader.as_deref(),
+        index,
+        20,
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn cf_files(
+    state: State<'_, AppState>,
+    mod_id: i64,
+    game_version: Option<String>,
+    loader: Option<String>,
+) -> CmdResult<Vec<curseforge::CfFileView>> {
+    curseforge::files(
+        &state.client,
+        mod_id,
+        game_version.as_deref(),
+        loader.as_deref(),
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn cf_install_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: String,
+    kind: String,
+    url: String,
+    file_name: String,
+) -> CmdResult<String> {
+    let cfg = state.config.lock().unwrap().clone();
+    {
+        let guard = state.progress.lock().unwrap();
+        if let Some(p) = guard.as_ref() {
+            if p.active.load(Ordering::Relaxed) {
+                return Err("已有下载任务正在进行".into());
+            }
+        }
+    }
+    let progress = ProgressState::new("install");
+    progress.set_message(format!("准备下载 {file_name}…"));
+    *state.progress.lock().unwrap() = Some(progress.clone());
+
+    let result = curseforge::install_file(
+        &app,
+        &state.client,
+        &cfg,
+        &version_id,
+        &kind,
+        &url,
+        &file_name,
+        progress.clone(),
+    )
+    .await;
+
+    progress.active.store(false, Ordering::Relaxed);
+    download::emit_now(&app, &progress);
+    *state.progress.lock().unwrap() = None;
+
+    result.map_err(err)
 }
 
 #[tauri::command]

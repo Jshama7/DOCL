@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { api, type LoaderOption } from "../api";
+import { api, type LoaderOption, type LoaderVersion } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodProgress from "../components/WoodProgress.vue";
+import CurseForgeView from "./CurseForgeView.vue";
 import {
   cancelInstall,
   installLoader,
@@ -32,6 +33,10 @@ const category = ref<Category>("vanilla");
 const detailId = ref<string | null>(null);
 const loaders = ref<LoaderOption[]>([]);
 const loadersLoading = ref(false);
+const expandedLoader = ref<string | null>(null);
+const loaderVersionMap = ref<Record<string, LoaderVersion[]>>({});
+const versionLoading = ref<string | null>(null);
+const versionError = ref("");
 
 const filter = ref<"release" | "snapshot" | "all">("release");
 const query = ref("");
@@ -49,6 +54,9 @@ onMounted(() => {
 
 watch(detailId, async (id) => {
   loaders.value = [];
+  expandedLoader.value = null;
+  loaderVersionMap.value = {};
+  versionError.value = "";
   if (!id) return;
   loadersLoading.value = true;
   try {
@@ -130,8 +138,31 @@ function launchVanilla() {
   if (detailId.value) launchVersion(detailId.value);
 }
 
-function installLoaderFor(loader: string) {
-  if (detailId.value) installLoader(detailId.value, loader);
+function installLoaderFor(loader: string, loaderVersion?: string) {
+  if (detailId.value) installLoader(detailId.value, loader, loaderVersion);
+}
+
+async function toggleLoader(loader: string) {
+  if (expandedLoader.value === loader) {
+    expandedLoader.value = null;
+    return;
+  }
+  expandedLoader.value = loader;
+  versionError.value = "";
+  if (loaderVersionMap.value[loader]) return;
+  if (!detailId.value) return;
+  versionLoading.value = loader;
+  try {
+    const list = await api.loaderVersions(detailId.value, loader);
+    loaderVersionMap.value = {
+      ...loaderVersionMap.value,
+      [loader]: list,
+    };
+  } catch (err) {
+    versionError.value = String(err);
+  } finally {
+    versionLoading.value = null;
+  }
 }
 
 function launchLoader(id: string | null) {
@@ -183,26 +214,14 @@ function launchLoader(id: string | null) {
         </button>
 
         <div class="dl-side__hint">
+          社区资源来自 CurseForge，下载会按当前实例的游戏版本与加载器自动筛选。
           原版版本详情里可以继续添加 Fabric / Quilt 加载器。
         </div>
       </aside>
 
       <div class="dl-main">
         <template v-if="category !== 'vanilla'">
-          <section class="card card-pad coming">
-            <AppIcon
-              :name="categories.find((c) => c.value === category)?.icon ?? 'grid'"
-              :size="34"
-            />
-            <div>
-              <p class="coming__title">
-                {{ categories.find((c) => c.value === category)?.label }} 下载即将接入
-              </p>
-              <p class="muted small">
-                这一栏会从 Modrinth 拉取社区资源，并按当前游戏版本与加载器筛选。
-              </p>
-            </div>
-          </section>
+          <CurseForgeView :key="category" :kind="category" />
         </template>
 
         <template v-else-if="detailId">
@@ -271,45 +290,87 @@ function launchLoader(id: string | null) {
             </div>
 
             <div v-else class="loader-list">
-              <div
-                v-for="item in loaders"
-                :key="item.loader"
-                class="loader-row"
-                :class="{ 'loader-row--installed': item.installed }"
-              >
-                <span class="loader-row__badge">{{ item.label.slice(0, 1) }}</span>
-                <div class="loader-row__info">
-                  <strong>{{ item.label }}</strong>
-                  <span>
-                    {{ item.note }}
-                    <template v-if="item.version"> · {{ item.version }}</template>
-                    <template v-if="item.installed_id"> · {{ item.installed_id }}</template>
-                  </span>
-                </div>
-                <div class="loader-row__action">
-                  <template v-if="item.installed">
-                    <span class="tag tag--grass">已安装</span>
+              <template v-for="item in loaders" :key="item.loader">
+                <div
+                  class="loader-row"
+                  :class="{
+                    'loader-row--installed': item.installed,
+                    'loader-row--open': expandedLoader === item.loader,
+                  }"
+                  @click="item.supported && toggleLoader(item.loader)"
+                >
+                  <span class="loader-row__badge">{{ item.label.slice(0, 1) }}</span>
+                  <div class="loader-row__info">
+                    <strong>{{ item.label }}</strong>
+                    <span>
+                      {{ item.note }}
+                      <template v-if="item.installed_id"> · {{ item.installed_id }}</template>
+                    </span>
+                  </div>
+                  <div class="loader-row__action">
+                    <template v-if="item.installed">
+                      <span class="tag tag--grass">已安装</span>
+                      <IconButton
+                        icon="play"
+                        :label="`启动 ${item.installed_id}`"
+                        variant="primary"
+                        :size="32"
+                        :disabled="!!store.installingId"
+                        @click.stop="launchLoader(item.installed_id)"
+                      />
+                    </template>
                     <IconButton
-                      icon="play"
-                      :label="`启动 ${item.installed_id}`"
-                      variant="primary"
+                      v-if="item.supported"
+                      icon="chevron-down"
+                      :label="expandedLoader === item.loader ? '收起版本列表' : '选择版本'"
+                      variant="soft"
                       :size="32"
-                      :disabled="!!store.installingId"
-                      @click="launchLoader(item.installed_id)"
+                      :class="{ 'loader-chevron--open': expandedLoader === item.loader }"
+                      @click.stop="toggleLoader(item.loader)"
                     />
-                  </template>
-                  <IconButton
-                    v-else-if="item.supported"
-                    icon="download"
-                    :label="`安装 ${item.label}`"
-                    variant="soft"
-                    :size="32"
-                    :disabled="!!store.installingId || !item.version"
-                    @click="installLoaderFor(item.loader)"
-                  />
-                  <span v-else class="muted small loader-row__unsupported">暂未支持</span>
+                    <span v-else class="muted small loader-row__unsupported">暂未支持</span>
+                  </div>
                 </div>
-              </div>
+
+                <div v-if="expandedLoader === item.loader" class="loader-versions">
+                  <div v-if="versionLoading === item.loader" class="loader-versions__state">
+                    <span class="skeleton" />
+                    <span class="muted small">正在获取 {{ item.label }} 版本…</span>
+                  </div>
+                  <div
+                    v-else-if="versionError"
+                    class="loader-versions__state loader-versions__state--error"
+                  >
+                    {{ versionError }}
+                  </div>
+                  <div
+                    v-else-if="!(loaderVersionMap[item.loader] ?? []).length"
+                    class="loader-versions__state muted small"
+                  >
+                    没有找到适配当前版本的 {{ item.label }}。
+                  </div>
+                  <div v-else class="loader-version-list">
+                    <div
+                      v-for="version in loaderVersionMap[item.loader]"
+                      :key="version.version"
+                      class="loader-version"
+                    >
+                      <span class="loader-version__name mono">{{ version.version }}</span>
+                      <span v-if="version.recommended" class="tag tag--grass">推荐</span>
+                      <span class="loader-version__install">
+                        <IconButton
+                          icon="download"
+                          :label="`安装 ${item.label} ${version.version}`"
+                          variant="soft"
+                          :size="28"
+                          :disabled="!!store.installingId"
+                          @click.stop="installLoaderFor(item.loader, version.version)"
+                        />
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </template>
             </div>
           </section>
         </template>
@@ -455,21 +516,6 @@ function launchLoader(id: string | null) {
   min-width: 0;
 }
 
-.coming {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  color: var(--walnut);
-  padding: 40px 28px;
-}
-
-.coming__title {
-  font-size: 16px;
-  font-weight: 800;
-  color: var(--walnut-deep);
-  margin-bottom: 4px;
-}
-
 /* 详情 */
 .detail-head {
   display: flex;
@@ -521,11 +567,85 @@ function launchLoader(id: string | null) {
   border-radius: 10px;
   background: linear-gradient(180deg, var(--panel), var(--panel-2));
   transition: border-color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo);
+  cursor: pointer;
+}
+
+.loader-row--open {
+  border-color: rgba(var(--accent-rgb), 0.32);
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.loader-chevron--open {
+  transform: rotate(180deg);
+}
+
+.loader-versions {
+  margin-top: -3px;
+  border: 1px solid rgba(var(--accent-rgb), 0.26);
+  border-top: 1px dashed var(--line);
+  border-radius: 0 0 10px 10px;
+  background: rgba(var(--glass-rgb), 0.32);
+  padding: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.loader-versions__state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.loader-versions__state .skeleton {
+  width: 90px;
+  height: 12px;
+}
+
+.loader-versions__state--error {
+  color: var(--danger);
+}
+
+.loader-version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.loader-version {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  transition: background var(--dur-1) ease;
+}
+
+.loader-version:hover {
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.loader-version__name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+}
+
+.loader-version__install {
+  display: inline-flex;
 }
 
 .loader-row:hover {
   border-color: var(--walnut-light);
   transform: translateY(-1px);
+}
+
+.loader-row--open:hover {
+  transform: none;
 }
 
 .loader-row--installed {

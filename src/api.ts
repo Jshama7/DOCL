@@ -55,11 +55,48 @@ export interface LoaderOption {
   note: string;
 }
 
+export interface LoaderVersion {
+  version: string;
+  recommended: boolean;
+}
+
 export interface JavaInfo {
   path: string;
   version: string;
   major: number;
   source: string;
+}
+
+export interface InstanceContext {
+  game_version: string;
+  loader: string;
+}
+
+export interface CfProject {
+  id: number;
+  name: string;
+  slug: string;
+  summary: string;
+  download_count: number;
+  class_id: number;
+  logo_url: string;
+  author: string;
+}
+
+export interface CfSearchResult {
+  items: CfProject[];
+  total: number;
+}
+
+export interface CfFileView {
+  id: number;
+  name: string;
+  file_name: string;
+  file_date: string;
+  size: number;
+  download_url: string | null;
+  game_versions: string[];
+  release_type: number;
 }
 
 export interface AccountView {
@@ -115,8 +152,34 @@ export const api = {
   cancelInstall: () => invoke<void>("cancel_install"),
   loaderOptions: (versionId: string) =>
     invoke<LoaderOption[]>("loader_options", { versionId }),
-  installLoader: (versionId: string, loader: string) =>
-    invoke<InstalledVersion>("install_loader", { versionId, loader }),
+  loaderVersions: (versionId: string, loader: string) =>
+    invoke<LoaderVersion[]>("loader_versions", { versionId, loader }),
+  installLoader: (versionId: string, loader: string, loaderVersion?: string) =>
+    invoke<InstalledVersion>("install_loader", { versionId, loader, loaderVersion }),
+  instanceContext: (versionId: string) =>
+    invoke<InstanceContext>("instance_context", { versionId }),
+  cfSearch: (
+    classId: number,
+    query: string,
+    gameVersion?: string | null,
+    loader?: string | null,
+    index = 0
+  ) =>
+    invoke<CfSearchResult>("cf_search", {
+      classId,
+      query,
+      gameVersion: gameVersion ?? null,
+      loader: loader ?? null,
+      index,
+    }),
+  cfFiles: (modId: number, gameVersion?: string | null, loader?: string | null) =>
+    invoke<CfFileView[]>("cf_files", {
+      modId,
+      gameVersion: gameVersion ?? null,
+      loader: loader ?? null,
+    }),
+  cfInstallFile: (versionId: string, kind: string, url: string, fileName: string) =>
+    invoke<string>("cf_install_file", { versionId, kind, url, fileName }),
   deleteVersion: (versionId: string) => invoke<void>("delete_version", { versionId }),
   getAccounts: () => invoke<AccountView[]>("get_accounts"),
   createOfflineAccount: (name: string) => invoke<AccountView>("create_offline_account", { name }),

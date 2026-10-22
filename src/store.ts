@@ -217,7 +217,11 @@ export async function installVersion(id: string) {
   }
 }
 
-export async function installLoader(versionId: string, loader: string) {
+export async function installLoader(
+  versionId: string,
+  loader: string,
+  loaderVersion?: string
+) {
   if (store.installingId) {
     notify("已有安装任务正在进行", "err");
     return;
@@ -226,17 +230,49 @@ export async function installLoader(versionId: string, loader: string) {
   store.progress = null;
   store.lastProgress = null;
   store.lastJobError = null;
-  store.lastJobTitle = `${versionId} · ${loader}`;
+  store.lastJobTitle = `${versionId} · ${loader}${loaderVersion ? ` ${loaderVersion}` : ""}`;
   store.downloadPanel = "open";
   primeProgress("install", `准备安装 ${loader}…`);
   try {
-    await api.installLoader(versionId, loader);
+    await api.installLoader(versionId, loader, loaderVersion);
     await refreshInstalled();
     await refreshConfig();
     notify(`${loader} 安装完成`);
   } catch (err) {
     store.lastJobError = String(err);
     notify(`安装失败：${String(err)}`, "err");
+  } finally {
+    store.installingId = null;
+    window.setTimeout(() => {
+      if (!store.progress?.active) store.progress = null;
+    }, 800);
+  }
+}
+
+export async function installCfFile(
+  versionId: string,
+  kind: string,
+  url: string,
+  fileName: string,
+  title: string
+) {
+  if (store.installingId) {
+    notify("已有下载任务正在进行", "err");
+    return;
+  }
+  store.installingId = `${versionId} · ${fileName}`;
+  store.progress = null;
+  store.lastProgress = null;
+  store.lastJobError = null;
+  store.lastJobTitle = title;
+  store.downloadPanel = "open";
+  primeProgress("install", `准备下载 ${title}…`);
+  try {
+    await api.cfInstallFile(versionId, kind, url, fileName);
+    notify(`${title} 下载完成`);
+  } catch (err) {
+    store.lastJobError = String(err);
+    notify(`下载失败：${String(err)}`, "err");
   } finally {
     store.installingId = null;
     window.setTimeout(() => {

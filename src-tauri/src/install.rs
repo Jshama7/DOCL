@@ -680,10 +680,20 @@ fn version_key(value: &str) -> Vec<u64> {
         .collect()
 }
 
-async fn fetch_maven_metadata(client: &reqwest::Client, path: &str) -> Result<Vec<String>> {
+#[derive(Debug, Clone, Serialize)]
+pub struct LoaderVersion {
+    pub version: String,
+    pub recommended: bool,
+}
+
+async fn fetch_maven_metadata(
+    client: &reqwest::Client,
+    path: &str,
+    official_base: &str,
+) -> Result<Vec<String>> {
     let mirrors = [
         format!("https://bmclapi2.bangbang93.com/maven/{path}"),
-        format!("https://maven.neoforged.net/releases/{path}"),
+        format!("{official_base}{path}"),
     ];
     for url in mirrors {
         if let Ok(bytes) = download::get_bytes(client, &url, false).await {
@@ -694,39 +704,68 @@ async fn fetch_maven_metadata(client: &reqwest::Client, path: &str) -> Result<Ve
             }
         }
     }
-    bail!("无法获取 NeoForge 版本列表")
+    bail!("无法获取加载器版本列表")
 }
 
-/// 返回 (安装器坐标版本, 下载地址, 文件名)
+fn forge_installer_for(game_version: &str, version: &str) -> (String, String, String) {
+    let coordinate = format!("{game_version}-{version}");
+    let file = format!("forge-{coordinate}-installer.jar");
+    (
+        version.to_string(),
+        format!("https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/{coordinate}/{file}"),
+        file,
+    )
+}
+
+fn neoforge_installer_for(game_version: &str, version: &str) -> (String, String, String) {
+    if game_version == "1.20.1" {
+        let coordinate = format!("1.20.1-{version}");
+        let file = format!("forge-{coordinate}-installer.jar");
+        return (
+            version.to_string(),
+            format!("https://bmclapi2.bangbang93.com/maven/net/neoforged/forge/{coordinate}/{file}"),
+            file,
+        );
+    }
+    let file = format!("neoforge-{version}-installer.jar");
+    (
+        version.to_string(),
+        format!("https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/{version}/{file}"),
+        file,
+    )
+}
+
 async fn neoforge_installer(
     client: &reqwest::Client,
     game_version: &str,
 ) -> Result<(String, String, String)> {
     if game_version == "1.20.1" {
-        let versions =
-            fetch_maven_metadata(client, "net/neoforged/forge/maven-metadata.xml").await?;
+        let versions = fetch_maven_metadata(
+            client,
+            "net/neoforged/forge/maven-metadata.xml",
+            "https://maven.neoforged.net/releases/",
+        )
+        .await?;
         let pick = versions
             .iter()
             .filter(|v| v.starts_with("1.20.1-") && !v.contains("beta"))
             .max_by_key(|v| version_key(v))
             .ok_or_else(|| anyhow!("NeoForge 没有适配 1.20.1 的版本"))?
             .clone();
-        let file = format!("forge-{pick}-installer.jar");
-        return Ok((
-            pick.clone(),
-            format!(
-                "https://bmclapi2.bangbang93.com/maven/net/neoforged/forge/{pick}/{file}"
-            ),
-            file,
-        ));
+        let short = pick.trim_start_matches("1.20.1-").to_string();
+        return Ok(neoforge_installer_for(game_version, &short));
     }
 
     let prefix = game_version
         .strip_prefix("1.")
         .unwrap_or(game_version)
         .to_string();
-    let mut versions =
-        fetch_maven_metadata(client, "net/neoforged/neoforge/maven-metadata.xml").await?;
+    let mut versions = fetch_maven_metadata(
+        client,
+        "net/neoforged/neoforge/maven-metadata.xml",
+        "https://maven.neoforged.net/releases/",
+    )
+    .await?;
     versions.retain(|v| {
         v.starts_with(&format!("{prefix}."))
             && !v.contains('-')
@@ -736,14 +775,7 @@ async fn neoforge_installer(
         .into_iter()
         .max_by_key(|v| version_key(v))
         .ok_or_else(|| anyhow!("NeoForge 没有适配 {game_version} 的版本"))?;
-    let file = format!("neoforge-{pick}-installer.jar");
-    Ok((
-        pick.clone(),
-        format!(
-            "https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/{pick}/{file}"
-        ),
-        file,
-    ))
+    Ok(neoforge_installer_for(game_version, &pick))
 }
 
 async fn forge_installer(
@@ -751,15 +783,130 @@ async fn forge_installer(
     game_version: &str,
 ) -> Result<(String, String, String)> {
     let version = forge_recommended(client, game_version).await?;
-    let coordinate = format!("{game_version}-{version}");
-    let file = format!("forge-{coordinate}-installer.jar");
-    Ok((
-        version,
-        format!(
-            "https://bmclapi2.bangbang93.com/maven/net/minecraftforge/forge/{coordinate}/{file}"
-        ),
-        file,
-    ))
+    Ok(forge_installer_for(game_version, &version))
+}
+
+pub fn instance_context(cfg: &Config, version_id: &str) -> Result<(String, String)> {
+    let merged = resolve_detail(cfg, version_id)?;
+    let game_version = merged
+        .chain
+        .last()
+        .cloned()
+        .unwrap_or_else(|| version_id.to_string());
+    let loader = if version_id.starts_with("fabric-loader") {
+        "fabric"
+    } else if version_id.starts_with("quilt-loader") {
+        "quilt"
+    } else if version_id.contains("neoforge") {
+        "neoforge"
+    } else if version_id.contains("forge") {
+        "forge"
+    } else {
+        "vanilla"
+    };
+    Ok((game_version, loader.to_string()))
+}
+
+pub async fn loader_versions(
+    client: &reqwest::Client,
+    cfg: &Config,
+    game_version: &str,
+    loader: &str,
+) -> Result<Vec<LoaderVersion>> {
+    if loader == "fabric" || loader == "quilt" {
+        let url = loader_list_url(loader, game_version)
+            .ok_or_else(|| anyhow!("不支持的加载器：{loader}"))?;
+        let list: Vec<FabricLoaderEntry> =
+            download::get_json(client, &url, cfg.use_mirror()).await?;
+        let recommended = list
+            .iter()
+            .find(|entry| entry.loader.stable)
+            .map(|entry| entry.loader.version.clone());
+        let versions = list
+            .into_iter()
+            .map(|entry| LoaderVersion {
+                recommended: Some(&entry.loader.version) == recommended.as_ref(),
+                version: entry.loader.version,
+            })
+            .collect();
+        return Ok(versions);
+    }
+
+    if loader == "forge" {
+        let all = fetch_maven_metadata(
+            client,
+            "net/minecraftforge/forge/maven-metadata.xml",
+            "https://maven.minecraftforge.net/",
+        )
+        .await?;
+        let prefix = format!("{game_version}-");
+        let recommended = forge_recommended(client, game_version).await.ok();
+        let mut versions: Vec<String> = all
+            .into_iter()
+            .filter_map(|coordinate| {
+                coordinate
+                    .strip_prefix(&prefix)
+                    .map(|value| value.to_string())
+            })
+            .collect();
+        versions.sort_by_key(|value| std::cmp::Reverse(version_key(value)));
+        versions.truncate(80);
+        return Ok(versions
+            .into_iter()
+            .map(|version| LoaderVersion {
+                recommended: Some(&version) == recommended.as_ref(),
+                version,
+            })
+            .collect());
+    }
+
+    if loader == "neoforge" {
+        let recommended = neoforge_installer(client, game_version)
+            .await
+            .ok()
+            .map(|(version, _, _)| version);
+        let mut versions: Vec<String> = if game_version == "1.20.1" {
+            fetch_maven_metadata(
+                client,
+                "net/neoforged/forge/maven-metadata.xml",
+                "https://maven.neoforged.net/releases/",
+            )
+            .await?
+            .into_iter()
+            .filter(|v| v.starts_with("1.20.1-") && !v.contains("beta"))
+            .map(|v| v.trim_start_matches("1.20.1-").to_string())
+            .collect()
+        } else {
+            let prefix = game_version
+                .strip_prefix("1.")
+                .unwrap_or(game_version)
+                .to_string();
+            fetch_maven_metadata(
+                client,
+                "net/neoforged/neoforge/maven-metadata.xml",
+                "https://maven.neoforged.net/releases/",
+            )
+            .await?
+            .into_iter()
+            .filter(|v| {
+                v.starts_with(&format!("{prefix}."))
+                    && !v.contains('-')
+                    && v.split('.').all(|part| part.chars().all(|c| c.is_ascii_digit()))
+            })
+            .collect()
+        };
+        versions.sort_by_key(|value| std::cmp::Reverse(version_key(value)));
+        versions.truncate(80);
+        return Ok(versions
+            .into_iter()
+            .map(|version| LoaderVersion {
+                recommended: Some(&version) == recommended.as_ref(),
+                version,
+            })
+            .collect());
+    }
+
+    bail!("不支持的加载器：{loader}")
 }
 
 async fn install_forge_like(
@@ -768,13 +915,20 @@ async fn install_forge_like(
     cfg: &Config,
     game_version: &str,
     loader: &str,
+    requested: Option<&str>,
     progress: Arc<ProgressState>,
 ) -> Result<InstalledVersion> {
     let required = read_installed_detail(cfg, game_version)?.required_java();
     let java = launch::find_java(cfg, required)?;
 
     progress.set_message(format!("正在获取 {loader} 安装器地址…"));
-    let (version, url, file_name) = if loader == "neoforge" {
+    let (version, url, file_name) = if let Some(version) = requested {
+        if loader == "neoforge" {
+            neoforge_installer_for(game_version, version)
+        } else {
+            forge_installer_for(game_version, version)
+        }
+    } else if loader == "neoforge" {
         neoforge_installer(client, game_version).await?
     } else {
         forge_installer(client, game_version).await?
@@ -1011,7 +1165,7 @@ fn installed_loaders(cfg: &Config, game_version: &str) -> Vec<(String, String)> 
 }
 
 pub async fn loader_options(
-    client: &reqwest::Client,
+    _client: &reqwest::Client,
     cfg: &Config,
     game_version: &str,
 ) -> Vec<LoaderOption> {
@@ -1025,27 +1179,18 @@ pub async fn loader_options(
     ];
     let mut result = Vec::new();
     for (loader, label, supported) in loaders {
-        let version = if supported {
-            pick_loader_version(client, cfg, loader, game_version)
-                .await
-                .ok()
-        } else {
-            None
-        };
         let found = installed.iter().find(|(name, _)| name == loader);
         let note = if !supported {
             "暂未支持"
         } else if found.is_some() {
             "已安装"
-        } else if version.is_none() {
-            "无法获取版本"
         } else {
-            "可以添加"
+            "选择版本安装"
         };
         result.push(LoaderOption {
             loader: loader.to_string(),
             label: label.to_string(),
-            version,
+            version: None,
             installed: found.is_some(),
             installed_id: found.map(|(_, id)| id.clone()),
             supported,
@@ -1074,6 +1219,7 @@ pub async fn install_loader(
     cfg: &Config,
     game_version: &str,
     loader: &str,
+    requested: Option<&str>,
     progress: Arc<ProgressState>,
 ) -> Result<InstalledVersion> {
     let use_mirror = cfg.use_mirror();
@@ -1083,11 +1229,23 @@ pub async fn install_loader(
     }
 
     if loader == "forge" || loader == "neoforge" {
-        return install_forge_like(app, client, cfg, game_version, loader, progress).await;
+        return install_forge_like(
+            app,
+            client,
+            cfg,
+            game_version,
+            loader,
+            requested,
+            progress,
+        )
+        .await;
     }
 
     progress.set_message(format!("正在获取 {loader} 加载器版本…"));
-    let loader_version = pick_loader_version(client, cfg, loader, game_version).await?;
+    let loader_version = match requested {
+        Some(version) => version.to_string(),
+        None => pick_loader_version(client, cfg, loader, game_version).await?,
+    };
     let profile_url = loader_profile_url(loader, game_version, &loader_version)
         .ok_or_else(|| anyhow!("不支持的加载器：{loader}"))?;
     let raw = download::get_bytes(client, &profile_url, use_mirror).await?;

@@ -1,0 +1,273 @@
+use crate::config::Config;
+use crate::download::{self, FileTask, ProgressState};
+use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
+use std::sync::Arc;
+use tauri::AppHandle;
+
+const BASE: &str = "https://api.curse.tools/v1/cf";
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfLogo {
+    #[serde(default)]
+    thumbnail_url: String,
+    #[serde(default)]
+    url: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CfAuthor {
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfFile {
+    id: i64,
+    #[serde(default)]
+    display_name: String,
+    #[serde(default)]
+    file_name: String,
+    #[serde(default)]
+    file_date: String,
+    #[serde(default)]
+    file_length: u64,
+    #[serde(default)]
+    download_url: Option<String>,
+    #[serde(default)]
+    game_versions: Vec<String>,
+    #[serde(default)]
+    release_type: i32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfMod {
+    id: i64,
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    download_count: u64,
+    #[serde(default)]
+    class_id: i64,
+    logo: Option<CfLogo>,
+    #[serde(default)]
+    authors: Vec<CfAuthor>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfPagination {
+    #[serde(default)]
+    total_count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CfSearchResponse {
+    #[serde(default)]
+    data: Vec<CfMod>,
+    pagination: Option<CfPagination>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CfFilesResponse {
+    #[serde(default)]
+    data: Vec<CfFile>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CfProject {
+    pub id: i64,
+    pub name: String,
+    pub slug: String,
+    pub summary: String,
+    pub download_count: u64,
+    pub class_id: i64,
+    pub logo_url: String,
+    pub author: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CfSearchResult {
+    pub items: Vec<CfProject>,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CfFileView {
+    pub id: i64,
+    pub name: String,
+    pub file_name: String,
+    pub file_date: String,
+    pub size: u64,
+    pub download_url: Option<String>,
+    pub game_versions: Vec<String>,
+    pub release_type: i32,
+}
+
+fn loader_id(loader: &str) -> Option<&'static str> {
+    match loader {
+        "forge" => Some("1"),
+        "fabric" => Some("4"),
+        "quilt" => Some("5"),
+        "neoforge" => Some("6"),
+        _ => None,
+    }
+}
+
+pub async fn search(
+    client: &reqwest::Client,
+    class_id: i64,
+    query: &str,
+    game_version: Option<&str>,
+    loader: Option<&str>,
+    index: u32,
+    page_size: u32,
+) -> Result<CfSearchResult> {
+    let mut url = reqwest::Url::parse(&format!("{BASE}/mods/search"))?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs
+            .append_pair("gameId", "432")
+            .append_pair("classId", &class_id.to_string())
+            .append_pair("index", &index.to_string())
+            .append_pair("pageSize", &page_size.to_string())
+            .append_pair("sortField", "2")
+            .append_pair("sortOrder", "desc");
+        if !query.trim().is_empty() {
+            pairs.append_pair("searchFilter", query.trim());
+        }
+        if let Some(version) = game_version {
+            if !version.is_empty() {
+                pairs.append_pair("gameVersion", version);
+            }
+        }
+        if let Some(loader) = loader.and_then(loader_id) {
+            pairs.append_pair("modLoaderType", loader);
+        }
+    }
+
+    let response: CfSearchResponse =
+        download::get_json(client, url.as_str(), false).await?;
+    let items = response
+        .data
+        .into_iter()
+        .map(|project| CfProject {
+            id: project.id,
+            name: project.name,
+            slug: project.slug,
+            summary: project.summary,
+            download_count: project.download_count,
+            class_id: project.class_id,
+            logo_url: project
+                .logo
+                .map(|logo| {
+                    if logo.thumbnail_url.is_empty() {
+                        logo.url
+                    } else {
+                        logo.thumbnail_url
+                    }
+                })
+                .unwrap_or_default(),
+            author: project
+                .authors
+                .first()
+                .map(|author| author.name.clone())
+                .unwrap_or_default(),
+        })
+        .collect();
+    Ok(CfSearchResult {
+        items,
+        total: response
+            .pagination
+            .map(|p| p.total_count)
+            .unwrap_or(0),
+    })
+}
+
+pub async fn files(
+    client: &reqwest::Client,
+    mod_id: i64,
+    game_version: Option<&str>,
+    loader: Option<&str>,
+) -> Result<Vec<CfFileView>> {
+    let mut url = reqwest::Url::parse(&format!("{BASE}/mods/{mod_id}/files"))?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs.append_pair("pageSize", "50");
+        if let Some(version) = game_version {
+            if !version.is_empty() {
+                pairs.append_pair("gameVersion", version);
+            }
+        }
+        if let Some(loader) = loader.and_then(loader_id) {
+            pairs.append_pair("modLoaderType", loader);
+        }
+    }
+    let response: CfFilesResponse = download::get_json(client, url.as_str(), false).await?;
+    let mut files: Vec<CfFileView> = response
+        .data
+        .into_iter()
+        .map(|file| CfFileView {
+            id: file.id,
+            name: if file.display_name.is_empty() {
+                file.file_name.clone()
+            } else {
+                file.display_name
+            },
+            file_name: file.file_name,
+            file_date: file.file_date,
+            size: file.file_length,
+            download_url: file.download_url,
+            game_versions: file.game_versions,
+            release_type: file.release_type,
+        })
+        .collect();
+    files.sort_by(|a, b| b.file_date.cmp(&a.file_date));
+    files.truncate(25);
+    Ok(files)
+}
+
+fn subdir(kind: &str) -> Result<&'static str> {
+    match kind {
+        "mods" => Ok("mods"),
+        "resourcepacks" => Ok("resourcepacks"),
+        "shaderpacks" => Ok("shaderpacks"),
+        "datapacks" => Ok("datapacks"),
+        _ => bail!("该分类暂不支持直接安装：{kind}"),
+    }
+}
+
+pub async fn install_file(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &Config,
+    instance_id: &str,
+    kind: &str,
+    url: &str,
+    file_name: &str,
+    progress: Arc<ProgressState>,
+) -> Result<String> {
+    let name = Path::new(file_name)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download.bin".to_string());
+    let dir = cfg.launch_dir(instance_id).join(subdir(kind)?);
+    let dest = dir.join(&name);
+    let task = FileTask {
+        url: url.to_string(),
+        dest: dest.clone(),
+        sha1: None,
+        size: 0,
+        label: name,
+    };
+    download::run_tasks(app, client, vec![task], 1, false, progress).await?;
+    Ok(dest.to_string_lossy().to_string())
+}

@@ -8,6 +8,7 @@ mod install;
 mod java;
 mod launch;
 mod mirror;
+mod modrinth;
 mod models;
 mod skins;
 
@@ -52,6 +53,8 @@ pub fn run() {
             commands::cf_search,
             commands::cf_game_versions,
             commands::cf_files,
+            commands::modrinth_search,
+            commands::modrinth_files,
             commands::cf_install_file,
             commands::get_accounts,
             commands::create_offline_account,

@@ -73,7 +73,8 @@ export interface InstanceContext {
 }
 
 export interface CfProject {
-  id: number;
+  source: "curseforge" | "modrinth" | string;
+  id: string;
   name: string;
   slug: string;
   summary: string;
@@ -91,7 +92,7 @@ export interface CfSearchResult {
 }
 
 export interface CfFileView {
-  id: number;
+  id: string;
   name: string;
   file_name: string;
   file_date: string;
@@ -177,9 +178,35 @@ export const api = {
       sortField,
     }),
   cfGameVersions: () => invoke<string[]>("cf_game_versions"),
-  cfFiles: (modId: number, gameVersion?: string | null, loader?: string | null) =>
+  cfFiles: (modId: string, gameVersion?: string | null, loader?: string | null) =>
     invoke<CfFileView[]>("cf_files", {
       modId,
+      gameVersion: gameVersion ?? null,
+      loader: loader ?? null,
+    }),
+  modrinthSearch: (
+    kind: string,
+    query: string,
+    gameVersion?: string | null,
+    loader?: string | null,
+    index = 0,
+    sortField = 2
+  ) =>
+    invoke<CfSearchResult>("modrinth_search", {
+      kind,
+      query,
+      gameVersion: gameVersion ?? null,
+      loader: loader ?? null,
+      index,
+      sortField,
+    }),
+  modrinthFiles: (
+    projectId: string,
+    gameVersion?: string | null,
+    loader?: string | null
+  ) =>
+    invoke<CfFileView[]>("modrinth_files", {
+      projectId,
       gameVersion: gameVersion ?? null,
       loader: loader ?? null,
     }),

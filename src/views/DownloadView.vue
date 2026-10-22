@@ -6,7 +6,7 @@ import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodProgress from "../components/WoodProgress.vue";
-import CurseForgeView from "./CurseForgeView.vue";
+import CommunityView from "./CommunityView.vue";
 import {
   cancelInstall,
   installLoader,
@@ -214,14 +214,14 @@ function launchLoader(id: string | null) {
         </button>
 
         <div class="dl-side__hint">
-          社区资源来自 CurseForge，下载会按当前实例的游戏版本与加载器自动筛选。
+          社区资源来自 CurseForge 与 Modrinth，可切换来源；下载会按当前实例的游戏版本与加载器自动筛选。
           原版版本详情里可以继续添加 Fabric / Quilt 加载器。
         </div>
       </aside>
 
       <div class="dl-main">
         <template v-if="category !== 'vanilla'">
-          <CurseForgeView :key="category" :kind="category" />
+          <CommunityView :key="category" :kind="category" />
         </template>
 
         <template v-else-if="detailId">

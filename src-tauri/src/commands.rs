@@ -252,13 +252,57 @@ pub async fn cf_game_versions(
 #[tauri::command]
 pub async fn cf_files(
     state: State<'_, AppState>,
-    mod_id: i64,
+    mod_id: String,
     game_version: Option<String>,
     loader: Option<String>,
 ) -> CmdResult<Vec<curseforge::CfFileView>> {
+    let id: i64 = mod_id
+        .parse()
+        .map_err(|_| "无效的 CurseForge 项目 ID".to_string())?;
     curseforge::files(
         &state.client,
-        mod_id,
+        id,
+        game_version.as_deref(),
+        loader.as_deref(),
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn modrinth_search(
+    state: State<'_, AppState>,
+    kind: String,
+    query: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+    index: u32,
+    sort_field: Option<u32>,
+) -> CmdResult<curseforge::CfSearchResult> {
+    crate::modrinth::search(
+        &state.client,
+        &kind,
+        &query,
+        game_version.as_deref(),
+        loader.as_deref(),
+        index,
+        20,
+        sort_field.unwrap_or(2),
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
+pub async fn modrinth_files(
+    state: State<'_, AppState>,
+    project_id: String,
+    game_version: Option<String>,
+    loader: Option<String>,
+) -> CmdResult<Vec<curseforge::CfFileView>> {
+    crate::modrinth::files(
+        &state.client,
+        &project_id,
         game_version.as_deref(),
         loader.as_deref(),
     )

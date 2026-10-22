@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { openFolder } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
-import WoodProgress from "../components/WoodProgress.vue";
 import PlayerAvatar from "../components/PlayerAvatar.vue";
 import {
   launchVersion,
@@ -13,37 +12,19 @@ import {
   selectVersion,
   store,
 } from "../store";
-import { formatBytes, formatSpeed, kindLabel } from "../utils";
+import { formatBytes, kindLabel } from "../utils";
 
 const version = selectedVersion;
 const account = selectedAccount;
 
 const tiltX = ref(0);
 const tiltY = ref(0);
+const pickerOpen = ref(false);
+const pickerRoot = ref<HTMLElement | null>(null);
 
 const isInstalling = computed(
   () => !!store.installingId && store.installingId === version.value?.id
 );
-
-const progress = computed(() => {
-  if (!store.progress || store.progress.stage === "java") return null;
-  if (!store.installingId) return null;
-  return store.progress;
-});
-
-const percent = computed(() => {
-  const p = progress.value;
-  if (!p) return 0;
-  if (p.bytes_total > 0) return Math.min(100, (p.bytes_done / p.bytes_total) * 100);
-  if (p.files_total > 0) return Math.min(100, (p.files_done / p.files_total) * 100);
-  return 0;
-});
-
-const speed = computed(() => {
-  const p = progress.value;
-  if (!p) return "";
-  return `${formatSpeed(p.bytes_done, p.elapsed_ms)} · ${p.files_done}/${p.files_total} 个文件`;
-});
 
 const serial = computed(() => {
   if (!version.value) return "—";
@@ -77,6 +58,20 @@ function resetTilt() {
 function openGameDir() {
   if (store.config?.game_dir) openFolder(store.config.game_dir);
 }
+
+function pickVersion(id: string) {
+  selectVersion(id);
+  pickerOpen.value = false;
+}
+
+function onDocClick(event: MouseEvent) {
+  if (pickerRoot.value && !pickerRoot.value.contains(event.target as Node)) {
+    pickerOpen.value = false;
+  }
+}
+
+onMounted(() => document.addEventListener("mousedown", onDocClick));
+onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
 </script>
 
 <template>
@@ -118,7 +113,8 @@ function openGameDir() {
         <div class="hero__meta">
           <span><i>账号</i>{{ account?.name ?? "未登录" }}</span>
           <span><i>内存</i>{{ store.config?.memory_mb ?? 0 }} MB</span>
-          <span><i>目录</i>{{ store.config?.version_isolation ? "版本隔离" : "共用目录" }}</span>
+          <span><i>版本</i>{{ store.installed.length }} 个</span>
+          <span><i>Java</i>{{ store.javaList.length }} 个</span>
         </div>
 
         <div class="hero__actions">
@@ -145,6 +141,49 @@ function openGameDir() {
               <AppIcon :name="store.gameRunning ? 'stop' : 'play'" :size="16" />
               {{ store.gameRunning ? "停止游戏" : "启动游戏" }}
             </WoodButton>
+
+            <div ref="pickerRoot" class="vpick">
+              <WoodButton
+                variant="ghost"
+                size="lg"
+                class="vpick__trigger"
+                @click="pickerOpen = !pickerOpen"
+              >
+                版本
+                <AppIcon
+                  name="chevron-down"
+                  :size="14"
+                  class="vpick__chev"
+                  :class="{ 'vpick__chev--open': pickerOpen }"
+                />
+              </WoodButton>
+
+              <Transition name="drop">
+                <div v-if="pickerOpen" class="vpick__menu">
+                  <button
+                    v-for="item in store.installed"
+                    :key="item.id"
+                    class="vpick__item"
+                    :class="{ 'vpick__item--active': item.id === version?.id }"
+                    @click="pickVersion(item.id)"
+                  >
+                    <span class="vpick__name">{{ item.id }}</span>
+                    <span class="vpick__kind">{{ kindLabel(item.kind) }}</span>
+                    <AppIcon
+                      v-if="item.id === version?.id"
+                      name="check"
+                      :size="13"
+                      class="vpick__check"
+                    />
+                  </button>
+                  <button class="vpick__manage" @click="store.page = 'versions'">
+                    <AppIcon name="layers" :size="14" />
+                    管理版本
+                  </button>
+                </div>
+              </Transition>
+            </div>
+
             <IconButton icon="folder" label="打开游戏目录" :size="44" @click="openGameDir" />
           </template>
         </div>
@@ -179,59 +218,6 @@ function openGameDir() {
         <span class="hero__bit hero__bit--a" />
         <span class="hero__bit hero__bit--b" />
         <span class="hero__bit hero__bit--c" />
-      </div>
-    </section>
-
-    <section class="stat-strip card reveal" style="--i: 1">
-      <div class="stat">
-        <span class="stat__num display">{{ String(store.installed.length).padStart(2, "0") }}</span>
-        <span class="stat__label">已安装版本</span>
-      </div>
-      <div class="stat">
-        <span class="stat__num display">{{ String(store.javaList.length).padStart(2, "0") }}</span>
-        <span class="stat__label">可用 Java</span>
-      </div>
-      <div class="stat">
-        <span class="stat__num display">{{ String(store.accounts.length).padStart(2, "0") }}</span>
-        <span class="stat__label">账号</span>
-      </div>
-      <div class="stat">
-        <span class="stat__num display">{{ store.config?.memory_mb ?? 0 }}</span>
-        <span class="stat__label">内存上限 MB</span>
-      </div>
-    </section>
-
-    <section class="shelf card reveal" style="--i: 2">
-      <div class="shelf__head">
-        <div>
-          <span class="eyebrow">LIBRARY</span>
-          <div class="section-title">版本书架</div>
-        </div>
-        <WoodButton variant="ghost" size="sm" @click="store.page = 'versions'">
-          管理版本
-        </WoodButton>
-      </div>
-
-      <div v-if="store.installed.length" class="chips">
-        <button
-          v-for="(item, index) in store.installed"
-          :key="item.id"
-          class="chip"
-          :class="{ 'chip--active': item.id === version?.id }"
-          :style="{ '--i': index }"
-          @click="selectVersion(item.id)"
-        >
-          <span class="chip__idx mono">{{ String(index + 1).padStart(2, "0") }}</span>
-          <span class="chip__name">{{ item.id }}</span>
-          <span class="chip__kind">{{ kindLabel(item.kind) }}</span>
-        </button>
-      </div>
-      <div v-else class="shelf__empty">
-        <p class="muted small">书架还是空的，去下载页放一本进来。</p>
-        <WoodButton variant="soft" size="sm" @click="store.page = 'download'">
-          <AppIcon name="download" :size="14" />
-          去下载
-        </WoodButton>
       </div>
     </section>
   </div>
@@ -343,6 +329,101 @@ function openGameDir() {
 
 .hero-cta {
   min-width: 172px;
+}
+
+/* 版本选择下拉 */
+.vpick {
+  position: relative;
+}
+
+.vpick__trigger {
+  min-width: 108px;
+  gap: 6px;
+}
+
+.vpick__chev {
+  transition: transform var(--dur-2) var(--ease-out-expo);
+}
+
+.vpick__chev--open {
+  transform: rotate(180deg);
+}
+
+.vpick__menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  min-width: 240px;
+  max-height: 292px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: rgba(var(--glass-rgb), 0.94);
+  backdrop-filter: blur(var(--glass-blur-px, 16px)) saturate(1.15);
+  box-shadow: var(--shadow-2);
+}
+
+.vpick__item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--ink);
+  text-align: left;
+  transition: background var(--dur-1) ease;
+}
+
+.vpick__item:hover {
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+.vpick__item--active {
+  background: var(--moss-soft);
+  color: var(--walnut-deep);
+}
+
+.vpick__name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vpick__kind {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.vpick__check {
+  color: var(--moss);
+}
+
+.vpick__manage {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  margin-top: 4px;
+  padding: 0 10px;
+  border-top: 1px dashed var(--line);
+  border-radius: 0 0 8px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: left;
+  transition: color var(--dur-1) ease, background var(--dur-1) ease;
+}
+
+.vpick__manage:hover {
+  color: var(--moss);
+  background: rgba(var(--accent-rgb), 0.05);
 }
 
 /* 立方体插画 */
@@ -531,124 +612,6 @@ function openGameDir() {
   }
 }
 
-/* 进度 */
-.progress-card {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-/* 数据条 */
-.stat-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  padding: 18px 8px;
-}
-
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 2px 20px;
-  border-right: 1px solid var(--line);
-}
-
-.stat:last-child {
-  border-right: none;
-}
-
-.stat__num {
-  font-size: 34px;
-  line-height: 1.05;
-  color: var(--walnut-deep);
-}
-
-.stat__label {
-  font-size: 11.5px;
-  color: var(--muted);
-  letter-spacing: 0.04em;
-}
-
-/* 书架 */
-.shelf {
-  padding: 20px 22px 22px;
-}
-
-.shelf__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 14px;
-}
-
-.chips {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 10px;
-}
-
-.chip {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 46px;
-  padding: 0 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
-  text-align: left;
-  transition: transform var(--dur-2) var(--ease-out-expo),
-    border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
-  animation: rise-in var(--dur-4) var(--ease-out-expo) both;
-  animation-delay: calc(var(--i, 0) * 45ms);
-}
-
-.chip:hover {
-  transform: translateY(-2px);
-  border-color: var(--walnut-light);
-  box-shadow: var(--shadow-1);
-}
-
-.chip__idx {
-  font-size: 10px;
-  color: var(--muted);
-  letter-spacing: 0.08em;
-}
-
-.chip__name {
-  flex: 1;
-  font-weight: 700;
-  color: var(--walnut-deep);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chip__kind {
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
-.chip--active {
-  border-color: var(--moss);
-  background: linear-gradient(180deg, var(--panel), var(--moss-soft));
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.08);
-}
-
-.chip--active .chip__idx,
-.chip--active .chip__kind {
-  color: var(--moss);
-}
-
-.shelf__empty {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 0 2px;
-}
-
 @media (max-width: 960px) {
   .hero {
     grid-template-columns: minmax(0, 1fr);
@@ -656,15 +619,6 @@ function openGameDir() {
 
   .hero__art {
     display: none;
-  }
-
-  .stat-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 14px 0;
-  }
-
-  .stat:nth-child(2) {
-    border-right: none;
   }
 }
 </style>

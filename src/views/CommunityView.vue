@@ -16,13 +16,14 @@ import { formatBytes, formatDate } from "../utils";
 
 const props = defineProps<{ kind: string }>();
 
-const CLASS_IDS: Record<string, number> = {
-  mods: 6,
-  resourcepacks: 12,
-  modpacks: 4471,
-  shaders: 6552,
-  datapacks: 6945,
-};
+type SourceKey = "curseforge" | "modrinth";
+
+interface Bucket {
+  items: CfProject[];
+  total: number;
+  next: number;
+  done: boolean;
+}
 
 const CLASS_LABELS: Record<string, string> = {
   mods: "Mod",
@@ -30,6 +31,14 @@ const CLASS_LABELS: Record<string, string> = {
   shaders: "光影包",
   modpacks: "整合包",
   datapacks: "数据包",
+};
+
+const CLASS_IDS: Record<string, number> = {
+  mods: 6,
+  resourcepacks: 12,
+  shaders: 6552,
+  datapacks: 6945,
+  modpacks: 4471,
 };
 
 const LOADER_LABELS: Record<string, string> = {
@@ -40,15 +49,27 @@ const LOADER_LABELS: Record<string, string> = {
   neoforge: "NeoForge",
 };
 
+const sourceOptions = [
+  { value: "all", label: "全部来源" },
+  { value: "curseforge", label: "CurseForge" },
+  { value: "modrinth", label: "Modrinth" },
+];
+
+function emptyBuckets(): Record<SourceKey, Bucket> {
+  return {
+    curseforge: { items: [], total: 0, next: 0, done: false },
+    modrinth: { items: [], total: 0, next: 0, done: false },
+  };
+}
+
 const instanceId = ref<string>("");
 const context = ref<InstanceContext | null>(null);
 const query = ref("");
-const versionMode = ref("instance");
+const source = ref<"all" | SourceKey>("all");
+const versionMode = ref("all");
 const sortField = ref("2");
 const versions = ref<string[]>([]);
-const items = ref<CfProject[]>([]);
-const total = ref(0);
-const index = ref(0);
+const buckets = ref<Record<SourceKey, Bucket>>(emptyBuckets());
 const loading = ref(false);
 const error = ref("");
 const active = ref<CfProject | null>(null);
@@ -56,7 +77,6 @@ const files = ref<CfFileView[]>([]);
 const filesLoading = ref(false);
 const filesError = ref("");
 
-const classId = computed(() => CLASS_IDS[props.kind] ?? 6);
 const label = computed(() => CLASS_LABELS[props.kind] ?? "资源");
 const installable = computed(() => props.kind !== "modpacks");
 const instanceOptions = computed(() =>
@@ -83,6 +103,24 @@ const queryGameVersion = computed(() => {
 const loader = computed(() =>
   context.value && context.value.loader !== "vanilla" ? context.value.loader : null
 );
+const activeSources = computed<SourceKey[]>(() =>
+  source.value === "all" ? ["curseforge", "modrinth"] : [source.value]
+);
+const items = computed(() => {
+  const list = activeSources.value.flatMap((key) => buckets.value[key].items);
+  const sorted = [...list].sort((a, b) =>
+    sortField.value === "3"
+      ? b.updated.localeCompare(a.updated)
+      : b.download_count - a.download_count
+  );
+  return sorted;
+});
+const total = computed(() =>
+  activeSources.value.reduce((sum, key) => sum + buckets.value[key].total, 0)
+);
+const hasMore = computed(() =>
+  activeSources.value.some((key) => !buckets.value[key].done)
+);
 
 onMounted(async () => {
   instanceId.value =
@@ -90,13 +128,14 @@ onMounted(async () => {
     store.installed.some((v) => v.id === store.config?.selected_version)
       ? store.config.selected_version
       : store.installed[0]?.id ?? "";
+  versionMode.value = instanceId.value ? "instance" : "all";
   loadVersions();
   await loadContext();
   await search(true);
 });
 
 watch(instanceId, async () => {
-  versionMode.value = "instance";
+  versionMode.value = instanceId.value ? "instance" : "all";
   active.value = null;
   await loadContext();
   await search(true);
@@ -106,7 +145,6 @@ watch(
   () => props.kind,
   async () => {
     active.value = null;
-    items.value = [];
     await search(true);
   }
 );
@@ -129,48 +167,77 @@ async function loadContext() {
   }
 }
 
-async function search(reset = false) {
-  if (!instanceId.value) {
-    items.value = [];
-    total.value = 0;
-    return;
-  }
+async function search(reset = true) {
   if (loading.value) return;
-  if (reset) {
-    index.value = 0;
-    items.value = [];
-  }
+  if (reset) buckets.value = emptyBuckets();
+  const targets = activeSources.value.filter(
+    (key) => reset || !buckets.value[key].done
+  );
+  if (!targets.length) return;
   loading.value = true;
   error.value = "";
-  try {
-    const result = await api.cfSearch(
-      classId.value,
-      query.value,
-      queryGameVersion.value,
-      loader.value,
-      index.value,
-      Number(sortField.value)
-    );
-    items.value = reset ? result.items : [...items.value, ...result.items];
-    total.value = result.total;
-  } catch (err) {
-    error.value = String(err);
-  } finally {
-    loading.value = false;
+  const results = await Promise.allSettled(
+    targets.map((key) => fetchBucket(key, reset ? 0 : buckets.value[key].next))
+  );
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed && failed.status === "rejected") {
+    error.value = String(failed.reason);
   }
+  loading.value = false;
+}
+
+async function fetchBucket(key: SourceKey, offset: number) {
+  const version = queryGameVersion.value;
+  const result =
+    key === "curseforge"
+      ? await api.cfSearch(
+          CLASS_IDS[props.kind] ?? 6,
+          query.value,
+          version,
+          loader.value,
+          offset,
+          Number(sortField.value)
+        )
+      : await api.modrinthSearch(
+          props.kind,
+          query.value,
+          version,
+          loader.value,
+          offset,
+          Number(sortField.value)
+        );
+  const bucket = buckets.value[key];
+  const items = [...bucket.items, ...result.items];
+  buckets.value = {
+    ...buckets.value,
+    [key]: {
+      items,
+      total: result.total,
+      next: offset + 20,
+      done: result.items.length === 0 || items.length >= result.total,
+    },
+  };
 }
 
 function resetSearch() {
   query.value = "";
-  versionMode.value = "instance";
+  source.value = "all";
+  versionMode.value = instanceId.value ? "instance" : "all";
   sortField.value = "2";
   search(true);
 }
 
 async function loadMore() {
-  if (loading.value || items.value.length >= total.value) return;
-  index.value += 20;
-  await search(false);
+  if (loading.value) return;
+  const targets = activeSources.value.filter(
+    (key) => !buckets.value[key].done
+  );
+  if (!targets.length) return;
+  loading.value = true;
+  await Promise.allSettled(
+    targets.map((key) => fetchBucket(key, buckets.value[key].next))
+  );
+  loading.value = false;
 }
 
 function openProject(project: CfProject) {
@@ -183,11 +250,18 @@ function openProject(project: CfProject) {
 async function loadFiles(project: CfProject) {
   filesLoading.value = true;
   try {
-    files.value = await api.cfFiles(
-      project.id,
-      queryGameVersion.value,
-      props.kind === "mods" ? loader.value : null
-    );
+    files.value =
+      project.source === "modrinth"
+        ? await api.modrinthFiles(
+            project.id,
+            queryGameVersion.value,
+            props.kind === "mods" ? loader.value : null
+          )
+        : await api.cfFiles(
+            project.id,
+            queryGameVersion.value,
+            props.kind === "mods" ? loader.value : null
+          );
   } catch (err) {
     filesError.value = String(err);
   } finally {
@@ -211,6 +285,10 @@ function releaseTag(type: number) {
   if (type === 2) return "测试版";
   if (type === 3) return "Alpha";
   return "";
+}
+
+function sourceLabel(value: string) {
+  return value === "modrinth" ? "Modrinth" : "CurseForge";
 }
 
 function compactNumber(value: number) {
@@ -237,7 +315,7 @@ function shortVersions(list: string[]) {
 }
 
 function refresh() {
-  notify("正在刷新 CurseForge 列表");
+  notify("正在刷新社区资源");
   loadVersions();
   search(true);
 }
@@ -248,14 +326,18 @@ function refresh() {
     <section class="card card-pad cf-search">
       <div class="cf-search__head">
         <div class="cf-search__title">搜索{{ label }}</div>
-        <div class="cf-search__source">
-          <span class="cf-source">CurseForge</span>
-          <span v-if="context" class="tag">{{ LOADER_LABELS[context.loader] ?? context.loader }}</span>
-        </div>
+        <span v-if="context" class="tag">
+          {{ LOADER_LABELS[context.loader] ?? context.loader }} · {{ context.game_version }}
+        </span>
       </div>
 
       <div class="cf-fields">
         <label class="cf-field">
+          <span class="cf-field__label">来源</span>
+          <WoodSelect v-model="source" :options="sourceOptions" />
+        </label>
+
+        <label class="cf-field cf-field--wide">
           <span class="cf-field__label">名称</span>
           <WoodInput
             v-model="query"
@@ -281,7 +363,7 @@ function refresh() {
             v-model="instanceId"
             :options="instanceOptions"
           />
-          <span v-else class="cf-field__fallback muted small">还没有已安装版本</span>
+          <span v-else class="cf-field__fallback muted small">暂未安装版本</span>
         </label>
       </div>
 
@@ -299,7 +381,7 @@ function refresh() {
           @click="refresh"
         />
         <span v-if="!instanceOptions.length" class="muted small cf-actions__hint">
-          先在「原版游戏」里安装一个版本，下载内容会写入该实例目录。
+          还没安装版本也可以浏览；下载文件前需要先在「原版游戏」里安装一个实例。
         </span>
       </div>
     </section>
@@ -316,6 +398,7 @@ function refresh() {
         <div class="cf-detail__text">
           <div class="cf-detail__title-row">
             <h2 class="cf-detail__title">{{ active.name }}</h2>
+            <span class="tag">{{ sourceLabel(active.source) }}</span>
             <span
               v-for="category in active.categories.slice(0, 3)"
               :key="category"
@@ -370,7 +453,7 @@ function refresh() {
             <span class="cf-file__size mono">{{ formatBytes(file.size) }}</span>
             <span class="cf-file__date mono">{{ formatDate(file.file_date) }}</span>
             <IconButton
-              v-if="file.download_url && installable"
+              v-if="file.download_url && installable && instanceId"
               icon="download"
               :label="`下载 ${file.name}`"
               variant="soft"
@@ -381,6 +464,9 @@ function refresh() {
             <span v-else-if="!installable" class="muted small cf-file__hint">
               整合包安装将在下一步支持
             </span>
+            <span v-else-if="!instanceId" class="muted small cf-file__hint">
+              先安装一个实例
+            </span>
             <span v-else class="muted small cf-file__hint">无下载地址</span>
           </div>
         </div>
@@ -388,7 +474,7 @@ function refresh() {
     </template>
 
     <template v-else>
-      <div v-if="error" class="card card-pad cf-state cf-state--error">
+      <div v-if="error && !items.length" class="card card-pad cf-state cf-state--error">
         <span>{{ error }}</span>
         <WoodButton variant="ghost" size="sm" @click="search(true)">重试</WoodButton>
       </div>
@@ -415,7 +501,7 @@ function refresh() {
       <div v-else class="card cf-list">
         <button
           v-for="(project, i) in items"
-          :key="project.id"
+          :key="`${project.source}-${project.id}`"
           class="cf-row"
           :style="{ '--i': i }"
           @click="openProject(project)"
@@ -455,17 +541,17 @@ function refresh() {
                 <AppIcon name="refresh" :size="12" />
                 {{ updatedLabel(project.updated) }}
               </span>
-              <span class="cf-row__source">CurseForge</span>
+              <span class="cf-row__source">{{ sourceLabel(project.source) }}</span>
             </div>
           </div>
           <AppIcon name="chevron-left" :size="15" class="cf-row__chev" />
         </button>
       </div>
 
-      <div v-if="items.length && items.length < total" class="load-more">
+      <div v-if="items.length && hasMore" class="load-more">
         <WoodButton variant="ghost" size="sm" :disabled="loading" @click="loadMore">
           <AppIcon name="chevron-down" :size="14" />
-          加载更多（还有 {{ total - items.length }} 个）
+          加载更多（还有 {{ Math.max(total - items.length, 0) }} 个）
         </WoodButton>
       </div>
 
@@ -503,25 +589,9 @@ function refresh() {
   color: var(--walnut-deep);
 }
 
-.cf-search__source {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-
-.cf-source {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  color: var(--muted);
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  padding: 3px 7px;
-}
-
 .cf-fields {
   display: grid;
-  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 1fr);
+  grid-template-columns: 0.9fr 1.7fr 1fr 0.9fr 1fr;
   gap: 14px;
 }
 
@@ -849,9 +919,13 @@ function refresh() {
   padding-left: 2px;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1220px) {
   .cf-fields {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .cf-field--wide {
+    grid-column: span 2;
   }
 
   .cf-row__title strong {

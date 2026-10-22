@@ -95,7 +95,8 @@ struct CfFilesResponse {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CfProject {
-    pub id: i64,
+    pub source: String,
+    pub id: String,
     pub name: String,
     pub slug: String,
     pub summary: String,
@@ -115,7 +116,7 @@ pub struct CfSearchResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CfFileView {
-    pub id: i64,
+    pub id: String,
     pub name: String,
     pub file_name: String,
     pub file_date: String,
@@ -174,7 +175,8 @@ pub async fn search(
         .data
         .into_iter()
         .map(|project| CfProject {
-            id: project.id,
+            source: "curseforge".into(),
+            id: project.id.to_string(),
             name: project.name,
             slug: project.slug,
             summary: project.summary,
@@ -279,7 +281,7 @@ pub async fn files(
         .data
         .into_iter()
         .map(|file| CfFileView {
-            id: file.id,
+            id: file.id.to_string(),
             name: if file.display_name.is_empty() {
                 file.file_name.clone()
             } else {

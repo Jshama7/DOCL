@@ -56,11 +56,18 @@ function openDir() {
       <div class="empty__text">
         <p class="empty__title">书架还是空的</p>
         <p class="muted small">前往下载页，选择一个正式版开始安装。</p>
+        <p class="empty__dir mono">当前目录：{{ store.config?.game_dir ?? "未设置" }}</p>
       </div>
-      <WoodButton variant="primary" sheen @click="store.page = 'download'">
-        <AppIcon name="download" :size="15" />
-        去下载
-      </WoodButton>
+      <div class="empty__actions">
+        <WoodButton variant="ghost" size="sm" @click="openDir">
+          <AppIcon name="folder" :size="14" />
+          检查目录
+        </WoodButton>
+        <WoodButton variant="primary" sheen @click="store.page = 'download'">
+          <AppIcon name="download" :size="15" />
+          去下载
+        </WoodButton>
+      </div>
     </section>
 
     <div v-else class="version-grid">
@@ -131,6 +138,21 @@ function openDir() {
 
 .empty__text {
   flex: 1;
+  min-width: 0;
+}
+
+.empty__dir {
+  margin-top: 4px;
+  font-size: 10.5px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.empty__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .empty__title {

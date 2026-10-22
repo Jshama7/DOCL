@@ -25,10 +25,78 @@ pub fn get_config(state: State<'_, AppState>) -> Config {
 
 #[tauri::command]
 pub fn save_config(state: State<'_, AppState>, config: Config) -> CmdResult<Config> {
+    let mut config = config;
+    config.sync_game_dirs();
     config::save(&config).map_err(err)?;
     std::fs::create_dir_all(&config.game_dir).map_err(err)?;
     *state.config.lock().unwrap() = config.clone();
     Ok(config)
+}
+
+#[derive(serde::Serialize)]
+pub struct GameDirsView {
+    pub dirs: Vec<config::GameDirEntry>,
+    pub active: String,
+    pub official: String,
+}
+
+#[tauri::command]
+pub fn game_dirs(state: State<'_, AppState>) -> GameDirsView {
+    let cfg = state.config.lock().unwrap().clone();
+    GameDirsView {
+        dirs: cfg.game_dirs.clone(),
+        active: cfg.game_dir.clone(),
+        official: config::default_game_dir().to_string_lossy().to_string(),
+    }
+}
+
+/// 添加或切换目录；path 会先创建再写入配置。
+#[tauri::command]
+pub fn add_game_dir(state: State<'_, AppState>, path: String) -> CmdResult<Config> {
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        return Err("目录不能为空".into());
+    }
+    let mut cfg = state.config.lock().unwrap().clone();
+    std::fs::create_dir_all(&path).map_err(err)?;
+    cfg.set_active_dir(&path);
+    config::save(&cfg).map_err(err)?;
+    *state.config.lock().unwrap() = cfg.clone();
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub fn switch_game_dir(state: State<'_, AppState>, path: String) -> CmdResult<Config> {
+    let mut cfg = state.config.lock().unwrap().clone();
+    let exists = cfg
+        .game_dirs
+        .iter()
+        .any(|entry| entry.path.eq_ignore_ascii_case(&path));
+    if !exists {
+        return Err("目录不在列表中".into());
+    }
+    cfg.set_active_dir(&path);
+    config::save(&cfg).map_err(err)?;
+    *state.config.lock().unwrap() = cfg.clone();
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub fn remove_game_dir(state: State<'_, AppState>, path: String) -> CmdResult<Config> {
+    let mut cfg = state.config.lock().unwrap().clone();
+    cfg.game_dirs
+        .retain(|entry| !entry.path.eq_ignore_ascii_case(&path));
+    if cfg.game_dirs.is_empty() {
+        return Err("至少保留一个游戏目录".into());
+    }
+    if cfg.game_dir.eq_ignore_ascii_case(&path) {
+        let next = cfg.game_dirs[0].path.clone();
+        cfg.set_active_dir(&next);
+    }
+    cfg.sync_game_dirs();
+    config::save(&cfg).map_err(err)?;
+    *state.config.lock().unwrap() = cfg.clone();
+    Ok(cfg)
 }
 
 #[tauri::command]
@@ -196,7 +264,7 @@ pub fn delete_version(state: State<'_, AppState>, version_id: String) -> CmdResu
     if dir.exists() {
         std::fs::remove_dir_all(&dir).map_err(err)?;
     }
-    let _ = instance::remove(&version_id);
+    let _ = instance::remove(&cfg, &version_id);
     Ok(())
 }
 
@@ -210,8 +278,11 @@ pub fn instance_info(
 }
 
 #[tauri::command]
-pub fn instance_metas() -> std::collections::HashMap<String, InstanceMeta> {
-    instance::all()
+pub fn instance_metas(
+    state: State<'_, AppState>,
+) -> std::collections::HashMap<String, InstanceMeta> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::all(&cfg)
 }
 
 #[tauri::command]
@@ -221,7 +292,7 @@ pub fn instance_save_meta(
     meta: InstanceMeta,
 ) -> CmdResult<InstanceInfo> {
     let cfg = state.config.lock().unwrap().clone();
-    instance::save(&version_id, &meta).map_err(err)?;
+    instance::save(&cfg, &version_id, &meta).map_err(err)?;
     instance::info(&cfg, &version_id).map_err(err)
 }
 

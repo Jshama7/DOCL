@@ -49,6 +49,10 @@ const tabs = [
 ] as const;
 
 onMounted(() => {
+  const context = store.communityContext;
+  if (context && categories.some((item) => item.value === context.kind)) {
+    category.value = context.kind as Category;
+  }
   if (!store.versions.length) refreshVersions();
 });
 

@@ -42,6 +42,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_config,
             commands::save_config,
+            commands::game_dirs,
+            commands::add_game_dir,
+            commands::switch_game_dir,
+            commands::remove_game_dir,
             commands::fetch_versions,
             commands::installed_versions,
             commands::install_version,

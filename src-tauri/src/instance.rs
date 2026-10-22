@@ -39,31 +39,64 @@ fn save_map(map: &HashMap<String, InstanceMeta>) -> Result<()> {
     Ok(())
 }
 
-pub fn get(version_id: &str) -> InstanceMeta {
-    load_map().remove(version_id).unwrap_or_default()
+fn meta_key(cfg: &Config, version_id: &str) -> String {
+    format!(
+        "{}::{}",
+        cfg.game_dir
+            .trim_end_matches(['\\', '/'])
+            .to_lowercase(),
+        version_id
+    )
 }
 
-pub fn save(version_id: &str, meta: &InstanceMeta) -> Result<()> {
+pub fn get(cfg: &Config, version_id: &str) -> InstanceMeta {
+    let map = load_map();
+    map.get(&meta_key(cfg, version_id))
+        .cloned()
+        // 兼容旧版只按版本 ID 存储的数据
+        .or_else(|| map.get(version_id).cloned())
+        .unwrap_or_default()
+}
+
+pub fn save(cfg: &Config, version_id: &str, meta: &InstanceMeta) -> Result<()> {
     let mut map = load_map();
-    map.insert(version_id.to_string(), meta.clone());
+    map.insert(meta_key(cfg, version_id), meta.clone());
     save_map(&map)
 }
 
-pub fn remove(version_id: &str) -> Result<()> {
+pub fn remove(cfg: &Config, version_id: &str) -> Result<()> {
     let mut map = load_map();
-    if map.remove(version_id).is_some() {
+    let mut changed = map.remove(&meta_key(cfg, version_id)).is_some();
+    changed |= map.remove(version_id).is_some();
+    if changed {
         save_map(&map)?;
     }
     Ok(())
 }
 
-pub fn all() -> HashMap<String, InstanceMeta> {
-    load_map()
+/// 只返回当前游戏目录下的版本元数据，前端按版本 ID 取用。
+pub fn all(cfg: &Config) -> HashMap<String, InstanceMeta> {
+    let prefix = format!(
+        "{}::",
+        cfg.game_dir
+            .trim_end_matches(['\\', '/'])
+            .to_lowercase()
+    );
+    let mut result = HashMap::new();
+    for (key, meta) in load_map() {
+        if let Some(version_id) = key.strip_prefix(&prefix) {
+            result.insert(version_id.to_string(), meta);
+        } else if !key.contains("::") {
+            // 旧格式数据直接按 ID 兼容
+            result.insert(key, meta);
+        }
+    }
+    result
 }
 
 /// 把版本级覆盖项叠到全局配置上，供启动时使用。
 pub fn apply(cfg: &Config, version_id: &str) -> Config {
-    let meta = get(version_id);
+    let meta = get(cfg, version_id);
     let mut merged = cfg.clone();
     if let Some(memory) = meta.memory_mb {
         merged.memory_mb = memory.max(512);
@@ -332,7 +365,7 @@ pub fn import_paths(
 }
 
 pub fn info(cfg: &Config, version_id: &str) -> Result<InstanceInfo> {
-    let meta = get(version_id);
+    let meta = get(cfg, version_id);
     let (game_version, loader) = install::instance_context(cfg, version_id)?;
     let merged = install::resolve_detail(cfg, version_id)?;
     let installed = install::list_installed(cfg);

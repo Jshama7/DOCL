@@ -24,6 +24,12 @@ export const store = reactive({
   page: "home" as Page,
   instanceId: null as string | null,
   metas: {} as Record<string, InstanceMeta>,
+  communityContext: null as {
+    kind: string;
+    instanceId: string;
+    gameVersion: string;
+    loader: string;
+  } | null,
   config: null as Config | null,
   versions: [] as VersionSummary[],
   installed: [] as InstalledVersion[],
@@ -91,6 +97,17 @@ export async function refreshInstanceMetas() {
 export function openInstance(id: string) {
   store.instanceId = id;
   store.page = "instance";
+}
+
+/// 从版本设置跳到下载页，并带上当前实例的版本与加载器。
+export function openCommunity(
+  kind: string,
+  instanceId: string,
+  gameVersion: string,
+  loader: string
+) {
+  store.communityContext = { kind, instanceId, gameVersion, loader };
+  store.page = "download";
 }
 
 export async function refreshAccounts() {

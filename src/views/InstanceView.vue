@@ -17,6 +17,7 @@ import WoodSelect from "../components/WoodSelect.vue";
 import {
   launchVersion,
   notify,
+  openCommunity,
   refreshInstanceMetas,
   store,
 } from "../store";
@@ -56,6 +57,7 @@ const loading = ref(true);
 const saving = ref(false);
 const files = ref<InstanceFile[]>([]);
 const filesLoading = ref(false);
+const fileQuery = ref("");
 const confirmName = ref<string | null>(null);
 let confirmTimer: number | undefined;
 
@@ -125,6 +127,16 @@ const contentLabel = computed(
 const contentKind = computed(() =>
   isContentTab.value ? (tab.value as string) : ""
 );
+const filteredFiles = computed(() => {
+  const keyword = fileQuery.value.trim().toLowerCase();
+  if (!keyword) return files.value;
+  return files.value.filter((file) =>
+    file.display_name.toLowerCase().includes(keyword)
+  );
+});
+const canDownloadMore = computed(
+  () => tab.value === "mods" || tab.value === "resourcepacks" || tab.value === "shaderpacks"
+);
 
 const contentHint = computed(() => {
   switch (tab.value) {
@@ -152,6 +164,8 @@ onMounted(async () => {
 });
 
 watch(tab, async (value) => {
+  fileQuery.value = "";
+  confirmName.value = null;
   if (contentTabs.includes(value)) {
     await loadFiles();
   }
@@ -370,6 +384,18 @@ function contentIcon() {
 
 function goTab(next: Tab) {
   tab.value = next;
+}
+
+function downloadMore() {
+  if (!info.value) return;
+  const map: Record<string, string> = {
+    mods: "mods",
+    resourcepacks: "resourcepacks",
+    shaderpacks: "shaders",
+  };
+  const kind = map[tab.value];
+  if (!kind) return;
+  openCommunity(kind, info.value.id, info.value.game_version, info.value.loader);
 }
 
 function launch() {
@@ -728,13 +754,23 @@ function launch() {
             </div>
             <span class="group-line" />
             <div class="row">
+              <WoodButton
+                v-if="canDownloadMore"
+                variant="primary"
+                size="sm"
+                sheen
+                @click="downloadMore"
+              >
+                <AppIcon name="download" :size="14" />
+                下载新{{ contentLabel }}
+              </WoodButton>
               <WoodButton variant="ghost" size="sm" @click="openContentFolder">
                 <AppIcon name="folder" :size="14" />
                 打开文件夹
               </WoodButton>
               <WoodButton variant="soft" size="sm" @click="importContent">
                 <AppIcon name="plus" :size="14" />
-                导入
+                从文件导入
               </WoodButton>
               <IconButton
                 icon="refresh"
@@ -748,6 +784,14 @@ function launch() {
 
           <p class="muted small">{{ contentHint }}</p>
 
+          <div v-if="files.length" class="file-search">
+            <WoodInput
+              v-model="fileQuery"
+              :placeholder="`搜索${contentLabel}文件名`"
+            />
+            <span class="muted small">{{ filteredFiles.length }} / {{ files.length }}</span>
+          </div>
+
           <div v-if="filesLoading" class="file-state">
             <span class="skeleton" />
             <span class="muted small">正在读取…</span>
@@ -756,15 +800,18 @@ function launch() {
             <AppIcon :name="contentIcon()" :size="28" />
             <div>
               <p class="file-empty__title">还没有{{ contentLabel }}</p>
-              <p class="muted small">点击「导入」从本地添加，或者打开文件夹手动放入。</p>
+              <p class="muted small">点击「下载新{{ contentLabel }}」去资源站挑选，或者从本地文件导入。</p>
             </div>
             <WoodButton variant="soft" size="sm" @click="importContent">
               <AppIcon name="plus" :size="14" />
-              导入{{ contentLabel }}
+              从文件导入
             </WoodButton>
           </div>
+          <div v-else-if="!filteredFiles.length" class="file-state">
+            <span class="muted small">没有匹配的文件</span>
+          </div>
           <div v-else class="file-list">
-            <div v-for="file in files" :key="file.name" class="file-row">
+            <div v-for="file in filteredFiles" :key="file.name" class="file-row">
               <span class="file-row__icon">
                 <AppIcon :name="contentIcon()" :size="16" />
               </span>
@@ -1143,6 +1190,17 @@ function launch() {
   align-items: center;
   gap: 9px;
   padding: 14px 2px;
+}
+
+.file-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0;
+}
+
+.file-search :deep(.input) {
+  max-width: 320px;
 }
 
 .file-state .skeleton {

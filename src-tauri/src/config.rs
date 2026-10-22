@@ -3,11 +3,19 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GameDirEntry {
+    pub name: String,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
-    /// 游戏根目录（含 versions / assets / libraries）
+    /// 当前使用的游戏根目录（含 versions / assets / libraries）
     pub game_dir: String,
+    /// 保存过的游戏目录，可在设置里切换
+    pub game_dirs: Vec<GameDirEntry>,
     /// 手动指定的 java.exe
     pub java_path: Option<String>,
     /// 最大内存（MB）
@@ -36,6 +44,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             game_dir: default_game_dir().to_string_lossy().to_string(),
+            game_dirs: Vec::new(),
             java_path: None,
             memory_mb: 4096,
             java_args: String::new(),
@@ -77,15 +86,30 @@ pub fn config_path() -> PathBuf {
     data_dir().join("config.json")
 }
 
+fn dir_label(path: &str) -> String {
+    let trimmed = path.trim_end_matches(['\\', '/']);
+    std::path::Path::new(trimmed)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn same_path(a: &str, b: &str) -> bool {
+    a.trim_end_matches(['\\', '/']).eq_ignore_ascii_case(b.trim_end_matches(['\\', '/']))
+}
+
 pub fn accounts_path() -> PathBuf {
     data_dir().join("accounts.json")
 }
 
 pub fn load() -> Config {
-    fs::read(config_path())
+    let mut config: Config = fs::read(config_path())
         .ok()
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    config.sync_game_dirs();
+    config
 }
 
 pub fn save(cfg: &Config) -> Result<()> {
@@ -97,6 +121,34 @@ pub fn save(cfg: &Config) -> Result<()> {
 impl Config {
     pub fn game_root(&self) -> PathBuf {
         PathBuf::from(&self.game_dir)
+    }
+
+    /// 确保目录列表里包含当前目录，并给缺失名称的条目补上默认名字。
+    pub fn sync_game_dirs(&mut self) {
+        self.game_dirs.retain(|entry| !entry.path.trim().is_empty());
+        for entry in self.game_dirs.iter_mut() {
+            if entry.name.trim().is_empty() {
+                entry.name = dir_label(&entry.path);
+            }
+        }
+        if !self
+            .game_dirs
+            .iter()
+            .any(|entry| same_path(&entry.path, &self.game_dir))
+        {
+            self.game_dirs.insert(
+                0,
+                GameDirEntry {
+                    name: dir_label(&self.game_dir),
+                    path: self.game_dir.clone(),
+                },
+            );
+        }
+    }
+
+    pub fn set_active_dir(&mut self, path: &str) {
+        self.game_dir = path.to_string();
+        self.sync_game_dirs();
     }
 
     pub fn use_mirror(&self) -> bool {

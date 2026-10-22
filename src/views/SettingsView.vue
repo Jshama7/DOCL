@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { nextTick, reactive, ref, watch } from "vue";
-import { api, pickDirectory, pickImage, type Config } from "../api";
+import { nextTick, onMounted, reactive, ref, watch } from "vue";
+import { api, pickDirectory, pickImage, type Config, type GameDirEntry } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
@@ -14,13 +14,17 @@ import {
   loadBackground,
   notify,
   refreshConfig,
+  refreshInstanceMetas,
+  refreshInstalled,
   refreshJava,
+  refreshVersions,
   saveConfig,
   store,
 } from "../store";
 
 const form = reactive<Config>({
   game_dir: "",
+  game_dirs: [],
   java_path: null,
   memory_mb: 4096,
   java_args: "",
@@ -149,6 +153,92 @@ async function chooseDir() {
   if (dir) form.game_dir = dir;
 }
 
+const gameDirs = ref<GameDirEntry[]>([]);
+const activeDir = ref("");
+const officialDir = ref("");
+const dirBusy = ref(false);
+
+onMounted(loadDirs);
+
+async function loadDirs() {
+  try {
+    const view = await api.gameDirs();
+    gameDirs.value = view.dirs;
+    activeDir.value = view.active;
+    officialDir.value = view.official;
+  } catch {
+    gameDirs.value = [];
+  }
+}
+
+async function adoptConfig(config: Config) {
+  store.config = config;
+  Object.assign(form, config);
+  activeDir.value = config.game_dir;
+  await refreshInstalled();
+  await refreshVersions(true);
+  await refreshInstanceMetas();
+  await loadDirs();
+  if (
+    config.selected_version &&
+    !store.installed.some((item) => item.id === config.selected_version)
+  ) {
+    await saveConfig({ selected_version: store.installed[0]?.id ?? null });
+  }
+}
+
+async function switchDir(path: string) {
+  if (dirBusy.value || path === activeDir.value) return;
+  dirBusy.value = true;
+  try {
+    await adoptConfig(await api.switchGameDir(path));
+    notify(`已切换到 ${path}`);
+  } catch (err) {
+    notify(`切换目录失败：${String(err)}`, "err");
+  } finally {
+    dirBusy.value = false;
+  }
+}
+
+async function addDir() {
+  const path = await pickDirectory();
+  if (!path) return;
+  dirBusy.value = true;
+  try {
+    await adoptConfig(await api.addGameDir(path));
+    notify(`已添加并切换到 ${path}`);
+  } catch (err) {
+    notify(`添加目录失败：${String(err)}`, "err");
+  } finally {
+    dirBusy.value = false;
+  }
+}
+
+async function useOfficialDir() {
+  if (!officialDir.value) return;
+  dirBusy.value = true;
+  try {
+    await adoptConfig(await api.addGameDir(officialDir.value));
+    notify("已切换到官方启动器目录");
+  } catch (err) {
+    notify(`切换目录失败：${String(err)}`, "err");
+  } finally {
+    dirBusy.value = false;
+  }
+}
+
+async function removeDir(path: string) {
+  dirBusy.value = true;
+  try {
+    await adoptConfig(await api.removeGameDir(path));
+    notify("已从目录列表移除，磁盘文件未删除");
+  } catch (err) {
+    notify(`移除目录失败：${String(err)}`, "err");
+  } finally {
+    dirBusy.value = false;
+  }
+}
+
 async function rescanJava() {
   await refreshJava();
   notify(`检测到 ${store.javaList.length} 个 Java`);
@@ -173,6 +263,7 @@ async function save() {
   try {
     await saveConfig({ ...form });
     await loadBackground();
+    await loadDirs();
     notify("设置已保存");
   } finally {
     saving.value = false;
@@ -234,6 +325,52 @@ function useAutoJava() {
           <div class="row">
             <WoodInput v-model="form.game_dir" mono />
             <IconButton icon="folder" label="选择游戏目录" :size="38" @click="chooseDir" />
+          </div>
+        </div>
+      </div>
+      <div class="setting">
+        <div class="setting__label">
+          <strong>游戏目录列表</strong>
+          <span>可以保存多个 .minecraft 文件夹，随时切换</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <div class="dir-list">
+            <div
+              v-for="dir in gameDirs"
+              :key="dir.path"
+              class="dir-row"
+              :class="{ 'dir-row--active': dir.path === activeDir }"
+            >
+              <button class="dir-row__main" @click="switchDir(dir.path)">
+                <AppIcon name="folder" :size="15" />
+                <span class="dir-row__text">
+                  <strong>{{ dir.name }}</strong>
+                  <span class="mono">{{ dir.path }}</span>
+                </span>
+                <span v-if="dir.path === activeDir" class="tag tag--grass">当前</span>
+              </button>
+              <IconButton
+                icon="trash"
+                label="从列表移除"
+                :size="30"
+                :disabled="gameDirs.length <= 1 || dirBusy"
+                @click="removeDir(dir.path)"
+              />
+            </div>
+          </div>
+          <div class="row dir-actions">
+            <WoodButton variant="soft" size="sm" :disabled="dirBusy" @click="addDir">
+              <AppIcon name="plus" :size="14" />
+              添加已有文件夹
+            </WoodButton>
+            <WoodButton
+              variant="ghost"
+              size="sm"
+              :disabled="dirBusy || !officialDir"
+              @click="useOfficialDir"
+            >
+              官方启动器目录
+            </WoodButton>
           </div>
         </div>
       </div>
@@ -693,6 +830,73 @@ function useAutoJava() {
 
 .resolution__x {
   font-size: 13px;
+}
+
+.dir-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.dir-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 2px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  transition: border-color var(--dur-2) ease;
+}
+
+.dir-row:hover {
+  border-color: var(--walnut-light);
+}
+
+.dir-row--active {
+  border-color: var(--moss);
+  background: linear-gradient(180deg, var(--panel), var(--moss-soft));
+}
+
+.dir-row__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 42px;
+  padding: 0 9px;
+  border-radius: 7px;
+  text-align: left;
+  color: var(--ink-soft);
+}
+
+.dir-row__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.dir-row__text strong {
+  font-size: 12.5px;
+  color: var(--walnut-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-row__text span {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-actions {
+  margin-top: 8px;
 }
 
 .java-list {

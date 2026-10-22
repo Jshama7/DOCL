@@ -3,8 +3,20 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 
+export interface GameDirEntry {
+  name: string;
+  path: string;
+}
+
+export interface GameDirsView {
+  dirs: GameDirEntry[];
+  active: string;
+  official: string;
+}
+
 export interface Config {
   game_dir: string;
+  game_dirs: GameDirEntry[];
   java_path: string | null;
   memory_mb: number;
   java_args: string;
@@ -201,6 +213,10 @@ export interface GameExit {
 export const api = {
   getConfig: () => invoke<Config>("get_config"),
   saveConfig: (config: Config) => invoke<Config>("save_config", { config }),
+  gameDirs: () => invoke<GameDirsView>("game_dirs"),
+  addGameDir: (path: string) => invoke<Config>("add_game_dir", { path }),
+  switchGameDir: (path: string) => invoke<Config>("switch_game_dir", { path }),
+  removeGameDir: (path: string) => invoke<Config>("remove_game_dir", { path }),
   fetchVersions: (force = false) => invoke<VersionSummary[]>("fetch_versions", { force }),
   installedVersions: () => invoke<InstalledVersion[]>("installed_versions"),
   installVersion: (versionId: string) => invoke<InstalledVersion>("install_version", { versionId }),

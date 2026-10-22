@@ -16,6 +16,8 @@ import { formatBytes, formatDate } from "../utils";
 
 const props = defineProps<{ kind: string }>();
 
+const preset = store.communityContext;
+
 type SourceKey = "curseforge" | "modrinth";
 
 interface Bucket {
@@ -100,9 +102,15 @@ const queryGameVersion = computed(() => {
   if (versionMode.value === "instance") return context.value?.game_version ?? null;
   return versionMode.value;
 });
-const loader = computed(() =>
-  context.value && context.value.loader !== "vanilla" ? context.value.loader : null
-);
+const loader = computed(() => {
+  if (context.value && context.value.loader !== "vanilla") {
+    return context.value.loader;
+  }
+  if (!instanceId.value && preset?.loader && preset.loader !== "vanilla") {
+    return preset.loader;
+  }
+  return null;
+});
 const activeSources = computed<SourceKey[]>(() =>
   source.value === "all" ? ["curseforge", "modrinth"] : [source.value]
 );
@@ -123,15 +131,28 @@ const hasMore = computed(() =>
 );
 
 onMounted(async () => {
+  const fromPreset =
+    preset?.instanceId &&
+    store.installed.some((v) => v.id === preset.instanceId)
+      ? preset.instanceId
+      : "";
   instanceId.value =
-    store.config?.selected_version &&
+    fromPreset ||
+    (store.config?.selected_version &&
     store.installed.some((v) => v.id === store.config?.selected_version)
       ? store.config.selected_version
-      : store.installed[0]?.id ?? "";
-  versionMode.value = instanceId.value ? "instance" : "all";
+      : store.installed[0]?.id ?? "");
+  if (instanceId.value) {
+    versionMode.value = "instance";
+  } else if (preset?.gameVersion) {
+    versionMode.value = preset.gameVersion;
+  } else {
+    versionMode.value = "all";
+  }
   loadVersions();
   await loadContext();
   await search(true);
+  store.communityContext = null;
 });
 
 watch(instanceId, async () => {

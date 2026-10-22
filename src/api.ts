@@ -373,6 +373,7 @@ export const api = {
   cfInstallFile: (versionId: string, kind: string, url: string, fileName: string) =>
     invoke<string>("cf_install_file", { versionId, kind, url, fileName }),
   deleteVersion: (versionId: string) => invoke<void>("delete_version", { versionId }),
+  defaultSkin: () => invoke<string>("default_skin"),
   getAccounts: () => invoke<AccountView[]>("get_accounts"),
   createOfflineAccount: (name: string) => invoke<AccountView>("create_offline_account", { name }),
   removeAccount: (id: string) => invoke<void>("remove_account", { id }),

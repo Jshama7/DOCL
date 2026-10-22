@@ -5,6 +5,7 @@ import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import PlayerAvatar from "../components/PlayerAvatar.vue";
+import SkinHead from "../components/SkinHead.vue";
 import {
   launchVersion,
   selectedAccount,
@@ -38,6 +39,10 @@ const versionLabel = computed(() => {
   const name = store.metas[current.id]?.display_name;
   return name && name.trim() ? name : current.id;
 });
+
+const skinSource = computed(
+  () => store.accountSkin?.data_url || store.defaultSkin
+);
 
 const javaLabel = computed(() => {
   const v = version.value;
@@ -218,11 +223,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
           </div>
         </div>
         <div class="hero__stage" :style="stageStyle">
-          <div class="iso">
-            <span class="iso__face iso__face--top" />
-            <span class="iso__face iso__face--left" />
-            <span class="iso__face iso__face--right" />
-          </div>
+          <SkinHead :skin="skinSource" :seed="account?.uuid ?? 'steve'" :height="210" />
           <span class="hero__shadow" />
         </div>
         <span class="hero__bit hero__bit--a" />
@@ -501,50 +502,6 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   transition: transform 600ms var(--ease-out-expo);
 }
 
-.iso {
-  position: relative;
-  width: 124px;
-  height: 124px;
-  transform-style: preserve-3d;
-  transform: rotateX(-24deg) rotateY(38deg);
-  animation: iso-float 7s var(--ease-in-out) infinite;
-}
-
-.iso__face {
-  position: absolute;
-  width: 124px;
-  height: 124px;
-  border: 1px solid rgba(70, 40, 18, 0.18);
-}
-
-.iso__face--top {
-  background-color: #6f8f5a;
-  background-image: repeating-linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.1) 0 15px,
-      transparent 15px 31px
-    ),
-    repeating-linear-gradient(0deg, rgba(40, 60, 30, 0.18) 0 15px, transparent 15px 31px);
-  transform: rotateX(90deg) translateZ(62px);
-  box-shadow: 0 0 24px rgba(94, 123, 73, 0.3) inset;
-}
-
-.iso__face--left {
-  background: linear-gradient(180deg, #567243 0 25%, #5c3a20 25% 100%);
-  background-image: radial-gradient(circle at 22% 66%, rgba(255, 255, 255, 0.1) 0 3px, transparent 3px),
-    radial-gradient(circle at 72% 84%, rgba(0, 0, 0, 0.16) 0 4px, transparent 4px),
-    linear-gradient(180deg, #567243 0 25%, #5c3a20 25% 100%);
-  transform: rotateY(-90deg) translateZ(62px);
-  filter: brightness(0.9);
-}
-
-.iso__face--right {
-  background: radial-gradient(circle at 30% 58%, rgba(255, 255, 255, 0.12) 0 3px, transparent 3px),
-    radial-gradient(circle at 74% 76%, rgba(0, 0, 0, 0.18) 0 5px, transparent 5px),
-    linear-gradient(180deg, #7f9a63 0 25%, #7a5230 25% 100%);
-  transform: translateZ(62px);
-}
-
 .hero__shadow {
   position: absolute;
   bottom: 18px;
@@ -588,16 +545,6 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   height: 12px;
   background: var(--walnut-light);
   animation-delay: -2s;
-}
-
-@keyframes iso-float {
-  0%,
-  100% {
-    transform: rotateX(-24deg) rotateY(38deg) translateY(0);
-  }
-  50% {
-    transform: rotateX(-24deg) rotateY(38deg) translateY(-12px);
-  }
 }
 
 @keyframes shadow-breathe {

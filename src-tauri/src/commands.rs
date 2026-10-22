@@ -635,6 +635,11 @@ pub async fn cf_install_file(
 }
 
 #[tauri::command]
+pub fn default_skin() -> String {
+    skins::default_skin()
+}
+
+#[tauri::command]
 pub fn get_accounts(state: State<'_, AppState>) -> Vec<AccountView> {
     // 每次从磁盘重新读取，确保微软登录完成后能立即看到新账号
     let accounts = auth::load_accounts();

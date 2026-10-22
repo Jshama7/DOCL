@@ -76,6 +76,7 @@ pub fn run() {
             commands::modrinth_search,
             commands::modrinth_files,
             commands::cf_install_file,
+            commands::default_skin,
             commands::get_accounts,
             commands::create_offline_account,
             commands::remove_account,

@@ -48,6 +48,7 @@ export const store = reactive({
   lastJobTitle: "",
   lastJobError: null as string | null,
   accountSkin: null as AccountSkin | null,
+  defaultSkin: "",
   skinLoading: false,
   skinEditorOpen: false,
   toast: null as { text: string; kind: "ok" | "err" } | null,
@@ -529,6 +530,9 @@ export async function initApp() {
     refreshAccounts(),
     refreshJava(),
     refreshInstanceMetas(),
+    api.defaultSkin().then((value) => {
+      store.defaultSkin = value;
+    }),
   ]);
 
   await onInstallProgress((p) => {

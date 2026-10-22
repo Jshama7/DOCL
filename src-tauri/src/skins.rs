@@ -33,6 +33,13 @@ pub fn to_data_url(bytes: &[u8], mime: &str) -> String {
     format!("data:{mime};base64,{}", STANDARD.encode(bytes))
 }
 
+/// 内置的 Steve 皮肤，离线账号与未登录时使用。
+pub fn default_skin() -> String {
+    const STEVE: &[u8] = include_bytes!("../assets/steve.png");
+    let bytes = normalize_png(STEVE.to_vec()).unwrap_or_else(|_| STEVE.to_vec());
+    to_data_url(&bytes, "image/png")
+}
+
 fn decode_base64(raw: &str) -> Result<Vec<u8>> {
     let value = raw
         .split_once(',')

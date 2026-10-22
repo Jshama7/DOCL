@@ -51,7 +51,8 @@ pub fn rewrite(url: &str) -> String {
             return format!("{to}{rest}");
         }
     }
-    format!("{MIRROR}{url}")
+    // 未收录的主机不做改写，避免把外部 API 拼成镜像子路径
+    url.to_string()
 }
 
 pub fn official(url: &str) -> String {

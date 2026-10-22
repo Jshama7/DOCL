@@ -43,6 +43,9 @@ const LOADER_LABELS: Record<string, string> = {
 const instanceId = ref<string>("");
 const context = ref<InstanceContext | null>(null);
 const query = ref("");
+const versionMode = ref("instance");
+const sortField = ref("2");
+const versions = ref<string[]>([]);
 const items = ref<CfProject[]>([]);
 const total = ref(0);
 const index = ref(0);
@@ -54,11 +57,29 @@ const filesLoading = ref(false);
 const filesError = ref("");
 
 const classId = computed(() => CLASS_IDS[props.kind] ?? 6);
+const label = computed(() => CLASS_LABELS[props.kind] ?? "资源");
 const installable = computed(() => props.kind !== "modpacks");
 const instanceOptions = computed(() =>
   store.installed.map((v) => ({ value: v.id, label: v.id }))
 );
-const gameVersion = computed(() => context.value?.game_version ?? null);
+const versionOptions = computed(() => [
+  {
+    value: "instance",
+    label: context.value ? `跟随实例 · ${context.value.game_version}` : "跟随实例",
+  },
+  { value: "all", label: "全部版本" },
+  ...versions.value.map((version) => ({ value: version, label: version })),
+]);
+const sortOptions = [
+  { value: "2", label: "按热度" },
+  { value: "3", label: "最近更新" },
+  { value: "6", label: "总下载量" },
+];
+const queryGameVersion = computed(() => {
+  if (versionMode.value === "all") return null;
+  if (versionMode.value === "instance") return context.value?.game_version ?? null;
+  return versionMode.value;
+});
 const loader = computed(() =>
   context.value && context.value.loader !== "vanilla" ? context.value.loader : null
 );
@@ -69,13 +90,15 @@ onMounted(async () => {
     store.installed.some((v) => v.id === store.config?.selected_version)
       ? store.config.selected_version
       : store.installed[0]?.id ?? "";
+  loadVersions();
   await loadContext();
   await search(true);
 });
 
 watch(instanceId, async () => {
-  await loadContext();
+  versionMode.value = "instance";
   active.value = null;
+  await loadContext();
   await search(true);
 });
 
@@ -88,14 +111,21 @@ watch(
   }
 );
 
+async function loadVersions() {
+  try {
+    versions.value = await api.cfGameVersions();
+  } catch {
+    versions.value = [];
+  }
+}
+
 async function loadContext() {
   context.value = null;
   if (!instanceId.value) return;
   try {
     context.value = await api.instanceContext(instanceId.value);
-  } catch (err) {
+  } catch {
     context.value = null;
-    error.value = String(err);
   }
 }
 
@@ -116,9 +146,10 @@ async function search(reset = false) {
     const result = await api.cfSearch(
       classId.value,
       query.value,
-      gameVersion.value,
+      queryGameVersion.value,
       loader.value,
-      index.value
+      index.value,
+      Number(sortField.value)
     );
     items.value = reset ? result.items : [...items.value, ...result.items];
     total.value = result.total;
@@ -127,6 +158,13 @@ async function search(reset = false) {
   } finally {
     loading.value = false;
   }
+}
+
+function resetSearch() {
+  query.value = "";
+  versionMode.value = "instance";
+  sortField.value = "2";
+  search(true);
 }
 
 async function loadMore() {
@@ -147,7 +185,7 @@ async function loadFiles(project: CfProject) {
   try {
     files.value = await api.cfFiles(
       project.id,
-      gameVersion.value,
+      queryGameVersion.value,
       props.kind === "mods" ? loader.value : null
     );
   } catch (err) {
@@ -181,46 +219,78 @@ function compactNumber(value: number) {
   return String(value);
 }
 
+function updatedLabel(iso: string) {
+  if (!iso) return "";
+  const time = new Date(iso).getTime();
+  if (Number.isNaN(time)) return "";
+  const diff = Date.now() - time;
+  const hour = 3_600_000;
+  const day = 24 * hour;
+  if (diff < hour) return "刚刚更新";
+  if (diff < day) return `${Math.floor(diff / hour)} 小时前`;
+  if (diff < 30 * day) return `${Math.floor(diff / day)} 天前`;
+  return formatDate(iso);
+}
+
 function shortVersions(list: string[]) {
   return list.slice(0, 2).join(" / ");
 }
 
 function refresh() {
   notify("正在刷新 CurseForge 列表");
+  loadVersions();
   search(true);
 }
 </script>
 
 <template>
   <div class="cf">
-    <section class="card card-pad cf-toolbar">
-      <div class="cf-toolbar__instance">
-        <div class="cf-toolbar__label">目标实例</div>
-        <WoodSelect
-          v-if="instanceOptions.length"
-          v-model="instanceId"
-          :options="instanceOptions"
-        />
-        <p v-else class="muted small">
-          还没有已安装的版本，先到原版游戏里安装一个实例。
-        </p>
-        <div v-if="context" class="cf-toolbar__meta">
-          <span class="tag">{{ context.game_version }}</span>
-          <span class="tag">{{ LOADER_LABELS[context.loader] ?? context.loader }}</span>
-          <span class="muted small">下载内容会写入该实例目录</span>
+    <section class="card card-pad cf-search">
+      <div class="cf-search__head">
+        <div class="cf-search__title">搜索{{ label }}</div>
+        <div class="cf-search__source">
+          <span class="cf-source">CurseForge</span>
+          <span v-if="context" class="tag">{{ LOADER_LABELS[context.loader] ?? context.loader }}</span>
         </div>
       </div>
 
-      <div class="cf-toolbar__search">
-        <WoodInput
-          v-model="query"
-          :placeholder="`搜索 ${CLASS_LABELS[kind] ?? '资源'} 名称`"
-          @keyup.enter="search(true)"
-        />
+      <div class="cf-fields">
+        <label class="cf-field">
+          <span class="cf-field__label">名称</span>
+          <WoodInput
+            v-model="query"
+            :placeholder="`输入${label}名称，留空浏览全部`"
+            @keyup.enter="search(true)"
+          />
+        </label>
+
+        <label class="cf-field">
+          <span class="cf-field__label">版本</span>
+          <WoodSelect v-model="versionMode" :options="versionOptions" />
+        </label>
+
+        <label class="cf-field">
+          <span class="cf-field__label">排序</span>
+          <WoodSelect v-model="sortField" :options="sortOptions" />
+        </label>
+
+        <label class="cf-field">
+          <span class="cf-field__label">目标实例</span>
+          <WoodSelect
+            v-if="instanceOptions.length"
+            v-model="instanceId"
+            :options="instanceOptions"
+          />
+          <span v-else class="cf-field__fallback muted small">还没有已安装版本</span>
+        </label>
+      </div>
+
+      <div class="cf-actions">
         <WoodButton variant="primary" sheen :disabled="loading" @click="search(true)">
           <AppIcon name="grid" :size="15" />
           搜索
         </WoodButton>
+        <WoodButton variant="ghost" @click="resetSearch">重置条件</WoodButton>
         <IconButton
           icon="refresh"
           label="刷新列表"
@@ -228,6 +298,9 @@ function refresh() {
           :size="38"
           @click="refresh"
         />
+        <span v-if="!instanceOptions.length" class="muted small cf-actions__hint">
+          先在「原版游戏」里安装一个版本，下载内容会写入该实例目录。
+        </span>
       </div>
     </section>
 
@@ -235,15 +308,25 @@ function refresh() {
       <div class="cf-detail-head">
         <IconButton
           icon="chevron-left"
-          label="返回列表"
+          label="返回搜索结果"
           :size="34"
           @click="active = null"
         />
         <img v-if="active.logo_url" class="cf-detail__logo" :src="active.logo_url" alt="" />
         <div class="cf-detail__text">
-          <h2 class="cf-detail__title">{{ active.name }}</h2>
+          <div class="cf-detail__title-row">
+            <h2 class="cf-detail__title">{{ active.name }}</h2>
+            <span
+              v-for="category in active.categories.slice(0, 3)"
+              :key="category"
+              class="chip"
+            >
+              {{ category }}
+            </span>
+          </div>
           <p class="muted small">
             {{ active.author || "未知作者" }} · {{ compactNumber(active.download_count) }} 次下载
+            <template v-if="active.updated"> · {{ updatedLabel(active.updated) }}</template>
           </p>
           <p class="muted small cf-detail__summary">{{ active.summary }}</p>
         </div>
@@ -254,7 +337,7 @@ function refresh() {
           <div>
             <div class="section-title">可用文件</div>
             <p class="muted small">
-              {{ context ? `按 ${context.game_version} 筛选` : "按当前实例筛选" }}
+              {{ queryGameVersion ? `按 ${queryGameVersion} 筛选` : "全部版本" }}
               <template v-if="kind === 'mods' && loader">
                 · {{ LOADER_LABELS[loader] }}
               </template>
@@ -270,7 +353,7 @@ function refresh() {
           {{ filesError }}
         </div>
         <div v-else-if="!files.length" class="cf-files__state muted small">
-          没有找到适配当前实例的文件。
+          没有找到适配当前筛选的文件。
         </div>
         <div v-else class="cf-file-list">
           <div v-for="file in files" :key="file.id" class="cf-file">
@@ -310,10 +393,10 @@ function refresh() {
         <WoodButton variant="ghost" size="sm" @click="search(true)">重试</WoodButton>
       </div>
 
-      <div v-else-if="loading && !items.length" class="cf-grid">
-        <div v-for="n in 8" :key="n" class="card cf-card cf-card--skeleton">
+      <div v-else-if="loading && !items.length" class="card cf-list">
+        <div v-for="n in 8" :key="n" class="cf-row cf-row--skeleton">
           <span class="skeleton cf-skeleton__logo" />
-          <div class="cf-card__body">
+          <div class="cf-row__body">
             <span class="skeleton cf-skeleton__title" />
             <span class="skeleton cf-skeleton__line" />
             <span class="skeleton cf-skeleton__line cf-skeleton__line--short" />
@@ -324,36 +407,58 @@ function refresh() {
       <div v-else-if="!items.length" class="card card-pad cf-state">
         <AppIcon name="package" :size="30" />
         <div>
-          <p class="cf-state__title">没有匹配的{{ CLASS_LABELS[kind] ?? "资源" }}</p>
-          <p class="muted small">换个关键词，或者切换实例的游戏版本再试。</p>
+          <p class="cf-state__title">没有匹配的{{ label }}</p>
+          <p class="muted small">换个关键词，或者把版本切换为「全部版本」再试。</p>
         </div>
       </div>
 
-      <div v-else class="cf-grid">
+      <div v-else class="card cf-list">
         <button
           v-for="(project, i) in items"
           :key="project.id"
-          class="card cf-card"
+          class="cf-row"
           :style="{ '--i': i }"
           @click="openProject(project)"
         >
           <img
             v-if="project.logo_url"
-            class="cf-card__logo"
+            class="cf-row__logo"
             :src="project.logo_url"
             alt=""
             loading="lazy"
           />
-          <span v-else class="cf-card__logo cf-card__logo--empty">
+          <span v-else class="cf-row__logo cf-row__logo--empty">
             {{ project.name.slice(0, 1) }}
           </span>
-          <div class="cf-card__body">
-            <strong class="cf-card__name">{{ project.name }}</strong>
-            <span class="cf-card__meta mono">
-              {{ project.author || "未知作者" }} · {{ compactNumber(project.download_count) }} 下载
-            </span>
-            <p class="cf-card__summary">{{ project.summary }}</p>
+          <div class="cf-row__body">
+            <div class="cf-row__title">
+              <strong>{{ project.name }}</strong>
+              <span
+                v-for="category in project.categories.slice(0, 3)"
+                :key="category"
+                class="chip"
+              >
+                {{ category }}
+              </span>
+            </div>
+            <p class="cf-row__summary">{{ project.summary }}</p>
+            <div class="cf-row__meta">
+              <span class="cf-row__meta-item">
+                <AppIcon name="user" :size="12" />
+                {{ project.author || "未知作者" }}
+              </span>
+              <span class="cf-row__meta-item">
+                <AppIcon name="download" :size="12" />
+                {{ compactNumber(project.download_count) }}
+              </span>
+              <span v-if="project.updated" class="cf-row__meta-item">
+                <AppIcon name="refresh" :size="12" />
+                {{ updatedLabel(project.updated) }}
+              </span>
+              <span class="cf-row__source">CurseForge</span>
+            </div>
           </div>
+          <AppIcon name="chevron-left" :size="15" class="cf-row__chev" />
         </button>
       </div>
 
@@ -365,8 +470,7 @@ function refresh() {
       </div>
 
       <p v-if="items.length" class="muted small footnote">
-        数据来自 CurseForge，安装时会把对应文件写入实例的
-        {{ kind }} 目录；加载器与版本已按当前实例自动筛选。
+        共 {{ total }} 个结果；安装时会把文件写入实例的 {{ kind }} 目录。
       </p>
     </template>
   </div>
@@ -379,145 +483,224 @@ function refresh() {
   gap: 16px;
 }
 
-.cf-toolbar {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 22px;
-  flex-wrap: wrap;
-}
-
-.cf-toolbar__instance {
+/* 搜索面板 */
+.cf-search {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  min-width: 220px;
+  gap: 14px;
 }
 
-.cf-toolbar__label {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  letter-spacing: 0.16em;
-  color: var(--muted);
-  text-transform: uppercase;
-}
-
-.cf-toolbar__meta {
+.cf-search__head {
   display: flex;
   align-items: center;
-  gap: 7px;
-  flex-wrap: wrap;
-}
-
-.cf-toolbar__search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: 1;
-  justify-content: flex-end;
-  min-width: 320px;
-}
-
-.cf-toolbar__search :deep(.input) {
-  max-width: 320px;
-  flex: 1;
-}
-
-.cf-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  justify-content: space-between;
   gap: 12px;
 }
 
-.cf-card {
+.cf-search__title {
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--walnut-deep);
+}
+
+.cf-search__source {
   display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.cf-source {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 7px;
+}
+
+.cf-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.cf-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.cf-field__label {
+  font-size: 11.5px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.cf-field__fallback {
+  display: flex;
+  align-items: center;
+  height: 38px;
+}
+
+.cf-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cf-actions__hint {
+  margin-left: 4px;
+}
+
+/* 结果列表 */
+.cf-list {
+  padding: 6px;
+}
+
+.cf-row {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
   gap: 13px;
-  padding: 14px;
+  padding: 11px 12px;
+  border-radius: 9px;
   text-align: left;
   color: var(--ink);
-  animation: rise-in 460ms var(--ease-out-expo) both;
-  animation-delay: calc(var(--i, 0) * 16ms);
-  transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
+  transition: background var(--dur-2) ease;
+  animation: rise-in 420ms var(--ease-out-expo) both;
+  animation-delay: calc(var(--i, 0) * 14ms);
 }
 
-.cf-card:hover {
-  border-color: rgba(var(--accent-rgb), 0.34);
-  box-shadow: var(--shadow-2);
+.cf-row:hover {
+  background: var(--hover);
 }
 
-.cf-card__logo {
-  width: 46px;
-  height: 46px;
+.cf-row + .cf-row {
+  border-top: 1px dashed var(--line);
+}
+
+.cf-row__logo {
+  width: 50px;
+  height: 50px;
   border-radius: 10px;
   object-fit: cover;
   flex-shrink: 0;
   background: var(--paper-2);
 }
 
-.cf-card__logo--empty {
+.cf-row__logo--empty {
   display: grid;
   place-items: center;
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: 21px;
   color: var(--moss);
   background: var(--moss-soft);
 }
 
-.cf-card__body {
+.cf-row__body {
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 3px;
-  min-width: 0;
 }
 
-.cf-card__name {
+.cf-row__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.cf-row__title strong {
   font-size: 14.5px;
   color: var(--walnut-deep);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 46%;
+}
+
+.chip {
+  font-size: 10px;
+  line-height: 1;
+  padding: 4px 6px;
+  border-radius: 5px;
+  color: var(--moss);
+  background: var(--moss-soft);
+  white-space: nowrap;
+}
+
+.cf-row__summary {
+  font-size: 12px;
+  color: var(--ink-soft);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.cf-card__meta {
+.cf-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  flex-wrap: wrap;
   font-size: 10.5px;
   color: var(--muted);
-  letter-spacing: 0.03em;
 }
 
-.cf-card__summary {
-  font-size: 12px;
-  color: var(--ink-soft);
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.cf-row__meta-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
-.cf-card--skeleton {
+.cf-row__source {
+  color: var(--walnut-light);
+  letter-spacing: 0.04em;
+}
+
+.cf-row__chev {
+  transform: rotate(180deg);
+  color: var(--line-strong);
+  flex-shrink: 0;
+  transition: color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo);
+}
+
+.cf-row:hover .cf-row__chev {
+  color: var(--moss);
+  transform: rotate(180deg) translateX(-2px);
+}
+
+.cf-row--skeleton {
   pointer-events: none;
 }
 
 .cf-skeleton__logo {
-  width: 46px;
-  height: 46px;
+  width: 50px;
+  height: 50px;
   border-radius: 10px;
 }
 
 .cf-skeleton__title {
-  width: 110px;
+  width: 130px;
   height: 14px;
 }
 
 .cf-skeleton__line {
-  width: 100%;
+  width: 78%;
   height: 10px;
 }
 
 .cf-skeleton__line--short {
-  width: 62%;
+  width: 46%;
 }
 
+/* 空态 / 错误 */
 .cf-state {
   display: flex;
   align-items: center;
@@ -538,6 +721,7 @@ function refresh() {
   margin-bottom: 3px;
 }
 
+/* 详情 */
 .cf-detail-head {
   display: flex;
   align-items: flex-start;
@@ -555,6 +739,13 @@ function refresh() {
 
 .cf-detail__text {
   min-width: 0;
+}
+
+.cf-detail__title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .cf-detail__title {
@@ -658,9 +849,13 @@ function refresh() {
   padding-left: 2px;
 }
 
-@media (max-width: 1080px) {
-  .cf-toolbar__search {
-    min-width: 100%;
+@media (max-width: 1180px) {
+  .cf-fields {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .cf-row__title strong {
+    max-width: 100%;
   }
 
   .cf-file__date {

@@ -81,6 +81,8 @@ export interface CfProject {
   class_id: number;
   logo_url: string;
   author: string;
+  updated: string;
+  categories: string[];
 }
 
 export interface CfSearchResult {
@@ -163,7 +165,8 @@ export const api = {
     query: string,
     gameVersion?: string | null,
     loader?: string | null,
-    index = 0
+    index = 0,
+    sortField = 2
   ) =>
     invoke<CfSearchResult>("cf_search", {
       classId,
@@ -171,7 +174,9 @@ export const api = {
       gameVersion: gameVersion ?? null,
       loader: loader ?? null,
       index,
+      sortField,
     }),
+  cfGameVersions: () => invoke<string[]>("cf_game_versions"),
   cfFiles: (modId: number, gameVersion?: string | null, loader?: string | null) =>
     invoke<CfFileView[]>("cf_files", {
       modId,

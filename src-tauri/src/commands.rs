@@ -226,6 +226,7 @@ pub async fn cf_search(
     game_version: Option<String>,
     loader: Option<String>,
     index: u32,
+    sort_field: Option<u32>,
 ) -> CmdResult<curseforge::CfSearchResult> {
     curseforge::search(
         &state.client,
@@ -235,9 +236,17 @@ pub async fn cf_search(
         loader.as_deref(),
         index,
         20,
+        sort_field.unwrap_or(2),
     )
     .await
     .map_err(err)
+}
+
+#[tauri::command]
+pub async fn cf_game_versions(
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<String>> {
+    curseforge::game_versions(&state.client).await.map_err(err)
 }
 
 #[tauri::command]

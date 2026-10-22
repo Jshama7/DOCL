@@ -45,6 +45,13 @@ struct CfFile {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CfCategory {
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CfMod {
     id: i64,
     #[serde(default)]
@@ -57,6 +64,10 @@ struct CfMod {
     download_count: u64,
     #[serde(default)]
     class_id: i64,
+    #[serde(default)]
+    date_modified: String,
+    #[serde(default)]
+    categories: Vec<CfCategory>,
     logo: Option<CfLogo>,
     #[serde(default)]
     authors: Vec<CfAuthor>,
@@ -92,6 +103,8 @@ pub struct CfProject {
     pub class_id: i64,
     pub logo_url: String,
     pub author: String,
+    pub updated: String,
+    pub categories: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -130,6 +143,7 @@ pub async fn search(
     loader: Option<&str>,
     index: u32,
     page_size: u32,
+    sort_field: u32,
 ) -> Result<CfSearchResult> {
     let mut url = reqwest::Url::parse(&format!("{BASE}/mods/search"))?;
     {
@@ -139,7 +153,7 @@ pub async fn search(
             .append_pair("classId", &class_id.to_string())
             .append_pair("index", &index.to_string())
             .append_pair("pageSize", &page_size.to_string())
-            .append_pair("sortField", "2")
+            .append_pair("sortField", &sort_field.to_string())
             .append_pair("sortOrder", "desc");
         if !query.trim().is_empty() {
             pairs.append_pair("searchFilter", query.trim());
@@ -181,6 +195,13 @@ pub async fn search(
                 .first()
                 .map(|author| author.name.clone())
                 .unwrap_or_default(),
+            updated: project.date_modified,
+            categories: project
+                .categories
+                .into_iter()
+                .map(|category| category.name)
+                .filter(|name| !name.is_empty())
+                .collect(),
         })
         .collect();
     Ok(CfSearchResult {
@@ -190,6 +211,48 @@ pub async fn search(
             .map(|p| p.total_count)
             .unwrap_or(0),
     })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfGameVersion {
+    #[serde(default)]
+    version_string: String,
+    #[serde(default)]
+    date_modified: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CfGameVersionsResponse {
+    #[serde(default)]
+    data: Vec<CfGameVersion>,
+}
+
+/// 供版本下拉框使用的正式版列表，按发布时间倒序。
+pub async fn game_versions(client: &reqwest::Client) -> Result<Vec<String>> {
+    let response: CfGameVersionsResponse = download::get_json(
+        client,
+        &format!("{BASE}/minecraft/version"),
+        false,
+    )
+    .await?;
+    let mut list: Vec<CfGameVersion> = response
+        .data
+        .into_iter()
+        .filter(|entry| {
+            let value = &entry.version_string;
+            value.contains('.')
+                && value
+                    .chars()
+                    .all(|c| c.is_ascii_digit() || c == '.')
+        })
+        .collect();
+    list.sort_by(|a, b| b.date_modified.cmp(&a.date_modified));
+    Ok(list
+        .into_iter()
+        .map(|entry| entry.version_string)
+        .take(60)
+        .collect())
 }
 
 pub async fn files(

@@ -50,6 +50,7 @@ pub fn run() {
             commands::delete_version,
             commands::instance_context,
             commands::cf_search,
+            commands::cf_game_versions,
             commands::cf_files,
             commands::cf_install_file,
             commands::get_accounts,

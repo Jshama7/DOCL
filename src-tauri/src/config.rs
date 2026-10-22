@@ -81,7 +81,8 @@ impl Default for Config {
             game_dirs: Vec::new(),
             recent_servers: Vec::new(),
             hall_url: String::new(),
-            update_url: String::new(),
+            // 默认走国内加速；玩家可在设置里切到 GitHub 原地址
+            update_url: "https://cdn.jsdelivr.net/gh/dawo4/DOCL@main/update.json".into(),
             update_mode: "notify".into(),
             java_path: None,
             memory_mb: 4096,

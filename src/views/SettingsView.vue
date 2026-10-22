@@ -354,6 +354,28 @@ const updateModes = [
   { value: "off", label: "关闭自动检查" },
 ];
 
+/// 两个默认清单地址：国内加速走 jsDelivr，GitHub 原地址更新更及时。
+const updateSources = [
+  {
+    value: "https://cdn.jsdelivr.net/gh/dawo4/DOCL@main/update.json",
+    label: "国内加速（jsDelivr）",
+  },
+  {
+    value: "https://raw.githubusercontent.com/dawo4/DOCL/main/update.json",
+    label: "GitHub 原地址",
+  },
+  { value: "custom", label: "自定义地址" },
+];
+
+const updateSource = computed<string>({
+  get: () =>
+    updateSources.some((source) => source.value === form.update_url) ? form.update_url : "custom",
+  set: (value) => {
+    // 选自定义时保留当前地址，方便在预设基础上改
+    if (value !== "custom") form.update_url = value;
+  },
+});
+
 async function chooseDir() {
   const dir = await pickDirectory();
   if (dir) form.game_dir = dir;
@@ -1238,15 +1260,11 @@ function useAutoJava() {
       <div class="setting setting--stack">
         <div class="setting__label">
           <strong>更新清单地址</strong>
-          <span>留空则不检查更新；填写一个返回版本信息的 JSON 地址</span>
+          <span>国内网络选加速地址；需要最快拿到新版选 GitHub 原地址</span>
         </div>
         <div class="setting__control setting__control--wide">
-          <div class="row">
-            <WoodInput
-              v-model="form.update_url"
-              mono
-              placeholder="https://example.com/docl-update.json"
-            />
+          <div class="update-source">
+            <WoodSelect v-model="updateSource" :options="updateSources" />
             <WoodButton
               variant="soft"
               size="sm"
@@ -1257,6 +1275,12 @@ function useAutoJava() {
               {{ updateBusy ? "检查中…" : "检查更新" }}
             </WoodButton>
           </div>
+          <WoodInput
+            v-model="form.update_url"
+            mono
+            :disabled="updateSource !== 'custom'"
+            placeholder="https://example.com/docl-update.json"
+          />
         </div>
       </div>
 
@@ -1313,6 +1337,17 @@ function useAutoJava() {
 .settings-hall-hint {
   margin: 0;
   line-height: 1.6;
+}
+
+.update-source {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.update-source :deep(.select) {
+  flex: 1;
+  min-width: 0;
 }
 
 .update-hint {

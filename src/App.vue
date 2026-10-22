@@ -148,7 +148,7 @@ const statusText = computed(() => {
       <div class="statusbar__right">
         <span>{{ store.installed.length }} VERSIONS</span>
         <span>{{ store.javaList.length }} JAVA</span>
-        <span>DOCL {{ appVersion || "1.0.0" }}</span>
+        <span>DOCL {{ appVersion || "1.1.0" }}</span>
       </div>
     </footer>
 

@@ -9,6 +9,7 @@ mod instance;
 mod java;
 mod launch;
 mod mirror;
+mod modpack;
 mod modrinth;
 mod models;
 mod skins;
@@ -62,6 +63,8 @@ pub fn run() {
             commands::instance_delete_file,
             commands::instance_import_files,
             commands::instance_paths,
+            commands::modpack_inspect,
+            commands::modpack_import,
             commands::instance_context,
             commands::cf_search,
             commands::cf_game_versions,

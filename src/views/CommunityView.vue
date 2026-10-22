@@ -1,17 +1,26 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onMounted, reactive, ref, watch } from "vue";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   api,
   type CfFileView,
   type CfProject,
   type InstanceContext,
+  type PackPreview,
 } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodSelect from "../components/WoodSelect.vue";
-import { installCfFile, notify, store } from "../store";
+import WoodToggle from "../components/WoodToggle.vue";
+import {
+  importModpack,
+  installCfFile,
+  notify,
+  openInstance,
+  store,
+} from "../store";
 import { formatBytes, formatDate } from "../utils";
 
 const props = defineProps<{ kind: string }>();
@@ -79,8 +88,24 @@ const files = ref<CfFileView[]>([]);
 const filesLoading = ref(false);
 const filesError = ref("");
 
+const showImport = ref(false);
+const packPath = ref("");
+const packPreview = ref<PackPreview | null>(null);
+const inspecting = ref(false);
+const importing = ref(false);
+const importForm = reactive({
+  name: "",
+  id: "",
+  loaderVersion: "",
+  parentVersion: "",
+  optional: false,
+});
+
 const label = computed(() => CLASS_LABELS[props.kind] ?? "资源");
 const installable = computed(() => props.kind !== "modpacks");
+const parentOptions = computed(() =>
+  store.installed.map((item) => ({ value: item.id, label: item.id }))
+);
 const instanceOptions = computed(() =>
   store.installed.map((v) => ({ value: v.id, label: v.id }))
 );
@@ -340,6 +365,67 @@ function refresh() {
   loadVersions();
   search(true);
 }
+
+async function pickPack() {
+  if (store.installingId) {
+    notify("已有下载任务正在进行", "err");
+    return;
+  }
+  const selection = await openDialog({
+    multiple: false,
+    directory: false,
+    title: "选择整合包压缩包",
+    filters: [{ name: "整合包", extensions: ["zip", "mrpack"] }],
+  });
+  const path = Array.isArray(selection) ? selection[0] : selection;
+  if (!path) return;
+  inspecting.value = true;
+  try {
+    const preview = await api.modpackInspect(path);
+    packPath.value = path;
+    packPreview.value = preview;
+    importForm.name = preview.name;
+    importForm.id = preview.suggested_id;
+    importForm.loaderVersion = preview.loader_version ?? "";
+    const installedIds = store.installed.map((item) => item.id);
+    importForm.parentVersion =
+      preview.detected_parent && installedIds.includes(preview.detected_parent)
+        ? preview.detected_parent
+        : installedIds[0] ?? "";
+    importForm.optional = false;
+    showImport.value = true;
+  } catch (err) {
+    notify(`读取整合包失败：${String(err)}`, "err");
+  } finally {
+    inspecting.value = false;
+  }
+}
+
+async function confirmImport() {
+  if (!packPreview.value || importing.value) return;
+  if (packPreview.value.format === "generic" && !importForm.parentVersion) {
+    notify("请选择一个已安装的父版本", "err");
+    return;
+  }
+  importing.value = true;
+  const result = await importModpack(
+    packPath.value,
+    {
+      instance_name: importForm.name.trim() || null,
+      instance_id: importForm.id.trim() || null,
+      loader_version: importForm.loaderVersion.trim() || null,
+      parent_version: importForm.parentVersion || null,
+      install_optional: importForm.optional,
+    },
+    packPreview.value.name
+  );
+  importing.value = false;
+  if (result) {
+    showImport.value = false;
+    packPreview.value = null;
+    openInstance(result.instance_id);
+  }
+}
 </script>
 
 <template>
@@ -394,6 +480,15 @@ function refresh() {
           搜索
         </WoodButton>
         <WoodButton variant="ghost" @click="resetSearch">重置条件</WoodButton>
+        <WoodButton
+          v-if="kind === 'modpacks'"
+          variant="soft"
+          :disabled="inspecting || !!store.installingId"
+          @click="pickPack"
+        >
+          <AppIcon name="package" :size="15" />
+          {{ inspecting ? "读取中…" : "导入整合包" }}
+        </WoodButton>
         <IconButton
           icon="refresh"
           label="刷新列表"
@@ -576,6 +671,121 @@ function refresh() {
         </WoodButton>
       </div>
     </template>
+
+    <Teleport to="body">
+      <Transition name="pack-modal">
+        <div v-if="showImport && packPreview" class="pack-modal">
+          <div class="pack-modal__mask" @click="!importing && (showImport = false)" />
+          <div class="pack-modal__card">
+            <header class="pack-modal__head">
+              <div>
+                <span class="eyebrow">DOCL / MODPACK</span>
+                <h2 class="pack-modal__title">{{ packPreview.name }}</h2>
+                <p class="muted small">
+                  {{
+                    packPreview.format === "curseforge"
+                      ? "CurseForge 整合包"
+                      : packPreview.format === "mrpack"
+                        ? "Modrinth 整合包"
+                        : "通用压缩包"
+                  }}
+                  <template v-if="packPreview.version"> · {{ packPreview.version }}</template>
+                  <template v-if="packPreview.game_version"> · {{ packPreview.game_version }}</template>
+                </p>
+              </div>
+              <IconButton
+                icon="close"
+                label="关闭"
+                :size="32"
+                :disabled="importing"
+                @click="showImport = false"
+              />
+            </header>
+
+            <div class="pack-modal__body">
+              <div class="pack-summary">
+                <span class="tag">{{ packPreview.file_count }} 个文件</span>
+                <span v-if="packPreview.download_bytes" class="tag">
+                  下载 {{ formatBytes(packPreview.download_bytes) }}
+                </span>
+                <span v-if="packPreview.override_bytes" class="tag">
+                  覆盖文件 {{ formatBytes(packPreview.override_bytes) }}
+                </span>
+                <span class="tag">
+                  {{
+                    packPreview.loader === "vanilla"
+                      ? "原版"
+                      : packPreview.loader.charAt(0).toUpperCase() + packPreview.loader.slice(1)
+                  }}
+                  <template v-if="packPreview.loader_version">
+                    {{ packPreview.loader_version }}
+                  </template>
+                </span>
+              </div>
+
+              <label class="pack-field">
+                <span class="pack-field__label">实例名称</span>
+                <WoodInput v-model="importForm.name" placeholder="显示在版本列表里的名字" />
+              </label>
+
+              <label class="pack-field">
+                <span class="pack-field__label">实例 ID</span>
+                <WoodInput v-model="importForm.id" mono placeholder="用于版本目录名" />
+              </label>
+
+              <label v-if="packPreview.loader !== 'vanilla'" class="pack-field">
+                <span class="pack-field__label">加载器版本</span>
+                <WoodInput v-model="importForm.loaderVersion" mono placeholder="留空自动选择" />
+              </label>
+
+              <label v-if="packPreview.format === 'generic'" class="pack-field">
+                <span class="pack-field__label">父版本</span>
+                <WoodSelect
+                  v-if="parentOptions.length"
+                  v-model="importForm.parentVersion"
+                  :options="parentOptions"
+                />
+                <span v-else class="muted small pack-field__empty">
+                  还没有已安装版本，请先去原版游戏安装一个。
+                </span>
+              </label>
+
+              <div v-if="packPreview.format !== 'generic'" class="pack-toggle">
+                <div>
+                  <strong>安装可选文件</strong>
+                  <span>清单中标记为可选的 Mod，体积可能较大</span>
+                </div>
+                <WoodToggle v-model="importForm.optional" />
+              </div>
+
+              <ul v-if="packPreview.warnings.length" class="pack-warnings">
+                <li v-for="warning in packPreview.warnings" :key="warning">{{ warning }}</li>
+              </ul>
+            </div>
+
+            <footer class="pack-modal__foot">
+              <span class="muted small">
+                导入会自动安装基础版本与加载器，并写入独立的实例目录。
+              </span>
+              <div class="row">
+                <WoodButton variant="ghost" :disabled="importing" @click="showImport = false">
+                  取消
+                </WoodButton>
+                <WoodButton
+                  variant="primary"
+                  sheen
+                  :disabled="importing || (packPreview.format === 'generic' && !importForm.parentVersion)"
+                  @click="confirmImport"
+                >
+                  <AppIcon name="download" :size="15" />
+                  {{ importing ? "导入中…" : "开始导入" }}
+                </WoodButton>
+              </div>
+            </footer>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -930,6 +1140,147 @@ function refresh() {
 
 .cf-file__hint {
   font-size: 11px;
+}
+
+/* 导入整合包弹层 */
+.pack-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 140;
+  display: grid;
+  place-items: center;
+}
+
+.pack-modal__mask {
+  position: absolute;
+  inset: 0;
+  background: rgba(28, 20, 12, 0.38);
+  backdrop-filter: blur(3px);
+}
+
+.pack-modal__card {
+  position: relative;
+  width: min(560px, calc(100vw - 56px));
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
+  padding: 20px 22px;
+  border-radius: 16px;
+  border: 1px solid var(--line-strong);
+  background: rgba(var(--glass-rgb), 0.97);
+  box-shadow: var(--shadow-2);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.pack-modal__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.pack-modal__title {
+  font-family: var(--font-display);
+  font-size: 28px;
+  line-height: 1.1;
+  color: var(--walnut-deep);
+  margin: 2px 0;
+}
+
+.pack-modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pack-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pack-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.pack-field__label {
+  font-size: 11.5px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.pack-field__empty {
+  display: flex;
+  align-items: center;
+  height: 38px;
+}
+
+.pack-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+}
+
+.pack-toggle strong {
+  display: block;
+  font-size: 13px;
+  color: var(--walnut-deep);
+}
+
+.pack-toggle span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.pack-warnings {
+  margin: 0;
+  padding: 8px 12px 8px 26px;
+  border-radius: 8px;
+  background: rgba(var(--accent-rgb), 0.06);
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.pack-modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+}
+
+.pack-modal__foot > .muted {
+  max-width: 260px;
+  line-height: 1.5;
+}
+
+.pack-modal-enter-active,
+.pack-modal-leave-active {
+  transition: opacity 180ms ease;
+}
+
+.pack-modal-enter-active .pack-modal__card,
+.pack-modal-leave-active .pack-modal__card {
+  transition: transform 220ms var(--ease-out-expo);
+}
+
+.pack-modal-enter-from,
+.pack-modal-leave-to {
+  opacity: 0;
+}
+
+.pack-modal-enter-from .pack-modal__card,
+.pack-modal-leave-to .pack-modal__card {
+  transform: translateY(10px) scale(0.98);
 }
 
 @media (max-width: 1220px) {

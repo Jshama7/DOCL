@@ -18,6 +18,8 @@ pub struct InstanceMeta {
     pub icon: String,
     pub category: String,
     pub favorite: bool,
+    /// 该版本是否使用独立目录；整合包实例会强制开启
+    pub isolated: Option<bool>,
     pub memory_mb: Option<u32>,
     pub java_path: Option<String>,
     pub java_args: Option<String>,
@@ -157,6 +159,7 @@ pub struct InstanceInfo {
     pub icon: String,
     pub category: String,
     pub favorite: bool,
+    pub isolated: Option<bool>,
     pub game_version: String,
     pub loader: String,
     pub kind: String,
@@ -183,25 +186,37 @@ fn content_subdir(kind: &str) -> Result<&'static str> {
     }
 }
 
+/// 实例实际使用的游戏目录，整合包可以通过元数据强制独立。
+pub fn game_dir(cfg: &Config, version_id: &str) -> PathBuf {
+    let isolated = get(cfg, version_id)
+        .isolated
+        .unwrap_or(cfg.version_isolation);
+    if isolated {
+        cfg.game_root().join("versions").join(version_id)
+    } else {
+        cfg.game_root()
+    }
+}
+
 pub fn content_dir(cfg: &Config, version_id: &str, kind: &str) -> Result<PathBuf> {
-    Ok(cfg.launch_dir(version_id).join(content_subdir(kind)?))
+    Ok(game_dir(cfg, version_id).join(content_subdir(kind)?))
 }
 
 pub fn paths(cfg: &Config, version_id: &str) -> InstancePaths {
-    let game_dir = cfg.launch_dir(version_id);
+    let root = game_dir(cfg, version_id);
     for name in ["mods", "resourcepacks", "shaderpacks", "saves", "screenshots"] {
-        let _ = std::fs::create_dir_all(game_dir.join(name));
+        let _ = std::fs::create_dir_all(root.join(name));
     }
     InstancePaths {
         version: install::resolve_version_dir(cfg, version_id)
             .to_string_lossy()
             .to_string(),
-        mods: game_dir.join("mods").to_string_lossy().to_string(),
-        resourcepacks: game_dir.join("resourcepacks").to_string_lossy().to_string(),
-        shaderpacks: game_dir.join("shaderpacks").to_string_lossy().to_string(),
-        saves: game_dir.join("saves").to_string_lossy().to_string(),
-        screenshots: game_dir.join("screenshots").to_string_lossy().to_string(),
-        game_dir: game_dir.to_string_lossy().to_string(),
+        mods: root.join("mods").to_string_lossy().to_string(),
+        resourcepacks: root.join("resourcepacks").to_string_lossy().to_string(),
+        shaderpacks: root.join("shaderpacks").to_string_lossy().to_string(),
+        saves: root.join("saves").to_string_lossy().to_string(),
+        screenshots: root.join("screenshots").to_string_lossy().to_string(),
+        game_dir: root.to_string_lossy().to_string(),
     }
 }
 
@@ -411,6 +426,7 @@ pub fn info(cfg: &Config, version_id: &str) -> Result<InstanceInfo> {
             meta.category.clone()
         },
         favorite: meta.favorite,
+        isolated: meta.isolated,
         game_version,
         loader,
         kind: merged.detail.kind.clone(),

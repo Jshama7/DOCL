@@ -314,6 +314,48 @@ export async function installCfFile(
   }
 }
 
+export async function importModpack(
+  path: string,
+  options: import("./api").ModpackImportOptions,
+  title: string
+) {
+  if (store.installingId) {
+    notify("已有下载任务正在进行", "err");
+    return null;
+  }
+  store.installingId = `整合包 · ${title}`;
+  store.progress = null;
+  store.lastProgress = null;
+  store.lastJobError = null;
+  store.lastJobTitle = `导入整合包 · ${title}`;
+  store.downloadPanel = "open";
+  primeProgress("install", `准备导入 ${title}…`);
+  try {
+    const result = await api.modpackImport(path, options);
+    await refreshInstalled();
+    await refreshConfig();
+    await refreshInstanceMetas();
+    notify(
+      result.failed.length
+        ? `已导入 ${result.display_name}，${result.failed.length} 个文件未能下载`
+        : `已导入 ${result.display_name}`
+    );
+    if (result.failed.length) {
+      store.lastJobError = result.failed.slice(0, 5).join("；");
+    }
+    return result;
+  } catch (err) {
+    store.lastJobError = String(err);
+    notify(`导入失败：${String(err)}`, "err");
+    return null;
+  } finally {
+    store.installingId = null;
+    window.setTimeout(() => {
+      if (!store.progress?.active) store.progress = null;
+    }, 800);
+  }
+}
+
 export async function installJava(major: number) {
   if (store.installingId) {
     notify("已有安装任务正在进行", "err");

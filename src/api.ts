@@ -136,6 +136,44 @@ export interface InstancePaths {
   game_dir: string;
 }
 
+export interface PackFilePreview {
+  path: string;
+  size: number;
+  url: string | null;
+  required: boolean;
+}
+
+export interface PackPreview {
+  format: string;
+  name: string;
+  version: string;
+  game_version: string;
+  loader: string;
+  loader_version: string | null;
+  detected_parent: string | null;
+  file_count: number;
+  download_bytes: number;
+  override_bytes: number;
+  files: PackFilePreview[];
+  warnings: string[];
+  suggested_id: string;
+}
+
+export interface ModpackImportOptions {
+  instance_name?: string | null;
+  instance_id?: string | null;
+  loader_version?: string | null;
+  parent_version?: string | null;
+  install_optional?: boolean;
+}
+
+export interface ModpackImportResult {
+  instance_id: string;
+  display_name: string;
+  installed_files: number;
+  failed: string[];
+}
+
 export interface CfProject {
   source: "curseforge" | "modrinth" | string;
   id: string;
@@ -244,6 +282,9 @@ export const api = {
     invoke<number>("instance_import_files", { versionId, kind, paths }),
   instancePaths: (versionId: string) =>
     invoke<InstancePaths>("instance_paths", { versionId }),
+  modpackInspect: (path: string) => invoke<PackPreview>("modpack_inspect", { path }),
+  modpackImport: (path: string, options: ModpackImportOptions) =>
+    invoke<ModpackImportResult>("modpack_import", { path, options }),
   cfSearch: (
     classId: number,
     query: string,

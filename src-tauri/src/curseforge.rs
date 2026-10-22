@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::download::{self, FileTask, ProgressState};
-use anyhow::{bail, Result};
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -300,14 +300,28 @@ pub async fn files(
     Ok(files)
 }
 
-fn subdir(kind: &str) -> Result<&'static str> {
-    match kind {
-        "mods" => Ok("mods"),
-        "resourcepacks" => Ok("resourcepacks"),
-        "shaderpacks" => Ok("shaderpacks"),
-        "datapacks" => Ok("datapacks"),
-        _ => bail!("该分类暂不支持直接安装：{kind}"),
+pub async fn file_download(
+    client: &reqwest::Client,
+    mod_id: i64,
+    file_id: i64,
+) -> Result<(String, String)> {
+    #[derive(Deserialize)]
+    struct CfFileResponse {
+        data: CfFile,
     }
+    let url = format!("{BASE}/mods/{mod_id}/files/{file_id}");
+    let response: CfFileResponse = download::get_json(client, &url, false).await?;
+    let file = response.data;
+    let download_url = file
+        .download_url
+        .filter(|url| !url.trim().is_empty())
+        .ok_or_else(|| anyhow!("作者未开放第三方下载"))?;
+    let name = if file.file_name.is_empty() {
+        format!("{mod_id}-{file_id}.jar")
+    } else {
+        file.file_name
+    };
+    Ok((download_url, name))
 }
 
 pub async fn install_file(
@@ -324,7 +338,7 @@ pub async fn install_file(
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
         .unwrap_or_else(|| "download.bin".to_string());
-    let dir = cfg.launch_dir(instance_id).join(subdir(kind)?);
+    let dir = crate::instance::content_dir(cfg, instance_id, kind)?;
     let dest = dir.join(&name);
     let task = FileTask {
         url: url.to_string(),

@@ -1,0 +1,1009 @@
+use crate::config::Config;
+use crate::curseforge;
+use crate::download::{self, FileTask, ProgressState};
+use crate::install;
+use crate::instance::{self, InstanceMeta};
+use anyhow::{anyhow, bail, Context, Result};
+use futures::stream::{self, StreamExt};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use tauri::AppHandle;
+use zip::ZipArchive;
+
+/* ---------- 预览 ---------- */
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackFilePreview {
+    pub path: String,
+    pub size: u64,
+    pub url: Option<String>,
+    pub required: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PackPreview {
+    pub format: String,
+    pub name: String,
+    pub version: String,
+    pub game_version: String,
+    pub loader: String,
+    pub loader_version: Option<String>,
+    pub detected_parent: Option<String>,
+    pub file_count: u32,
+    pub download_bytes: u64,
+    pub override_bytes: u64,
+    pub files: Vec<PackFilePreview>,
+    pub warnings: Vec<String>,
+    pub suggested_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct ImportOptions {
+    #[serde(default)]
+    pub instance_name: Option<String>,
+    #[serde(default)]
+    pub instance_id: Option<String>,
+    #[serde(default)]
+    pub loader_version: Option<String>,
+    #[serde(default)]
+    pub parent_version: Option<String>,
+    #[serde(default)]
+    pub install_optional: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportResult {
+    pub instance_id: String,
+    pub display_name: String,
+    pub installed_files: u32,
+    pub failed: Vec<String>,
+}
+
+/* ---------- CurseForge manifest ---------- */
+
+#[derive(Debug, Clone, Deserialize)]
+struct CfManifest {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    overrides: String,
+    minecraft: CfManifestMinecraft,
+    #[serde(default)]
+    files: Vec<CfManifestFile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfManifestMinecraft {
+    version: String,
+    #[serde(default)]
+    mod_loaders: Vec<CfManifestLoader>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CfManifestLoader {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    primary: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CfManifestFile {
+    #[serde(rename = "projectID", alias = "projectId")]
+    project_id: i64,
+    #[serde(rename = "fileID", alias = "fileId")]
+    file_id: i64,
+    #[serde(default)]
+    required: bool,
+}
+
+/* ---------- Modrinth index ---------- */
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MrIndex {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    version_id: String,
+    #[serde(default)]
+    dependencies: HashMap<String, String>,
+    #[serde(default)]
+    files: Vec<MrIndexFile>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct MrIndexFile {
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    downloads: Vec<String>,
+    #[serde(default)]
+    hashes: MrHashes,
+    #[serde(default)]
+    env: Option<MrEnv>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct MrHashes {
+    #[serde(default)]
+    sha1: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct MrEnv {
+    #[serde(default)]
+    client: String,
+}
+
+/* ---------- 内部解析结果 ---------- */
+
+enum SourceData {
+    Curse {
+        game_version: String,
+        loader: String,
+        loader_version: Option<String>,
+        overrides: String,
+        files: Vec<(i64, i64, bool)>,
+    },
+    Modrinth {
+        game_version: String,
+        loader: String,
+        loader_version: Option<String>,
+        files: Vec<(String, String, Option<String>, bool)>,
+    },
+    Generic {
+        prefix: String,
+        detected_parent: Option<String>,
+    },
+}
+
+struct ParsedPack {
+    preview: PackPreview,
+    source: SourceData,
+}
+
+fn open_zip(path: &str) -> Result<ZipArchive<std::fs::File>> {
+    let file = std::fs::File::open(path).with_context(|| format!("无法打开整合包：{path}"))?;
+    ZipArchive::new(file).context("压缩包损坏或格式不支持")
+}
+
+fn zip_names(archive: &mut ZipArchive<std::fs::File>) -> Vec<String> {
+    let mut names = Vec::new();
+    for index in 0..archive.len() {
+        if let Ok(entry) = archive.by_index(index) {
+            if !entry.is_dir() {
+                names.push(entry.name().to_string());
+            }
+        }
+    }
+    names
+}
+
+fn read_entry(archive: &mut ZipArchive<std::fs::File>, name: &str) -> Result<Vec<u8>> {
+    let mut entry = archive.by_name(name)?;
+    let mut buffer = Vec::new();
+    entry.read_to_end(&mut buffer)?;
+    Ok(buffer)
+}
+
+fn find_meta(names: &[String], file: &str) -> Option<String> {
+    names.iter().find(|name| *name == file).cloned().or_else(|| {
+        names
+            .iter()
+            .find(|name| name.ends_with(&format!("/{file}")) && name.matches('/').count() == 1)
+            .cloned()
+    })
+}
+
+fn slugify(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if ch.is_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+            out.push(ch);
+        } else if ch.is_whitespace() || ch == '/' || ch == '\\' {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches(['-', '.']).to_string();
+    if trimmed.is_empty() {
+        "pack".into()
+    } else {
+        trimmed.chars().take(48).collect()
+    }
+}
+
+fn detect_loader(id: &str) -> (String, Option<String>) {
+    let lower = id.to_lowercase();
+    for name in ["neoforge", "forge", "quilt", "fabric"] {
+        if lower.starts_with(name) {
+            let version = id.split_once('-').map(|(_, rest)| rest.to_string());
+            return (name.to_string(), version);
+        }
+    }
+    ("vanilla".into(), None)
+}
+
+fn parse_pack(path: &str) -> Result<ParsedPack> {
+    let mut archive = open_zip(path)?;
+    let names = zip_names(&mut archive);
+    let zip_name = Path::new(path)
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "整合包".into());
+
+    if let Some(manifest_name) = find_meta(&names, "manifest.json") {
+        let bytes = read_entry(&mut archive, &manifest_name)?;
+        let manifest: CfManifest =
+            serde_json::from_slice(&bytes).context("无法解析 CurseForge manifest.json")?;
+        let loader_entry = manifest
+            .minecraft
+            .mod_loaders
+            .iter()
+            .find(|loader| loader.primary)
+            .or_else(|| manifest.minecraft.mod_loaders.first());
+        let (loader, loader_version) = loader_entry
+            .map(|entry| detect_loader(&entry.id))
+            .unwrap_or_else(|| ("vanilla".into(), None));
+        let name = if manifest.name.is_empty() {
+            zip_name.clone()
+        } else {
+            manifest.name.clone()
+        };
+        let version = manifest.version.clone();
+        let suggested_id = slugify(&format!("{name}-{version}"));
+        let files: Vec<PackFilePreview> = manifest
+            .files
+            .iter()
+            .take(40)
+            .map(|file| PackFilePreview {
+                path: format!("mods/#{}-#{}", file.project_id, file.file_id),
+                size: 0,
+                url: None,
+                required: file.required,
+            })
+            .collect();
+        let mut warnings = Vec::new();
+        if loader_version.is_none() && loader != "vanilla" {
+            warnings.push("清单没有标明加载器版本，需要手动选择".into());
+        }
+        if manifest.files.is_empty() {
+            warnings.push("清单里没有可下载文件".into());
+        }
+        return Ok(ParsedPack {
+            preview: PackPreview {
+                format: "curseforge".into(),
+                name,
+                version,
+                game_version: manifest.minecraft.version.clone(),
+                loader: loader.clone(),
+                loader_version: loader_version.clone(),
+                detected_parent: None,
+                file_count: manifest.files.len() as u32,
+                download_bytes: 0,
+                override_bytes: 0,
+                files,
+                warnings,
+                suggested_id,
+            },
+            source: SourceData::Curse {
+                game_version: manifest.minecraft.version,
+                loader,
+                loader_version,
+                overrides: if manifest.overrides.is_empty() {
+                    "overrides".into()
+                } else {
+                    manifest.overrides
+                },
+                files: manifest
+                    .files
+                    .into_iter()
+                    .map(|file| (file.project_id, file.file_id, file.required))
+                    .collect(),
+            },
+        });
+    }
+
+    if let Some(index_name) = find_meta(&names, "modrinth.index.json") {
+        let bytes = read_entry(&mut archive, &index_name)?;
+        let index: MrIndex =
+            serde_json::from_slice(&bytes).context("无法解析 modrinth.index.json")?;
+        let game_version = index.dependencies.get("minecraft").cloned().unwrap_or_default();
+        let (loader, loader_version) = ["neoforge", "forge", "quilt-loader", "fabric-loader"]
+            .iter()
+            .find_map(|key| {
+                index
+                    .dependencies
+                    .get(*key)
+                    .map(|version| (key.replace("-loader", ""), Some(version.clone())))
+            })
+            .unwrap_or_else(|| ("vanilla".into(), None));
+        let name = if index.name.is_empty() {
+            zip_name.clone()
+        } else {
+            index.name.clone()
+        };
+        let mut warnings = Vec::new();
+        if game_version.is_empty() {
+            warnings.push("缺少 Minecraft 版本信息".into());
+        }
+        let mut files = Vec::new();
+        let mut tasks = Vec::new();
+        for file in index.files {
+            if file
+                .env
+                .as_ref()
+                .map(|env| env.client == "unsupported")
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            let url = file.downloads.first().cloned().unwrap_or_default();
+            let optional = file
+                .env
+                .as_ref()
+                .map(|env| env.client == "optional")
+                .unwrap_or(false);
+            if files.len() < 40 {
+                files.push(PackFilePreview {
+                    path: file.path.clone(),
+                    size: 0,
+                    url: if url.is_empty() { None } else { Some(url.clone()) },
+                    required: !optional,
+                });
+            }
+            tasks.push((
+                file.path,
+                url,
+                if file.hashes.sha1.is_empty() {
+                    None
+                } else {
+                    Some(file.hashes.sha1)
+                },
+                optional,
+            ));
+        }
+        let suggested_id = slugify(&format!("{name}-{}", index.version_id));
+        return Ok(ParsedPack {
+            preview: PackPreview {
+                format: "mrpack".into(),
+                name,
+                version: index.version_id,
+                game_version: game_version.clone(),
+                loader: loader.clone(),
+                loader_version: loader_version.clone(),
+                detected_parent: None,
+                file_count: tasks.len() as u32,
+                download_bytes: 0,
+                override_bytes: 0,
+                files,
+                warnings,
+                suggested_id,
+            },
+            source: SourceData::Modrinth {
+                game_version,
+                loader,
+                loader_version,
+                files: tasks,
+            },
+        });
+    }
+
+    // 通用 ZIP
+    let prefix = generic_prefix(&names);
+    let mut file_count = 0u32;
+    let mut override_bytes = 0u64;
+    let mut detected = None;
+    for name in &names {
+        let rel = name.strip_prefix(&prefix).unwrap_or(name);
+        if let Some(rest) = rel.strip_prefix("versions/") {
+            let parts: Vec<&str> = rest.split('/').collect();
+            if parts.len() == 2 && parts[1] == format!("{}.json", parts[0]) {
+                if let Ok(bytes) = read_entry(&mut archive, name) {
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                        let id = json
+                            .get("id")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or(parts[0]);
+                        let parent = json
+                            .get("inheritsFrom")
+                            .and_then(|value| value.as_str())
+                            .unwrap_or(id);
+                        detected = Some(parent.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        if excluded_generic(rel) {
+            continue;
+        }
+        file_count += 1;
+        if let Ok(entry) = archive.by_name(name) {
+            override_bytes += entry.size();
+        }
+    }
+    let warnings = vec!["通用压缩包没有加载器信息，需要选择父版本".to_string()];
+    let display_name = zip_name;
+    Ok(ParsedPack {
+        preview: PackPreview {
+            format: "generic".into(),
+            name: display_name.clone(),
+            version: String::new(),
+            game_version: detected.clone().unwrap_or_default(),
+            loader: "vanilla".into(),
+            loader_version: None,
+            detected_parent: detected.clone(),
+            file_count,
+            download_bytes: 0,
+            override_bytes,
+            files: Vec::new(),
+            warnings,
+            suggested_id: slugify(&display_name),
+        },
+        source: SourceData::Generic {
+            prefix,
+            detected_parent: detected,
+        },
+    })
+}
+
+pub fn inspect(path: &str) -> Result<PackPreview> {
+    Ok(parse_pack(path)?.preview)
+}
+
+fn generic_prefix(names: &[String]) -> String {
+    if let Some(name) = names
+        .iter()
+        .find(|name| name.to_lowercase().contains(".minecraft/"))
+    {
+        let lower = name.to_lowercase();
+        if let Some(index) = lower.find(".minecraft/") {
+            return name[..index + ".minecraft/".len()].to_string();
+        }
+    }
+    if let Some(first) = names.first() {
+        if let Some((segment, _)) = first.split_once('/') {
+            if !matches!(
+                segment,
+                "mods" | "config" | "versions" | "resourcepacks" | "shaderpacks" | "saves" | "defaultconfigs"
+            ) && names.iter().all(|name| name.starts_with(&format!("{segment}/")))
+            {
+                return format!("{segment}/");
+            }
+        }
+    }
+    String::new()
+}
+
+fn excluded_generic(rel: &str) -> bool {
+    let lower = rel.to_lowercase();
+    lower.starts_with("logs/")
+        || lower.starts_with("crash-reports/")
+        || lower.starts_with("screenshots/")
+        || lower.starts_with("versions/")
+        || lower == "usercache.json"
+        || lower.starts_with("launcher_profiles")
+        || lower.ends_with("session.lock")
+        || lower.ends_with(".part")
+}
+
+fn safe_relative(path: &str) -> Option<PathBuf> {
+    let mut out = PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(value) => out.push(value),
+            Component::CurDir => {}
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
+fn copy_dir_all(source: &Path, dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(source)?.flatten() {
+        let path = entry.path();
+        let target = dest.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_all(&path, &target)?;
+        } else {
+            std::fs::copy(&path, &target)?;
+        }
+    }
+    Ok(())
+}
+
+fn unique_instance_id(cfg: &Config, base: &str) -> String {
+    let versions = cfg.game_root().join("versions");
+    let mut candidate = base.to_string();
+    let mut index = 2;
+    while versions.join(&candidate).exists() {
+        candidate = format!("{base}-{index}");
+        index += 1;
+    }
+    candidate
+}
+
+fn write_instance_json(cfg: &Config, id: &str, parent: &str) -> Result<PathBuf> {
+    let dir = cfg.game_root().join("versions").join(id);
+    std::fs::create_dir_all(&dir)?;
+    let json = serde_json::json!({
+        "id": id,
+        "inheritsFrom": parent,
+        "type": "release",
+    });
+    std::fs::write(
+        dir.join(format!("{id}.json")),
+        serde_json::to_vec_pretty(&json)?,
+    )?;
+    Ok(dir)
+}
+
+async fn ensure_vanilla(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &Config,
+    game_version: &str,
+    progress: Arc<ProgressState>,
+) -> Result<()> {
+    if install::list_installed(cfg)
+        .iter()
+        .any(|item| item.id == game_version)
+    {
+        return Ok(());
+    }
+    progress.set_message(format!("正在安装原版 {game_version}…"));
+    install::install_version(app, client, cfg, game_version, progress).await?;
+    Ok(())
+}
+
+fn normalize_loader_version(
+    game_version: &str,
+    loader: &str,
+    version: Option<String>,
+) -> Option<String> {
+    version.map(|value| {
+        let prefix = format!("{game_version}-");
+        if matches!(loader, "forge" | "neoforge") && value.starts_with(&prefix) {
+            value[prefix.len()..].to_string()
+        } else {
+            value
+        }
+    })
+}
+
+async fn ensure_loader(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &Config,
+    game_version: &str,
+    loader: &str,
+    loader_version: Option<&str>,
+    progress: Arc<ProgressState>,
+) -> Result<String> {
+    if loader == "vanilla" || loader.is_empty() {
+        return Ok(game_version.to_string());
+    }
+    progress.set_message(format!("正在安装 {loader}…"));
+    let version =
+        install::install_loader(app, client, cfg, game_version, loader, loader_version, progress)
+            .await?;
+    Ok(version.id)
+}
+
+fn extract_entries(
+    path: &str,
+    prefix: &str,
+    dest: &Path,
+    generic: bool,
+    progress: &Arc<ProgressState>,
+) -> Result<u32> {
+    let mut archive = open_zip(path)?;
+    let mut total = 0u64;
+    for index in 0..archive.len() {
+        let entry = archive.by_index(index)?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().to_string();
+        let relative = if prefix.is_empty() {
+            name.as_str()
+        } else {
+            match name.strip_prefix(prefix) {
+                Some(rest) => rest,
+                None => continue,
+            }
+        };
+        if relative.is_empty() || (generic && excluded_generic(relative)) {
+            continue;
+        }
+        total += 1;
+    }
+
+    progress.files_total.store(total, Ordering::Relaxed);
+    progress.files_done.store(0, Ordering::Relaxed);
+    progress.bytes_total.store(0, Ordering::Relaxed);
+    progress.active.store(true, Ordering::Relaxed);
+
+    let mut written = 0u32;
+    for index in 0..archive.len() {
+        if progress.is_cancelled() {
+            bail!("导入已取消");
+        }
+        let mut entry = archive.by_index(index)?;
+        if entry.is_dir() {
+            continue;
+        }
+        let name = entry.name().to_string();
+        let relative = if prefix.is_empty() {
+            name.as_str()
+        } else {
+            match name.strip_prefix(prefix) {
+                Some(rest) => rest,
+                None => continue,
+            }
+        };
+        if relative.is_empty() || (generic && excluded_generic(relative)) {
+            continue;
+        }
+        let Some(relative_path) = safe_relative(relative) else {
+            continue;
+        };
+        let target = dest.join(relative_path);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut out = std::fs::File::create(&target)?;
+        std::io::copy(&mut entry, &mut out)?;
+        written += 1;
+        progress.files_done.fetch_add(1, Ordering::Relaxed);
+        progress
+            .bytes_done
+            .fetch_add(entry.size(), Ordering::Relaxed);
+    }
+    Ok(written)
+}
+
+pub async fn import(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &Config,
+    path: &str,
+    options: &ImportOptions,
+    progress: Arc<ProgressState>,
+) -> Result<ImportResult> {
+    progress.set_message("正在解析整合包…");
+    let parsed = parse_pack(path)?;
+    let preview = &parsed.preview;
+
+    let display_name = options
+        .instance_name
+        .clone()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| preview.name.clone());
+    let base_id = options
+        .instance_id
+        .clone()
+        .map(|value| slugify(&value))
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| preview.suggested_id.clone());
+    let instance_id = unique_instance_id(cfg, &base_id);
+
+    let mut failed: Vec<String> = Vec::new();
+    let mut installed_files = 0u32;
+
+    let (parent, game_version, loader) = match &parsed.source {
+        SourceData::Curse {
+            game_version,
+            loader,
+            loader_version,
+            files,
+            overrides,
+        } => {
+            ensure_vanilla(app, client, cfg, game_version, progress.clone()).await?;
+            let requested = normalize_loader_version(
+                game_version,
+                loader,
+                options
+                    .loader_version
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| loader_version.clone()),
+            );
+            let parent = ensure_loader(
+                app,
+                client,
+                cfg,
+                game_version,
+                loader,
+                requested.as_deref(),
+                progress.clone(),
+            )
+            .await?;
+
+            let dir = write_instance_json(cfg, &instance_id, &parent)?;
+            instance::save(
+                cfg,
+                &instance_id,
+                &InstanceMeta {
+                    display_name: Some(display_name.clone()),
+                    description: format!("从 CurseForge 整合包导入 · {game_version} · {loader}"),
+                    icon: "grass".into(),
+                    category: "modpack".into(),
+                    isolated: Some(true),
+                    ..Default::default()
+                },
+            )?;
+            let _ = dir;
+
+            let natives = install::natives_dir(cfg, &parent);
+            if natives.exists() {
+                let target = install::natives_dir(cfg, &instance_id);
+                copy_dir_all(&natives, &target)?;
+            }
+
+            // 解析每个文件的下载地址
+            let specs: Vec<(i64, i64, bool)> = files
+                .iter()
+                .cloned()
+                .filter(|(_, _, required)| *required || options.install_optional)
+                .collect();
+            progress.set_message(format!("正在获取 {} 个文件地址…", specs.len()));
+            let client_ref = client.clone();
+            let mut tasks: Vec<FileTask> = Vec::new();
+            let results: Vec<Result<Option<(String, String)>>> =
+                stream::iter(specs.into_iter().map(|(project_id, file_id, required)| {
+                    let client = client_ref.clone();
+                    async move {
+                        match curseforge::file_download(&client, project_id, file_id).await {
+                            Ok(pair) => Ok(Some(pair)),
+                            Err(err) => {
+                                if required {
+                                    Err(err)
+                                } else {
+                                    Ok(None)
+                                }
+                            }
+                        }
+                    }
+                }))
+                .buffer_unordered(8)
+                .collect()
+                .await;
+
+            let root = instance::game_dir(cfg, &instance_id);
+            let mods_dir = root.join("mods");
+            std::fs::create_dir_all(&mods_dir)?;
+            for result in results {
+                match result {
+                    Ok(Some((url, name))) => {
+                        let file_name = Path::new(&name)
+                            .file_name()
+                            .map(|value| value.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "mod.jar".into());
+                        tasks.push(FileTask {
+                            url,
+                            dest: mods_dir.join(file_name),
+                            sha1: None,
+                            size: 0,
+                            label: name,
+                        });
+                    }
+                    Ok(None) => failed.push("可选文件下载地址缺失".into()),
+                    Err(err) => failed.push(err.to_string()),
+                }
+            }
+            if !tasks.is_empty() {
+                progress.set_message("正在下载整合包内容…");
+                let count = tasks.len() as u32;
+                download::run_tasks(
+                    app,
+                    client,
+                    tasks,
+                    cfg.concurrency.clamp(1, 32) as usize,
+                    false,
+                    progress.clone(),
+                )
+                .await?;
+                installed_files += count;
+            }
+
+            progress.set_message("正在解压整合包覆盖文件…");
+            let path_owned = path.to_string();
+            let overrides_owned = overrides.clone();
+            let dest = root.clone();
+            let progress_clone = progress.clone();
+            tokio::task::spawn_blocking(move || {
+                extract_entries(
+                    &path_owned,
+                    &format!("{overrides_owned}/"),
+                    &dest,
+                    false,
+                    &progress_clone,
+                )
+            })
+            .await??;
+
+            (parent, game_version.clone(), loader.clone())
+        }
+
+        SourceData::Modrinth {
+            game_version,
+            loader,
+            loader_version,
+            files,
+        } => {
+            ensure_vanilla(app, client, cfg, game_version, progress.clone()).await?;
+            let requested = normalize_loader_version(
+                game_version,
+                loader,
+                options
+                    .loader_version
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .or_else(|| loader_version.clone()),
+            );
+            let parent = ensure_loader(
+                app,
+                client,
+                cfg,
+                game_version,
+                loader,
+                requested.as_deref(),
+                progress.clone(),
+            )
+            .await?;
+
+            write_instance_json(cfg, &instance_id, &parent)?;
+            instance::save(
+                cfg,
+                &instance_id,
+                &InstanceMeta {
+                    display_name: Some(display_name.clone()),
+                    description: format!("从 Modrinth 整合包导入 · {game_version} · {loader}"),
+                    icon: "grass".into(),
+                    category: "modpack".into(),
+                    isolated: Some(true),
+                    ..Default::default()
+                },
+            )?;
+            let natives = install::natives_dir(cfg, &parent);
+            if natives.exists() {
+                copy_dir_all(&natives, &install::natives_dir(cfg, &instance_id))?;
+            }
+
+            let root = instance::game_dir(cfg, &instance_id);
+            let mut tasks = Vec::new();
+            for (file_path, url, sha1, optional) in files {
+                if url.is_empty() {
+                    if !optional || options.install_optional {
+                        failed.push(format!("缺少下载地址：{file_path}"));
+                    }
+                    continue;
+                }
+                if *optional && !options.install_optional {
+                    continue;
+                }
+                let Some(relative) = safe_relative(file_path) else {
+                    continue;
+                };
+                tasks.push(FileTask {
+                    url: url.clone(),
+                    dest: root.join(relative),
+                    sha1: sha1.clone(),
+                    size: 0,
+                    label: file_path.clone(),
+                });
+            }
+            if !tasks.is_empty() {
+                progress.set_message("正在下载整合包内容…");
+                let count = tasks.len() as u32;
+                download::run_tasks(
+                    app,
+                    client,
+                    tasks,
+                    cfg.concurrency.clamp(1, 32) as usize,
+                    false,
+                    progress.clone(),
+                )
+                .await?;
+                installed_files += count;
+            }
+
+            progress.set_message("正在解压整合包覆盖文件…");
+            let path_owned = path.to_string();
+            let dest = root.clone();
+            for prefix in ["overrides/", "client-overrides/"] {
+                let prefix_owned = prefix.to_string();
+                let dest_clone = dest.clone();
+                let progress_clone = progress.clone();
+                let path_clone = path_owned.clone();
+                tokio::task::spawn_blocking(move || {
+                    extract_entries(&path_clone, &prefix_owned, &dest_clone, false, &progress_clone)
+                })
+                .await??;
+            }
+
+            (parent, game_version.clone(), loader.clone())
+        }
+
+        SourceData::Generic {
+            prefix,
+            detected_parent,
+        } => {
+            let parent = options
+                .parent_version
+                .clone()
+                .filter(|value| !value.trim().is_empty())
+                .or_else(|| {
+                    detected_parent
+                        .clone()
+                        .filter(|value| install::list_installed(cfg).iter().any(|item| &item.id == value))
+                })
+                .ok_or_else(|| anyhow!("通用整合包需要选择一个已安装的父版本"))?;
+            if !install::list_installed(cfg)
+                .iter()
+                .any(|item| item.id == parent)
+            {
+                bail!("父版本 {parent} 尚未安装");
+            }
+
+            write_instance_json(cfg, &instance_id, &parent)?;
+            instance::save(
+                cfg,
+                &instance_id,
+                &InstanceMeta {
+                    display_name: Some(display_name.clone()),
+                    description: "从本地压缩包导入".into(),
+                    icon: "grass".into(),
+                    category: "modpack".into(),
+                    isolated: Some(true),
+                    ..Default::default()
+                },
+            )?;
+            let natives = install::natives_dir(cfg, &parent);
+            if natives.exists() {
+                copy_dir_all(&natives, &install::natives_dir(cfg, &instance_id))?;
+            }
+
+            progress.set_message("正在解压整合包文件…");
+            let path_owned = path.to_string();
+            let prefix_owned = prefix.clone();
+            let dest = instance::game_dir(cfg, &instance_id);
+            let progress_clone = progress.clone();
+            let written = tokio::task::spawn_blocking(move || {
+                extract_entries(
+                    &path_owned,
+                    &prefix_owned,
+                    &dest,
+                    true,
+                    &progress_clone,
+                )
+            })
+            .await??;
+            installed_files += written;
+
+            let game_version = install::instance_context(cfg, &parent)
+                .map(|(version, _)| version)
+                .unwrap_or_else(|_| parent.clone());
+            (parent, game_version, "vanilla".to_string())
+        }
+    };
+
+    let _ = (parent, game_version, loader);
+
+    Ok(ImportResult {
+        instance_id,
+        display_name,
+        installed_files,
+        failed,
+    })
+}

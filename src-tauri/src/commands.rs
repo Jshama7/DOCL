@@ -7,6 +7,7 @@ use crate::instance::{self, InstanceFile, InstanceInfo, InstanceMeta, InstancePa
 use crate::java::{self, JavaInfo};
 use crate::launch;
 use crate::models::*;
+use crate::modpack;
 use crate::skins;
 use crate::AppState;
 use std::sync::atomic::Ordering;
@@ -346,6 +347,49 @@ pub fn instance_paths(
 ) -> InstancePaths {
     let cfg = state.config.lock().unwrap().clone();
     instance::paths(&cfg, &version_id)
+}
+
+#[tauri::command]
+pub fn modpack_inspect(path: String) -> CmdResult<modpack::PackPreview> {
+    modpack::inspect(&path).map_err(err)
+}
+
+#[tauri::command]
+pub async fn modpack_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    options: modpack::ImportOptions,
+) -> CmdResult<modpack::ImportResult> {
+    let cfg = state.config.lock().unwrap().clone();
+    {
+        let guard = state.progress.lock().unwrap();
+        if let Some(progress) = guard.as_ref() {
+            if progress.active.load(Ordering::Relaxed) {
+                return Err("已有下载任务正在进行".into());
+            }
+        }
+    }
+    let progress = ProgressState::new("install");
+    progress.set_message("准备导入整合包…");
+    *state.progress.lock().unwrap() = Some(progress.clone());
+
+    let result = modpack::import(&app, &state.client, &cfg, &path, &options, progress.clone()).await;
+
+    progress.active.store(false, Ordering::Relaxed);
+    download::emit_now(&app, &progress);
+    *state.progress.lock().unwrap() = None;
+
+    match result {
+        Ok(imported) => {
+            let mut current = cfg;
+            current.selected_version = Some(imported.instance_id.clone());
+            let _ = config::save(&current);
+            *state.config.lock().unwrap() = current;
+            Ok(imported)
+        }
+        Err(error) => Err(err(error)),
+    }
 }
 
 #[derive(serde::Serialize)]

@@ -71,7 +71,7 @@ pub fn build(
 ) -> Result<(PathBuf, Vec<String>, Vec<String>)> {
     let detail = &merged.detail;
     let game_root = cfg.game_root();
-    let game_dir = cfg.launch_dir(version_id);
+    let game_dir = crate::instance::game_dir(cfg, version_id);
     std::fs::create_dir_all(&game_dir)?;
 
     let natives_dir = install::natives_dir(cfg, version_id);
@@ -219,7 +219,7 @@ pub fn spawn(
     account: &Account,
 ) -> Result<u32> {
     let merged = install::resolve_detail(cfg, version_id)?;
-    let game_dir = cfg.launch_dir(version_id);
+    let game_dir = crate::instance::game_dir(cfg, version_id);
     let (java_path, args, _) = build(cfg, &merged, version_id, account)?;
 
     let _ = app.emit(

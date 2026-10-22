@@ -281,8 +281,6 @@ function useAutoJava() {
     <header class="page-head">
       <div>
         <span class="eyebrow">DOCL / SETTINGS</span>
-        <h1 class="page-title">设置</h1>
-        <p class="page-sub">启动参数、Java 运行时与下载策略</p>
       </div>
       <WoodButton variant="primary" sheen :disabled="saving" @click="save">
         <AppIcon name="check" :size="15" />

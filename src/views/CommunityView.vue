@@ -575,10 +575,6 @@ function refresh() {
           加载更多（还有 {{ Math.max(total - items.length, 0) }} 个）
         </WoodButton>
       </div>
-
-      <p v-if="items.length" class="muted small footnote">
-        共 {{ total }} 个结果；安装时会把文件写入实例的 {{ kind }} 目录。
-      </p>
     </template>
   </div>
 </template>
@@ -934,10 +930,6 @@ function refresh() {
 
 .cf-file__hint {
   font-size: 11px;
-}
-
-.footnote {
-  padding-left: 2px;
 }
 
 @media (max-width: 1220px) {

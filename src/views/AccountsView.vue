@@ -171,8 +171,6 @@ onMounted(() => {
     <header class="page-head">
       <div>
         <span class="eyebrow">DOCL / ACCOUNTS</span>
-        <h1 class="page-title">账号</h1>
-        <p class="page-sub">切换账号、查看皮肤、编辑并保存自己的角色外观</p>
       </div>
       <span class="tag" :class="{ 'tag--grass': !!selectedAccount }">
         当前 {{ selectedAccount?.name ?? "未登录" }}

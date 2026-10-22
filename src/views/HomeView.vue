@@ -91,8 +91,6 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
     <header class="page-head">
       <div>
         <span class="eyebrow">DOCL / LAUNCHPAD</span>
-        <h1 class="page-title">今天想玩点什么</h1>
-        <p class="page-sub">版本、账号与运行状态，一眼看完</p>
       </div>
       <span class="tag" :class="{ 'tag--grass': !!account }">
         {{ account ? (account.kind === "microsoft" ? "微软账号" : "离线账号") : "未登录" }}

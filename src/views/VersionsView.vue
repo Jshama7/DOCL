@@ -60,8 +60,6 @@ function categoryLabel(value?: string) {
     <header class="page-head">
       <div>
         <span class="eyebrow">DOCL / LIBRARY</span>
-        <h1 class="page-title">版本管理</h1>
-        <p class="page-sub">已安装的原版客户端，支持启动、切换与删除</p>
       </div>
       <div class="row">
         <IconButton icon="folder" label="打开游戏目录" :size="32" @click="openDir" />

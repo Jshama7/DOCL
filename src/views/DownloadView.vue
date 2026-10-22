@@ -179,8 +179,6 @@ function launchLoader(id: string | null) {
     <header class="page-head">
       <div>
         <span class="eyebrow">DOCL / CATALOG</span>
-        <h1 class="page-title">下载</h1>
-        <p class="page-sub">原版客户端与加载器，镜像加速与 SHA1 校验</p>
       </div>
       <IconButton
         v-if="category === 'vanilla' && !detailId"
@@ -216,11 +214,6 @@ function launchLoader(id: string | null) {
           <AppIcon :name="item.icon" :size="17" />
           <span>{{ item.label }}</span>
         </button>
-
-        <div class="dl-side__hint">
-          社区资源来自 CurseForge 与 Modrinth，可切换来源；下载会按当前实例的游戏版本与加载器自动筛选。
-          原版版本详情里可以继续添加 Fabric / Quilt 加载器。
-        </div>
       </aside>
 
       <div class="dl-main">
@@ -439,10 +432,6 @@ function launchLoader(id: string | null) {
               </WoodButton>
             </div>
           </section>
-
-          <p class="muted small footnote">
-            点击任意版本进入详情，可在原版之上添加 Fabric / Quilt 加载器；镜像连续失败会自动切换官方源。
-          </p>
         </template>
       </div>
     </div>
@@ -502,15 +491,6 @@ function launchLoader(id: string | null) {
   color: var(--muted);
   padding: 14px 11px 6px;
   text-transform: uppercase;
-}
-
-.dl-side__hint {
-  margin-top: 14px;
-  padding: 10px 11px;
-  border-top: 1px dashed var(--line);
-  color: var(--muted);
-  font-size: 11.5px;
-  line-height: 1.55;
 }
 
 .dl-main {
@@ -902,10 +882,6 @@ function launchLoader(id: string | null) {
   display: flex;
   flex-direction: column;
   gap: 10px;
-}
-
-.footnote {
-  padding-left: 2px;
 }
 
 @media (max-width: 1080px) {

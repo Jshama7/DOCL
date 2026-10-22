@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
-  "url": "https://github.com/dawo4/DOCL/releases/download/v1.0.0/DOCL_1.0.0_x64-setup.exe",
-  "notes": "DOCL 首个正式版本：版本管理、下载中心、多人联机、皮肤库、崩溃诊断、自更新。"
+  "version": "1.1.0",
+  "url": "https://github.com/dawo4/DOCL/releases/download/v1.1.0/DOCL_1.1.0_x64-setup.exe",
+  "notes": "更新清单地址可选：国内加速（jsDelivr）、GitHub 原地址、自定义；默认国内加速。"
 }

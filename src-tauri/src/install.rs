@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::download::{self, FileTask, ProgressState};
 use crate::models::*;
 use anyhow::{anyhow, bail, Context, Result};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::copy;
 use std::path::{Path, PathBuf};
@@ -42,14 +42,15 @@ pub fn list_installed(cfg: &Config) -> Vec<InstalledVersion> {
         if !json_path.exists() {
             continue;
         }
-        let detail = std::fs::read(&json_path)
-            .ok()
-            .and_then(|b| serde_json::from_slice::<VersionDetail>(&b).ok());
-        let (kind, java_major) = match &detail {
-            Some(d) => (d.kind.clone(), d.required_java()),
+        let resolved = resolve_detail(cfg, &id).ok();
+        let (kind, java_major) = match &resolved {
+            Some(merged) => (merged.detail.kind.clone(), merged.detail.required_java()),
             None => ("unknown".into(), 8),
         };
-        let jar_path = entry.path().join(format!("{id}.jar"));
+        let jar_path = match resolved.as_ref().and_then(|m| m.jar_id.as_ref()) {
+            Some(jar_id) => dir.join(jar_id).join(format!("{jar_id}.jar")),
+            None => entry.path().join(format!("{id}.jar")),
+        };
         let (jar_size, has_jar, modified) = match std::fs::metadata(&jar_path) {
             Ok(meta) => (
                 meta.len(),
@@ -174,6 +175,20 @@ fn library_artifact(lib: &Library) -> Option<(DownloadRef, String)> {
                 .unwrap_or_default();
             return Some((artifact.clone(), path));
         }
+    }
+    // Fabric / Quilt：name + url 形式
+    if let Some(base) = &lib.url {
+        let path = maven_path(&lib.name)?;
+        let url = format!("{}/{}", base.trim_end_matches('/'), path);
+        return Some((
+            DownloadRef {
+                sha1: lib.sha1.clone().unwrap_or_default(),
+                size: lib.size.unwrap_or(0),
+                url,
+                path: Some(path.clone()),
+            },
+            path,
+        ));
     }
     None
 }
@@ -456,6 +471,103 @@ pub fn read_installed_detail(cfg: &Config, version_id: &str) -> Result<VersionDe
     Ok(detail)
 }
 
+#[derive(Debug, Clone)]
+pub struct MergedDetail {
+    pub detail: VersionDetail,
+    pub jar_id: Option<String>,
+    /// 子版本 → 根版本
+    pub chain: Vec<String>,
+}
+
+fn merge_child(base: &mut VersionDetail, child: &VersionDetail) {
+    if !child.kind.is_empty() {
+        base.kind = child.kind.clone();
+    }
+    if let Some(main_class) = &child.main_class {
+        base.main_class = Some(main_class.clone());
+    }
+    if let Some(index) = &child.asset_index {
+        base.asset_index = Some(index.clone());
+    }
+    if let Some(downloads) = &child.downloads {
+        base.downloads = Some(downloads.clone());
+    }
+    if let Some(java) = &child.java_version {
+        base.java_version = Some(java.clone());
+    }
+    if let Some(logging) = &child.logging {
+        base.logging = Some(logging.clone());
+    }
+    if let Some(assets) = &child.assets {
+        base.assets = Some(assets.clone());
+    }
+
+    for lib in &child.libraries {
+        if let Some(pos) = base.libraries.iter().position(|l| l.name == lib.name) {
+            base.libraries[pos] = lib.clone();
+        } else {
+            base.libraries.push(lib.clone());
+        }
+    }
+
+    let mut args = base.arguments.take().unwrap_or(Arguments {
+        game: Vec::new(),
+        jvm: Vec::new(),
+    });
+    if let Some(child_args) = &child.arguments {
+        args.game.extend(child_args.game.clone());
+        args.jvm.extend(child_args.jvm.clone());
+    }
+    if !args.game.is_empty() || !args.jvm.is_empty() {
+        base.arguments = Some(args);
+    }
+    if base.minecraft_arguments.is_none() {
+        base.minecraft_arguments = child.minecraft_arguments.clone();
+    }
+}
+
+pub fn resolve_detail(cfg: &Config, version_id: &str) -> Result<MergedDetail> {
+    let mut chain: Vec<VersionDetail> = Vec::new();
+    let mut visited: Vec<String> = Vec::new();
+    let mut current = Some(version_id.to_string());
+    let mut jar_id: Option<String> = None;
+
+    while let Some(id) = current {
+        if visited.contains(&id) {
+            bail!("版本继承出现循环：{id}");
+        }
+        visited.push(id.clone());
+        let detail = read_installed_detail(cfg, &id)?;
+        if jar_id.is_none()
+            && detail
+                .downloads
+                .as_ref()
+                .and_then(|d| d.client.as_ref())
+                .is_some()
+        {
+            jar_id = Some(id.clone());
+        }
+        current = detail.inherits_from.clone();
+        chain.push(detail);
+    }
+
+    let mut merged = chain
+        .last()
+        .cloned()
+        .ok_or_else(|| anyhow!("版本 {version_id} 内容为空"))?;
+    for child in chain.iter().rev().skip(1) {
+        merge_child(&mut merged, child);
+    }
+    merged.id = version_id.to_string();
+    merged.inherits_from = None;
+    let ids = chain.into_iter().map(|d| d.id).collect();
+    Ok(MergedDetail {
+        detail: merged,
+        jar_id,
+        chain: ids,
+    })
+}
+
 pub fn library_file_paths(cfg: &Config, detail: &VersionDetail) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     for lib in &detail.libraries {
@@ -475,14 +587,20 @@ pub fn library_file_paths(cfg: &Config, detail: &VersionDetail) -> Vec<PathBuf> 
     paths
 }
 
-pub fn merged_classpath_entries(cfg: &Config, detail: &VersionDetail) -> Vec<PathBuf> {
+pub fn merged_classpath_entries(
+    cfg: &Config,
+    detail: &VersionDetail,
+    jar_id: Option<&str>,
+) -> Vec<PathBuf> {
     let mut entries = library_file_paths(cfg, detail);
-    entries.push(
-        cfg.game_root()
-            .join("versions")
-            .join(&detail.id)
-            .join(format!("{}.jar", detail.id)),
-    );
+    if let Some(jar) = jar_id {
+        entries.push(
+            cfg.game_root()
+                .join("versions")
+                .join(jar)
+                .join(format!("{jar}.jar")),
+        );
+    }
     entries
 }
 
@@ -500,4 +618,262 @@ pub fn resolve_version_dir(cfg: &Config, version_id: &str) -> PathBuf {
 
 pub fn natives_dir(cfg: &Config, version_id: &str) -> PathBuf {
     resolve_version_dir(cfg, version_id).join("natives")
+}
+
+/* ---------- 模组加载器 ---------- */
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LoaderOption {
+    pub loader: String,
+    pub label: String,
+    pub version: Option<String>,
+    pub installed: bool,
+    pub installed_id: Option<String>,
+    pub supported: bool,
+    pub note: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FabricLoaderEntry {
+    loader: FabricLoaderVersion,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct FabricLoaderVersion {
+    version: String,
+    #[serde(default)]
+    stable: bool,
+}
+
+fn loader_list_url(loader: &str, game_version: &str) -> Option<String> {
+    match loader {
+        "fabric" => Some(format!(
+            "https://meta.fabricmc.net/v2/versions/loader/{game_version}"
+        )),
+        "quilt" => Some(format!(
+            "https://meta.quiltmc.org/v3/versions/loader/{game_version}"
+        )),
+        _ => None,
+    }
+}
+
+fn loader_profile_url(loader: &str, game_version: &str, loader_version: &str) -> Option<String> {
+    match loader {
+        "fabric" => Some(format!(
+            "https://meta.fabricmc.net/v2/versions/loader/{game_version}/{loader_version}/profile/json"
+        )),
+        "quilt" => Some(format!(
+            "https://meta.quiltmc.org/v3/versions/loader/{game_version}/{loader_version}/profile/json"
+        )),
+        _ => None,
+    }
+}
+
+async fn pick_loader_version(
+    client: &reqwest::Client,
+    cfg: &Config,
+    loader: &str,
+    game_version: &str,
+) -> Result<String> {
+    let url = loader_list_url(loader, game_version)
+        .ok_or_else(|| anyhow!("不支持的加载器：{loader}"))?;
+    let list: Vec<FabricLoaderEntry> =
+        download::get_json(client, &url, cfg.use_mirror()).await?;
+    let stable = list.iter().find(|entry| entry.loader.stable);
+    let pick = stable.or_else(|| list.first());
+    pick.map(|entry| entry.loader.version.clone())
+        .ok_or_else(|| anyhow!("{loader} 没有适配 {game_version} 的加载器版本"))
+}
+
+fn installed_loaders(cfg: &Config, game_version: &str) -> Vec<(String, String)> {
+    let dir = cfg.game_root().join("versions");
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return result;
+    };
+    for entry in entries.flatten() {
+        let id = entry.file_name().to_string_lossy().to_string();
+        let json = entry.path().join(format!("{id}.json"));
+        let Ok(bytes) = std::fs::read(&json) else {
+            continue;
+        };
+        let Ok(detail) = serde_json::from_slice::<VersionDetail>(&bytes) else {
+            continue;
+        };
+        if detail.inherits_from.as_deref() != Some(game_version) {
+            continue;
+        }
+        let loader = if id.starts_with("fabric-loader") {
+            "fabric"
+        } else if id.starts_with("quilt-loader") {
+            "quilt"
+        } else {
+            continue;
+        };
+        result.push((loader.to_string(), id));
+    }
+    result
+}
+
+pub async fn loader_options(
+    client: &reqwest::Client,
+    cfg: &Config,
+    game_version: &str,
+) -> Vec<LoaderOption> {
+    let installed = installed_loaders(cfg, game_version);
+    let loaders = [
+        ("fabric", "Fabric", true),
+        ("quilt", "Quilt", true),
+        ("forge", "Forge", false),
+        ("neoforge", "NeoForge", false),
+        ("optifine", "OptiFine", false),
+    ];
+    let mut result = Vec::new();
+    for (loader, label, supported) in loaders {
+        let version = if supported {
+            pick_loader_version(client, cfg, loader, game_version)
+                .await
+                .ok()
+        } else {
+            None
+        };
+        let found = installed.iter().find(|(name, _)| name == loader);
+        let note = if !supported {
+            "暂未支持"
+        } else if found.is_some() {
+            "已安装"
+        } else if version.is_none() {
+            "无法获取版本"
+        } else {
+            "可以添加"
+        };
+        result.push(LoaderOption {
+            loader: loader.to_string(),
+            label: label.to_string(),
+            version,
+            installed: found.is_some(),
+            installed_id: found.map(|(_, id)| id.clone()),
+            supported,
+            note: note.to_string(),
+        });
+    }
+    result
+}
+
+fn copy_dir_all(source: &Path, dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(source)?.flatten() {
+        let target = dest.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir_all(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), &target)?;
+        }
+    }
+    Ok(())
+}
+
+pub async fn install_loader(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    cfg: &Config,
+    game_version: &str,
+    loader: &str,
+    progress: Arc<ProgressState>,
+) -> Result<InstalledVersion> {
+    let use_mirror = cfg.use_mirror();
+    if !is_installed(cfg, game_version) {
+        progress.set_message(format!("正在安装原版 {game_version}…"));
+        install_version(app, client, cfg, game_version, progress.clone()).await?;
+    }
+
+    progress.set_message(format!("正在获取 {loader} 加载器版本…"));
+    let loader_version = pick_loader_version(client, cfg, loader, game_version).await?;
+    let profile_url = loader_profile_url(loader, game_version, &loader_version)
+        .ok_or_else(|| anyhow!("不支持的加载器：{loader}"))?;
+    let raw = download::get_bytes(client, &profile_url, use_mirror).await?;
+    let profile: VersionDetail =
+        serde_json::from_slice(&raw).context("解析加载器配置失败")?;
+    let loader_id = profile.id.clone();
+    let version_dir = cfg.game_root().join("versions").join(&loader_id);
+    tokio::fs::create_dir_all(&version_dir).await?;
+    tokio::fs::write(version_dir.join(format!("{loader_id}.json")), &raw).await?;
+
+    // 复制父版本 natives，加载器沿用原版的本地库
+    if let Some(parent_id) = profile.inherits_from.clone() {
+        let parent_natives = natives_dir(cfg, &parent_id);
+        let target = natives_dir(cfg, &loader_id);
+        if parent_natives.exists() {
+            tokio::fs::create_dir_all(&target).await?;
+            let source = parent_natives.clone();
+            let dest = target.clone();
+            tokio::task::spawn_blocking(move || copy_dir_all(&source, &dest))
+                .await??;
+        }
+    }
+
+    let merged = resolve_detail(cfg, &loader_id)?;
+    let mut tasks: Vec<FileTask> = Vec::new();
+    for lib in &merged.detail.libraries {
+        if !rules_allow(lib.rules.as_ref()) || library_is_native(lib) {
+            continue;
+        }
+        if let Some((dl, path)) = library_artifact(lib) {
+            let dest = cfg.game_root().join("libraries").join(path.replace('/', "\\"));
+            if !dest.exists() {
+                tasks.push(FileTask {
+                    url: dl.url,
+                    dest,
+                    sha1: Some(dl.sha1),
+                    size: dl.size,
+                    label: lib.name.clone(),
+                });
+            }
+        }
+    }
+
+    if !tasks.is_empty() {
+        progress.set_message(format!("正在下载 {loader} 依赖库…"));
+        download::run_tasks(
+            app,
+            client,
+            tasks,
+            cfg.concurrency as usize,
+            use_mirror,
+            progress.clone(),
+        )
+        .await?;
+    }
+
+    progress.set_message("加载器安装完成");
+    progress.active.store(false, Ordering::Relaxed);
+    download::emit_now(app, &progress);
+
+    let java_major = merged.detail.required_java();
+    let jar_size = merged
+        .jar_id
+        .as_ref()
+        .and_then(|jar_id| {
+            std::fs::metadata(
+                cfg.game_root()
+                    .join("versions")
+                    .join(jar_id)
+                    .join(format!("{jar_id}.jar")),
+            )
+            .ok()
+        })
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    Ok(InstalledVersion {
+        id: loader_id,
+        kind: "modded".into(),
+        jar_size,
+        has_jar: true,
+        last_modified: std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        java_major,
+    })
 }

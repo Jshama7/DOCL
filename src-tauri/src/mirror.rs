@@ -27,6 +27,22 @@ const HOST_MAPPINGS: &[(&str, &str)] = &[
         "https://resources.download.minecraft.net/",
         "https://bmclapi2.bangbang93.com/assets/",
     ),
+    (
+        "https://meta.fabricmc.net/",
+        "https://bmclapi2.bangbang93.com/fabric-meta/",
+    ),
+    (
+        "https://maven.fabricmc.net/",
+        "https://bmclapi2.bangbang93.com/maven/",
+    ),
+    (
+        "https://meta.quiltmc.org/",
+        "https://bmclapi2.bangbang93.com/quilt-meta/",
+    ),
+    (
+        "https://maven.quiltmc.org/repository/release/",
+        "https://bmclapi2.bangbang93.com/maven/",
+    ),
 ];
 
 pub fn rewrite(url: &str) -> String {

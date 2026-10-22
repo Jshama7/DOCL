@@ -65,10 +65,11 @@ pub fn find_java(cfg: &Config, required: u32) -> Result<java::JavaInfo> {
 
 pub fn build(
     cfg: &Config,
-    detail: &VersionDetail,
+    merged: &install::MergedDetail,
     version_id: &str,
     account: &Account,
 ) -> Result<(PathBuf, Vec<String>, Vec<String>)> {
+    let detail = &merged.detail;
     let game_root = cfg.game_root();
     let game_dir = cfg.launch_dir(version_id);
     std::fs::create_dir_all(&game_dir)?;
@@ -81,7 +82,8 @@ pub fn build(
     let required = detail.required_java();
     let java = find_java(cfg, required)?;
 
-    let classpath_entries = install::merged_classpath_entries(cfg, detail);
+    let classpath_entries =
+        install::merged_classpath_entries(cfg, detail, merged.jar_id.as_deref());
     let classpath = classpath_entries
         .iter()
         .map(|p| p.to_string_lossy().to_string())
@@ -213,9 +215,9 @@ pub fn spawn(
     version_id: &str,
     account: &Account,
 ) -> Result<u32> {
-    let detail = install::read_installed_detail(cfg, version_id)?;
+    let merged = install::resolve_detail(cfg, version_id)?;
     let game_dir = cfg.launch_dir(version_id);
-    let (java_path, args, _) = build(cfg, &detail, version_id, account)?;
+    let (java_path, args, _) = build(cfg, &merged, version_id, account)?;
 
     let _ = app.emit(
         "game-log",

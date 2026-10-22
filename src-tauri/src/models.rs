@@ -95,6 +95,13 @@ pub struct Library {
     pub rules: Option<Vec<Rule>>,
     pub natives: Option<HashMap<String, String>>,
     pub extract: Option<Extract>,
+    /// Fabric / Quilt 清单直接给出 Maven 仓库根地址
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub sha1: Option<String>,
+    #[serde(default)]
+    pub size: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

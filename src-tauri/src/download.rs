@@ -259,6 +259,7 @@ pub async fn run_tasks(
     let total_bytes: u64 = tasks.iter().map(|t| t.size).sum();
     progress.files_total.store(total_files, Ordering::Relaxed);
     progress.bytes_total.store(total_bytes, Ordering::Relaxed);
+    progress.active.store(true, Ordering::Relaxed);
 
     if tasks.is_empty() {
         progress.active.store(false, Ordering::Relaxed);

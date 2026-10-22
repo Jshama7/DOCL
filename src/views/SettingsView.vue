@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { api, pickDirectory, pickImage, type Config } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
@@ -51,6 +51,23 @@ watch(
 const runtimeMajor = ref("21");
 const saving = ref(false);
 const runtimeBusy = ref(false);
+
+type SettingsTab = "game" | "java" | "appearance" | "performance" | "download";
+const settingsTab = ref<SettingsTab>("game");
+
+const settingsTabs: { value: SettingsTab; label: string; icon: string; no: string }[] = [
+  { value: "game", label: "游戏与启动", icon: "cube", no: "01" },
+  { value: "java", label: "Java 运行时", icon: "database", no: "02" },
+  { value: "appearance", label: "外观", icon: "image", no: "03" },
+  { value: "performance", label: "性能与参数", icon: "sun", no: "04" },
+  { value: "download", label: "下载", icon: "download", no: "05" },
+];
+
+async function selectTab(tab: SettingsTab) {
+  settingsTab.value = tab;
+  await nextTick();
+  document.querySelector(".main")?.scrollTo({ top: 0, behavior: "smooth" });
+}
 
 const themes = [
   { value: "paper", label: "纸木", colors: ["#f4ebdd", "#6f4224", "#5e7b49"] },
@@ -196,7 +213,23 @@ function useAutoJava() {
       </WoodButton>
     </header>
 
-    <section class="card card-pad group reveal">
+    <div class="settings-layout">
+      <aside class="settings-side card">
+        <button
+          v-for="tab in settingsTabs"
+          :key="tab.value"
+          class="settings-side__item"
+          :class="{ 'settings-side__item--active': settingsTab === tab.value }"
+          @click="selectTab(tab.value)"
+        >
+          <AppIcon :name="tab.icon" :size="16" />
+          <span class="settings-side__label">{{ tab.label }}</span>
+          <span class="settings-side__no mono">{{ tab.no }}</span>
+        </button>
+      </aside>
+
+      <div class="settings-main">
+    <section v-if="settingsTab === 'game'" class="card card-pad group reveal">
       <div class="group-head">
         <span class="group-no display">01</span>
         <div class="group-titles">
@@ -250,7 +283,7 @@ function useAutoJava() {
       </div>
     </section>
 
-    <section class="card card-pad group reveal" style="--i: 1">
+    <section v-if="settingsTab === 'java'" class="card card-pad group reveal" style="--i: 1">
       <div class="group-head">
         <span class="group-no display">02</span>
         <div class="group-titles">
@@ -330,7 +363,11 @@ function useAutoJava() {
       </div>
     </section>
 
-    <section class="card card-pad group reveal" :style="{ '--i': 2 }">
+    <section
+      v-if="settingsTab === 'appearance'"
+      class="card card-pad group reveal"
+      :style="{ '--i': 2 }"
+    >
       <div class="group-head">
         <span class="group-no display">03</span>
         <div class="group-titles">
@@ -460,7 +497,11 @@ function useAutoJava() {
       </div>
     </section>
 
-    <section class="card card-pad group reveal" :style="{ '--i': 3 }">
+    <section
+      v-if="settingsTab === 'performance'"
+      class="card card-pad group reveal"
+      :style="{ '--i': 3 }"
+    >
       <div class="group-head">
         <span class="group-no display">04</span>
         <div class="group-titles">
@@ -490,7 +531,11 @@ function useAutoJava() {
       </div>
     </section>
 
-    <section class="card card-pad group reveal" :style="{ '--i': 4 }">
+    <section
+      v-if="settingsTab === 'download'"
+      class="card card-pad group reveal"
+      :style="{ '--i': 4 }"
+    >
       <div class="group-head">
         <span class="group-no display">05</span>
         <div class="group-titles">
@@ -526,10 +571,78 @@ function useAutoJava() {
         {{ saving ? "保存中…" : "保存设置" }}
       </WoodButton>
     </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.settings-layout {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.settings-side {
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  position: sticky;
+  top: 0;
+}
+
+.settings-side__item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 38px;
+  padding: 0 10px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-align: left;
+  transition: background var(--dur-2) ease, color var(--dur-2) ease;
+}
+
+.settings-side__item:hover {
+  background: rgba(var(--accent-rgb), 0.06);
+  color: var(--walnut-deep);
+}
+
+.settings-side__item--active {
+  background: var(--panel);
+  color: var(--walnut-deep);
+  box-shadow: var(--shadow-1);
+}
+
+.settings-side__item--active .icon {
+  color: var(--moss);
+}
+
+.settings-side__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-side__no {
+  font-size: 9px;
+  color: var(--muted);
+  letter-spacing: 0.08em;
+}
+
+.settings-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
 .group-head {
   display: flex;
   align-items: center;

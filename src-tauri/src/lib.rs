@@ -42,6 +42,8 @@ pub fn run() {
             commands::installed_versions,
             commands::install_version,
             commands::cancel_install,
+            commands::loader_options,
+            commands::install_loader,
             commands::delete_version,
             commands::get_accounts,
             commands::create_offline_account,

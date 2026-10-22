@@ -45,6 +45,16 @@ export interface InstalledVersion {
   java_major: number;
 }
 
+export interface LoaderOption {
+  loader: string;
+  label: string;
+  version: string | null;
+  installed: boolean;
+  installed_id: string | null;
+  supported: boolean;
+  note: string;
+}
+
 export interface JavaInfo {
   path: string;
   version: string;
@@ -95,6 +105,10 @@ export const api = {
   installedVersions: () => invoke<InstalledVersion[]>("installed_versions"),
   installVersion: (versionId: string) => invoke<InstalledVersion>("install_version", { versionId }),
   cancelInstall: () => invoke<void>("cancel_install"),
+  loaderOptions: (versionId: string) =>
+    invoke<LoaderOption[]>("loader_options", { versionId }),
+  installLoader: (versionId: string, loader: string) =>
+    invoke<InstalledVersion>("install_loader", { versionId, loader }),
   deleteVersion: (versionId: string) => invoke<void>("delete_version", { versionId }),
   getAccounts: () => invoke<AccountView[]>("get_accounts"),
   createOfflineAccount: (name: string) => invoke<AccountView>("create_offline_account", { name }),

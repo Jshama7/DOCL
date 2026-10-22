@@ -1,7 +1,7 @@
 use crate::auth::{self, Account, AccountView, DeviceCode};
 use crate::config::{self, Config};
 use crate::download::{self, ProgressState};
-use crate::install::{self, InstalledVersion};
+use crate::install::{self, InstalledVersion, LoaderOption};
 use crate::java::{self, JavaInfo};
 use crate::launch;
 use crate::models::*;
@@ -103,6 +103,55 @@ pub async fn install_version(
                 let _ = config::save(&c);
                 c
             };
+            Ok(version)
+        }
+        Err(e) => Err(err(e)),
+    }
+}
+
+#[tauri::command]
+pub async fn loader_options(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<Vec<LoaderOption>> {
+    let cfg = state.config.lock().unwrap().clone();
+    Ok(install::loader_options(&state.client, &cfg, &version_id).await)
+}
+
+#[tauri::command]
+pub async fn install_loader(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: String,
+    loader: String,
+) -> CmdResult<InstalledVersion> {
+    let cfg = state.config.lock().unwrap().clone();
+    {
+        let guard = state.progress.lock().unwrap();
+        if let Some(p) = guard.as_ref() {
+            if p.active.load(Ordering::Relaxed) {
+                return Err("已有下载任务正在进行".into());
+            }
+        }
+    }
+    let progress = ProgressState::new("install");
+    progress.set_message(format!("准备安装 {loader}…"));
+    *state.progress.lock().unwrap() = Some(progress.clone());
+
+    let result =
+        install::install_loader(&app, &state.client, &cfg, &version_id, &loader, progress.clone())
+            .await;
+
+    progress.active.store(false, Ordering::Relaxed);
+    download::emit_now(&app, &progress);
+    *state.progress.lock().unwrap() = None;
+
+    match result {
+        Ok(version) => {
+            let mut current = cfg;
+            current.selected_version = Some(version.id.clone());
+            let _ = config::save(&current);
+            *state.config.lock().unwrap() = current;
             Ok(version)
         }
         Err(e) => Err(err(e)),

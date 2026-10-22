@@ -1,12 +1,37 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
+import { api, type LoaderOption } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodProgress from "../components/WoodProgress.vue";
-import { cancelInstall, installVersion, refreshVersions, store } from "../store";
+import {
+  cancelInstall,
+  installLoader,
+  installVersion,
+  launchVersion,
+  notify,
+  refreshVersions,
+  store,
+} from "../store";
 import { formatBytes, formatDate, formatSpeed, kindLabel } from "../utils";
+
+type Category = "vanilla" | "mods" | "modpacks" | "datapacks" | "resourcepacks" | "shaders";
+
+const categories: { value: Category; label: string; icon: string }[] = [
+  { value: "vanilla", label: "原版游戏", icon: "cube" },
+  { value: "mods", label: "Mod", icon: "grid" },
+  { value: "modpacks", label: "整合包", icon: "package" },
+  { value: "datapacks", label: "数据包", icon: "database" },
+  { value: "resourcepacks", label: "资源包", icon: "image" },
+  { value: "shaders", label: "光影包", icon: "sun" },
+];
+
+const category = ref<Category>("vanilla");
+const detailId = ref<string | null>(null);
+const loaders = ref<LoaderOption[]>([]);
+const loadersLoading = ref(false);
 
 const filter = ref<"release" | "snapshot" | "all">("release");
 const query = ref("");
@@ -21,6 +46,39 @@ const tabs = [
 onMounted(() => {
   if (!store.versions.length) refreshVersions();
 });
+
+watch(detailId, async (id) => {
+  loaders.value = [];
+  if (!id) return;
+  loadersLoading.value = true;
+  try {
+    loaders.value = await api.loaderOptions(id);
+  } catch (err) {
+    notify(`获取加载器列表失败：${String(err)}`, "err");
+  } finally {
+    loadersLoading.value = false;
+  }
+});
+
+watch(
+  () => store.installed.length,
+  async () => {
+    if (!detailId.value || loadersLoading.value) return;
+    try {
+      loaders.value = await api.loaderOptions(detailId.value);
+    } catch {
+      // 忽略刷新失败，保留原有列表
+    }
+  }
+);
+
+const detailSummary = computed(() =>
+  store.versions.find((v) => v.id === detailId.value)
+);
+
+const detailInstalled = computed(
+  () => !!store.installed.find((v) => v.id === detailId.value)
+);
 
 const filtered = computed(() => {
   const keyword = query.value.trim().toLowerCase();
@@ -50,6 +108,35 @@ const percent = computed(() => {
   if (p.files_total > 0) return Math.min(100, (p.files_done / p.files_total) * 100);
   return 0;
 });
+
+function switchCategory(value: Category) {
+  category.value = value;
+  detailId.value = null;
+}
+
+function openDetail(id: string) {
+  detailId.value = id;
+}
+
+function backToList() {
+  detailId.value = null;
+}
+
+function installVanilla() {
+  if (detailId.value) installVersion(detailId.value);
+}
+
+function launchVanilla() {
+  if (detailId.value) launchVersion(detailId.value);
+}
+
+function installLoaderFor(loader: string) {
+  if (detailId.value) installLoader(detailId.value, loader);
+}
+
+function launchLoader(id: string | null) {
+  if (id) launchVersion(id);
+}
 </script>
 
 <template>
@@ -57,10 +144,11 @@ const percent = computed(() => {
     <header class="page-head">
       <div>
         <span class="eyebrow">DOCL / CATALOG</span>
-        <h1 class="page-title">下载版本</h1>
-        <p class="page-sub">原版客户端，BMCLAPI 镜像加速与 SHA1 校验</p>
+        <h1 class="page-title">下载</h1>
+        <p class="page-sub">原版客户端与加载器，镜像加速与 SHA1 校验</p>
       </div>
       <IconButton
+        v-if="category === 'vanilla' && !detailId"
         icon="refresh"
         label="刷新版本列表"
         variant="soft"
@@ -69,102 +157,486 @@ const percent = computed(() => {
       />
     </header>
 
-    <section v-if="progress" class="card card-pad download-progress reveal">
-      <div class="row-between">
-        <div class="row">
-          <span class="tag tag--grass">安装中</span>
-          <strong>{{ store.installingId }}</strong>
-        </div>
-        <div class="row">
-          <span class="muted small">
-            {{ formatSpeed(progress.bytes_done, progress.elapsed_ms) }} ·
-            {{ formatBytes(progress.bytes_done) }} / {{ formatBytes(progress.bytes_total) }}
-          </span>
-          <WoodButton variant="danger" size="sm" @click="cancelInstall">取消</WoodButton>
-        </div>
-      </div>
-      <WoodProgress :value="percent" />
-      <p class="muted small">{{ progress.message }}</p>
-    </section>
-
-    <section class="card catalog reveal" style="--i: 1">
-      <div class="toolbar">
-        <div class="tabs">
-          <button
-            v-for="tab in tabs"
-            :key="tab.key"
-            class="tab"
-            :class="{ 'tab--active': filter === tab.key }"
-            @click="filter = tab.key; limit = 240"
-          >
-            {{ tab.label }}
-          </button>
-        </div>
-        <div class="toolbar__search">
-          <WoodInput v-model="query" placeholder="搜索版本号，例如 1.20 / 26.3" />
-        </div>
-      </div>
-
-      <div v-if="store.loadingVersions" class="skeleton-list">
-        <div v-for="n in 9" :key="n" class="skeleton-row">
-          <span class="skeleton skeleton-row__title" />
-          <span class="skeleton skeleton-row__meta" />
-          <span class="skeleton skeleton-row__btn" />
-        </div>
-      </div>
-      <div v-else-if="!filtered.length" class="list-empty">没有匹配的版本</div>
-      <div v-else class="version-list">
-        <div
-          v-for="(item, index) in filtered"
-          :key="item.id"
-          class="version-row"
-          :style="{ '--i': index }"
+    <div class="download-layout">
+      <aside class="dl-side card">
+        <button
+          v-for="item in categories.slice(0, 1)"
+          :key="item.value"
+          class="dl-side__item"
+          :class="{ 'dl-side__item--active': category === item.value }"
+          @click="switchCategory(item.value)"
         >
-          <span class="version-row__mark" />
-          <div class="version-row__main">
-            <strong class="version-row__id">{{ item.id }}</strong>
-            <span class="tag" :class="{ 'tag--grass': item.kind === 'release' }">
-              {{ kindLabel(item.kind) }}
-            </span>
-            <span v-if="item.installed" class="tag tag--grass">已安装</span>
-            <span class="version-row__date mono">{{ formatDate(item.release_time) }}</span>
-          </div>
-          <div class="version-row__action">
-            <IconButton
-              v-if="!item.installed"
-              icon="download"
-              :label="store.installingId === item.id ? '正在安装' : `安装 ${item.id}`"
-              variant="soft"
-              :size="32"
-              :disabled="!!store.installingId"
-              @click="installVersion(item.id)"
-            />
-            <IconButton
-              v-else
-              icon="check"
-              label="已安装，去版本管理"
-              :size="32"
-              @click="store.page = 'versions'"
-            />
-          </div>
+          <AppIcon :name="item.icon" :size="17" />
+          <span>{{ item.label }}</span>
+        </button>
+
+        <div class="dl-side__label">社区资源</div>
+        <button
+          v-for="item in categories.slice(1)"
+          :key="item.value"
+          class="dl-side__item"
+          :class="{ 'dl-side__item--active': category === item.value }"
+          @click="switchCategory(item.value)"
+        >
+          <AppIcon :name="item.icon" :size="17" />
+          <span>{{ item.label }}</span>
+        </button>
+
+        <div class="dl-side__hint">
+          原版版本详情里可以继续添加 Fabric / Quilt 加载器。
         </div>
-      </div>
+      </aside>
 
-      <div v-if="filtered.length < totalMatched" class="load-more">
-        <WoodButton variant="ghost" size="sm" @click="limit += 200">
-          <AppIcon name="chevron-down" :size="14" />
-          加载更多（还有 {{ totalMatched - filtered.length }} 个）
-        </WoodButton>
-      </div>
-    </section>
+      <div class="dl-main">
+        <template v-if="category !== 'vanilla'">
+          <section class="card card-pad coming">
+            <AppIcon
+              :name="categories.find((c) => c.value === category)?.icon ?? 'grid'"
+              :size="34"
+            />
+            <div>
+              <p class="coming__title">
+                {{ categories.find((c) => c.value === category)?.label }} 下载即将接入
+              </p>
+              <p class="muted small">
+                这一栏会从 Modrinth 拉取社区资源，并按当前游戏版本与加载器筛选。
+              </p>
+            </div>
+          </section>
+        </template>
 
-    <p class="muted small footnote">
-      默认优先使用 BMCLAPI 镜像，连续失败后自动切换到官方源；资源文件与依赖库都会校验 SHA1。
-    </p>
+        <template v-else-if="detailId">
+          <section v-if="progress" class="card card-pad download-progress reveal">
+            <div class="row-between">
+              <div class="row">
+                <span class="tag tag--grass">安装中</span>
+                <strong>{{ store.installingId }}</strong>
+              </div>
+              <div class="row">
+                <span class="muted small">
+                  {{ formatSpeed(progress.bytes_done, progress.elapsed_ms) }} ·
+                  {{ formatBytes(progress.bytes_done) }} / {{ formatBytes(progress.bytes_total) }}
+                </span>
+                <WoodButton variant="danger" size="sm" @click="cancelInstall">取消</WoodButton>
+              </div>
+            </div>
+            <WoodProgress :value="percent" />
+            <p class="muted small">{{ progress.message }}</p>
+          </section>
+
+          <div class="detail-head">
+            <IconButton
+              icon="chevron-left"
+              label="返回版本列表"
+              :size="34"
+              @click="backToList"
+            />
+            <div class="detail-head__text">
+              <span class="eyebrow">VANILLA / INSTANCE</span>
+              <h2 class="detail-title display">{{ detailId }}</h2>
+            </div>
+            <div class="row detail-head__tags">
+              <span class="tag">{{ kindLabel(detailSummary?.kind ?? "release") }}</span>
+              <span v-if="detailInstalled" class="tag tag--grass">已安装</span>
+            </div>
+          </div>
+
+          <section class="card card-pad vanilla-row">
+            <div>
+              <div class="section-title">原版客户端</div>
+              <p class="muted small">
+                安装基础版本后，才能在其上添加 Fabric、Quilt 等加载器。
+              </p>
+            </div>
+            <div class="row">
+              <WoodButton
+                v-if="!detailInstalled"
+                variant="primary"
+                sheen
+                :disabled="!!store.installingId"
+                @click="installVanilla"
+              >
+                <AppIcon name="download" :size="15" />
+                安装原版
+              </WoodButton>
+              <WoodButton
+                v-else
+                variant="primary"
+                sheen
+                :disabled="!!store.installingId"
+                @click="launchVanilla"
+              >
+                <AppIcon name="play" :size="15" />
+                启动原版
+              </WoodButton>
+            </div>
+          </section>
+
+          <section class="card card-pad loader-panel">
+            <div class="row-between">
+              <div>
+                <div class="section-title">可添加的加载器</div>
+                <p class="muted small">安装后会生成独立的版本条目，可单独启动。</p>
+              </div>
+            </div>
+
+            <div v-if="loadersLoading" class="loader-list">
+              <div v-for="n in 4" :key="n" class="loader-row loader-row--skeleton">
+                <span class="skeleton loader-skeleton__badge" />
+                <span class="skeleton loader-skeleton__text" />
+                <span class="skeleton loader-skeleton__btn" />
+              </div>
+            </div>
+
+            <div v-else class="loader-list">
+              <div
+                v-for="item in loaders"
+                :key="item.loader"
+                class="loader-row"
+                :class="{ 'loader-row--installed': item.installed }"
+              >
+                <span class="loader-row__badge">{{ item.label.slice(0, 1) }}</span>
+                <div class="loader-row__info">
+                  <strong>{{ item.label }}</strong>
+                  <span>
+                    {{ item.note }}
+                    <template v-if="item.version"> · {{ item.version }}</template>
+                    <template v-if="item.installed_id"> · {{ item.installed_id }}</template>
+                  </span>
+                </div>
+                <div class="loader-row__action">
+                  <template v-if="item.installed">
+                    <span class="tag tag--grass">已安装</span>
+                    <IconButton
+                      icon="play"
+                      :label="`启动 ${item.installed_id}`"
+                      variant="primary"
+                      :size="32"
+                      :disabled="!!store.installingId"
+                      @click="launchLoader(item.installed_id)"
+                    />
+                  </template>
+                  <IconButton
+                    v-else-if="item.supported"
+                    icon="download"
+                    :label="`安装 ${item.label}`"
+                    variant="soft"
+                    :size="32"
+                    :disabled="!!store.installingId || !item.version"
+                    @click="installLoaderFor(item.loader)"
+                  />
+                  <span v-else class="muted small loader-row__unsupported">暂未支持</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </template>
+
+        <template v-else>
+          <section v-if="progress" class="card card-pad download-progress reveal">
+            <div class="row-between">
+              <div class="row">
+                <span class="tag tag--grass">安装中</span>
+                <strong>{{ store.installingId }}</strong>
+              </div>
+              <div class="row">
+                <span class="muted small">
+                  {{ formatSpeed(progress.bytes_done, progress.elapsed_ms) }} ·
+                  {{ formatBytes(progress.bytes_done) }} / {{ formatBytes(progress.bytes_total) }}
+                </span>
+                <WoodButton variant="danger" size="sm" @click="cancelInstall">取消</WoodButton>
+              </div>
+            </div>
+            <WoodProgress :value="percent" />
+            <p class="muted small">{{ progress.message }}</p>
+          </section>
+
+          <section class="card catalog reveal" style="--i: 1">
+            <div class="toolbar">
+              <div class="tabs">
+                <button
+                  v-for="tab in tabs"
+                  :key="tab.key"
+                  class="tab"
+                  :class="{ 'tab--active': filter === tab.key }"
+                  @click="filter = tab.key; limit = 240"
+                >
+                  {{ tab.label }}
+                </button>
+              </div>
+              <div class="toolbar__search">
+                <WoodInput v-model="query" placeholder="搜索版本号，例如 1.20 / 26.3" />
+              </div>
+            </div>
+
+            <div v-if="store.loadingVersions" class="skeleton-list">
+              <div v-for="n in 9" :key="n" class="skeleton-row">
+                <span class="skeleton skeleton-row__title" />
+                <span class="skeleton skeleton-row__meta" />
+                <span class="skeleton skeleton-row__btn" />
+              </div>
+            </div>
+            <div v-else-if="!filtered.length" class="list-empty">没有匹配的版本</div>
+            <div v-else class="version-list">
+              <button
+                v-for="(item, index) in filtered"
+                :key="item.id"
+                class="version-row"
+                :style="{ '--i': index }"
+                @click="openDetail(item.id)"
+              >
+                <span class="version-row__mark" />
+                <span class="version-row__main">
+                  <strong class="version-row__id">{{ item.id }}</strong>
+                  <span class="tag" :class="{ 'tag--grass': item.kind === 'release' }">
+                    {{ kindLabel(item.kind) }}
+                  </span>
+                  <span v-if="item.installed" class="tag tag--grass">已安装</span>
+                  <span class="version-row__date mono">{{ formatDate(item.release_time) }}</span>
+                </span>
+                <span class="version-row__action">
+                  <span class="version-row__more">
+                    详情
+                    <AppIcon name="chevron-left" :size="14" class="version-row__chev" />
+                  </span>
+                </span>
+              </button>
+            </div>
+
+            <div v-if="filtered.length < totalMatched" class="load-more">
+              <WoodButton variant="ghost" size="sm" @click="limit += 200">
+                <AppIcon name="chevron-down" :size="14" />
+                加载更多（还有 {{ totalMatched - filtered.length }} 个）
+              </WoodButton>
+            </div>
+          </section>
+
+          <p class="muted small footnote">
+            点击任意版本进入详情，可在原版之上添加 Fabric / Quilt 加载器；镜像连续失败会自动切换官方源。
+          </p>
+        </template>
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
+.download-layout {
+  display: grid;
+  grid-template-columns: 186px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.dl-side {
+  padding: 12px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  position: sticky;
+  top: 0;
+}
+
+.dl-side__item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 38px;
+  padding: 0 11px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+  transition: background var(--dur-2) ease, color var(--dur-2) ease;
+}
+
+.dl-side__item:hover {
+  background: rgba(var(--accent-rgb), 0.06);
+  color: var(--walnut-deep);
+}
+
+.dl-side__item--active {
+  background: var(--panel);
+  color: var(--walnut-deep);
+  box-shadow: var(--shadow-1);
+}
+
+.dl-side__item--active .icon {
+  color: var(--moss);
+}
+
+.dl-side__label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: var(--muted);
+  padding: 14px 11px 6px;
+  text-transform: uppercase;
+}
+
+.dl-side__hint {
+  margin-top: 14px;
+  padding: 10px 11px;
+  border-top: 1px dashed var(--line);
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.dl-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.coming {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: var(--walnut);
+  padding: 40px 28px;
+}
+
+.coming__title {
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--walnut-deep);
+  margin-bottom: 4px;
+}
+
+/* 详情 */
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.detail-head__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.detail-title {
+  font-size: 42px;
+  line-height: 1.05;
+  color: var(--walnut-deep);
+}
+
+.detail-head__tags {
+  flex-shrink: 0;
+}
+
+.vanilla-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.loader-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.loader-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.loader-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  transition: border-color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo);
+}
+
+.loader-row:hover {
+  border-color: var(--walnut-light);
+  transform: translateY(-1px);
+}
+
+.loader-row--installed {
+  border-color: var(--moss);
+}
+
+.loader-row__badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  display: grid;
+  place-items: center;
+  background: var(--moss-soft);
+  color: var(--moss);
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.loader-row__info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.loader-row__info strong {
+  font-size: 14px;
+  color: var(--walnut-deep);
+}
+
+.loader-row__info span {
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.loader-row__action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.loader-row__unsupported {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.loader-row--skeleton {
+  pointer-events: none;
+}
+
+.loader-skeleton__badge {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.loader-skeleton__text {
+  flex: 1;
+  height: 14px;
+}
+
+.loader-skeleton__btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+}
+
+/* 列表（沿用原有样式） */
 .catalog {
   overflow: hidden;
 }
@@ -214,20 +686,23 @@ const percent = computed(() => {
 }
 
 .version-list {
-  max-height: 540px;
+  max-height: 560px;
   overflow-y: auto;
   padding: 7px 9px;
 }
 
 .version-row {
   position: relative;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
   padding: 11px 14px 11px 18px;
   border-radius: 9px;
-  transition: background var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo);
+  text-align: left;
+  color: var(--ink);
+  transition: background var(--dur-2) ease;
   animation: rise-in 460ms var(--ease-out-expo) both;
   animation-delay: calc(var(--i, 0) * 18ms);
 }
@@ -278,6 +753,23 @@ const percent = computed(() => {
   flex-shrink: 0;
 }
 
+.version-row__more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+  transition: color var(--dur-2) ease;
+}
+
+.version-row:hover .version-row__more {
+  color: var(--moss);
+}
+
+.version-row__chev {
+  transform: rotate(180deg);
+}
+
 .skeleton-list {
   padding: 8px 12px;
 }
@@ -326,5 +818,15 @@ const percent = computed(() => {
 
 .footnote {
   padding-left: 2px;
+}
+
+@media (max-width: 1080px) {
+  .download-layout {
+    grid-template-columns: 156px minmax(0, 1fr);
+  }
+
+  .toolbar__search {
+    width: 220px;
+  }
 }
 </style>

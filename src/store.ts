@@ -172,6 +172,28 @@ export async function installVersion(id: string) {
   }
 }
 
+export async function installLoader(versionId: string, loader: string) {
+  if (store.installingId) {
+    notify("已有安装任务正在进行", "err");
+    return;
+  }
+  store.installingId = `${versionId} · ${loader}`;
+  store.progress = null;
+  try {
+    await api.installLoader(versionId, loader);
+    await refreshInstalled();
+    await refreshConfig();
+    notify(`${loader} 安装完成`);
+  } catch (err) {
+    notify(`安装失败：${String(err)}`, "err");
+  } finally {
+    store.installingId = null;
+    window.setTimeout(() => {
+      if (!store.progress?.active) store.progress = null;
+    }, 800);
+  }
+}
+
 export async function cancelInstall() {
   await api.cancelInstall();
   notify("已请求取消安装");

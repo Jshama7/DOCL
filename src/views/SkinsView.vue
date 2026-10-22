@@ -1,0 +1,785 @@
+<script setup lang="ts">
+import { computed, onMounted, ref, watch } from "vue";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import {
+  api,
+  type AccountView,
+  type CapeView,
+  type SkinLibraryItem,
+} from "../api";
+import AppIcon from "../components/AppIcon.vue";
+import IconButton from "../components/IconButton.vue";
+import SkinModel from "../components/SkinModel.vue";
+import WoodButton from "../components/WoodButton.vue";
+import WoodInput from "../components/WoodInput.vue";
+import WoodModal from "../components/WoodModal.vue";
+import WoodSelect from "../components/WoodSelect.vue";
+import WoodToggle from "../components/WoodToggle.vue";
+import { loadSelectedSkin, notify, refreshAccounts, store } from "../store";
+
+const items = ref<SkinLibraryItem[]>([]);
+const loading = ref(true);
+const error = ref("");
+
+const importOpen = ref(false);
+const importName = ref("");
+const importModel = ref("classic");
+const importPath = ref("");
+const importing = ref(false);
+
+const harvestOpen = ref(false);
+const harvestName = ref("");
+const harvestAccount = ref("");
+const harvesting = ref(false);
+
+const playerOpen = ref(false);
+const playerName = ref("");
+const playerFetching = ref(false);
+
+const applyTarget = ref<SkinLibraryItem | null>(null);
+const applyAccount = ref("");
+const applyUpload = ref(false);
+const applying = ref(false);
+
+const renameTarget = ref<SkinLibraryItem | null>(null);
+const renameName = ref("");
+const renaming = ref(false);
+
+const deleteTarget = ref<SkinLibraryItem | null>(null);
+const deleting = ref(false);
+
+const capeAccount = ref("");
+const capes = ref<CapeView[]>([]);
+const capesLoading = ref(false);
+const capesError = ref("");
+const capeBusy = ref("");
+
+const accountOptions = computed(() =>
+  store.accounts.map((account) => ({ value: account.id, label: account.name }))
+);
+const msAccountOptions = computed(() =>
+  store.accounts
+    .filter((account) => account.kind === "microsoft")
+    .map((account) => ({ value: account.id, label: account.name }))
+);
+const applyAccountView = computed<AccountView | null>(
+  () => store.accounts.find((account) => account.id === applyAccount.value) ?? null
+);
+
+function sourceLabel(source: string) {
+  if (source === "account") return "来自账号";
+  if (source === "player") return "玩家抓取";
+  if (source === "default") return "内置";
+  return "导入";
+}
+
+async function loadLibrary() {
+  loading.value = true;
+  error.value = "";
+  try {
+    items.value = await api.skinLibraryList();
+  } catch (err) {
+    error.value = String(err);
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function pickImportFile() {
+  const picked = await openDialog({
+    multiple: false,
+    filters: [{ name: "Minecraft 皮肤", extensions: ["png"] }],
+  });
+  if (typeof picked === "string") {
+    importPath.value = picked;
+    if (!importName.value.trim()) {
+      const file = picked.split(/[\\/]/).pop() ?? "";
+      importName.value = file.replace(/\.png$/i, "");
+    }
+  }
+}
+
+async function confirmImport() {
+  if (importing.value) return;
+  if (!importPath.value) {
+    notify("请先选择皮肤文件", "err");
+    return;
+  }
+  importing.value = true;
+  try {
+    await api.skinLibraryImport(
+      importName.value.trim() || "未命名皮肤",
+      importModel.value,
+      importPath.value
+    );
+    importOpen.value = false;
+    importName.value = "";
+    importPath.value = "";
+    importModel.value = "classic";
+    await loadLibrary();
+    notify("皮肤已入库");
+  } catch (err) {
+    notify(`入库失败：${String(err)}`, "err");
+  } finally {
+    importing.value = false;
+  }
+}
+
+function openHarvest() {
+  if (!store.accounts.length) {
+    notify("还没有账号，请先到账号页添加", "err");
+    return;
+  }
+  harvestAccount.value = store.config?.selected_account ?? store.accounts[0].id;
+  const account = store.accounts.find((a) => a.id === harvestAccount.value);
+  harvestName.value = account ? `${account.name} 的皮肤` : "";
+  harvestOpen.value = true;
+}
+
+async function confirmPlayer() {
+  const name = playerName.value.trim();
+  if (!name || playerFetching.value) return;
+  playerFetching.value = true;
+  try {
+    const item = await api.skinLibraryFromPlayer(name);
+    playerOpen.value = false;
+    playerName.value = "";
+    await loadLibrary();
+    notify(`已抓取 ${item.name} 的皮肤`);
+  } catch (err) {
+    notify(`抓取失败：${String(err)}`, "err");
+  } finally {
+    playerFetching.value = false;
+  }
+}
+
+async function confirmHarvest() {
+  if (harvesting.value) return;
+  harvesting.value = true;
+  try {
+    await api.skinLibraryFromAccount(
+      harvestName.value.trim() || "未命名皮肤",
+      harvestAccount.value
+    );
+    harvestOpen.value = false;
+    await loadLibrary();
+    notify("已收录到皮肤库");
+  } catch (err) {
+    notify(`收录失败：${String(err)}`, "err");
+  } finally {
+    harvesting.value = false;
+  }
+}
+
+function openApply(item: SkinLibraryItem) {
+  if (!store.accounts.length) {
+    notify("还没有账号，请先到账号页添加", "err");
+    return;
+  }
+  applyTarget.value = item;
+  applyAccount.value = store.config?.selected_account ?? store.accounts[0].id;
+  applyUpload.value = false;
+}
+
+async function confirmApply() {
+  const target = applyTarget.value;
+  if (!target || applying.value) return;
+  applying.value = true;
+  try {
+    await api.skinLibraryApply(target.id, applyAccount.value, applyUpload.value);
+    await refreshAccounts();
+    await loadSelectedSkin();
+    applyTarget.value = null;
+    notify(
+      applyUpload.value
+        ? `已应用「${target.name}」并同步上传 Mojang`
+        : `已应用「${target.name}」`
+    );
+  } catch (err) {
+    notify(`应用失败：${String(err)}`, "err");
+  } finally {
+    applying.value = false;
+  }
+}
+
+function openRename(item: SkinLibraryItem) {
+  renameTarget.value = item;
+  renameName.value = item.name;
+}
+
+async function confirmRename() {
+  const target = renameTarget.value;
+  if (!target || renaming.value) return;
+  renaming.value = true;
+  try {
+    await api.skinLibraryRename(target.id, renameName.value.trim());
+    renameTarget.value = null;
+    await loadLibrary();
+  } catch (err) {
+    notify(`重命名失败：${String(err)}`, "err");
+  } finally {
+    renaming.value = false;
+  }
+}
+
+async function confirmDelete() {
+  const target = deleteTarget.value;
+  if (!target || deleting.value) return;
+  deleting.value = true;
+  try {
+    await api.skinLibraryRemove(target.id);
+    deleteTarget.value = null;
+    await loadLibrary();
+    notify(`已删除「${target.name}」`);
+  } catch (err) {
+    notify(`删除失败：${String(err)}`, "err");
+  } finally {
+    deleting.value = false;
+  }
+}
+
+async function loadCapes() {
+  if (!capeAccount.value) {
+    capes.value = [];
+    return;
+  }
+  capesLoading.value = true;
+  capesError.value = "";
+  try {
+    capes.value = await api.accountCapes(capeAccount.value);
+  } catch (err) {
+    capes.value = [];
+    capesError.value = String(err);
+  } finally {
+    capesLoading.value = false;
+  }
+}
+
+async function toggleCape(cape: CapeView) {
+  if (capeBusy.value) return;
+  capeBusy.value = cape.id;
+  try {
+    await api.capeSetActive(capeAccount.value, cape.active ? null : cape.id);
+    await loadCapes();
+    notify(cape.active ? "已卸下披风" : `已启用披风「${cape.alias}」`);
+  } catch (err) {
+    notify(`披风操作失败：${String(err)}`, "err");
+  } finally {
+    capeBusy.value = "";
+  }
+}
+
+watch(capeAccount, () => {
+  void loadCapes();
+});
+
+onMounted(async () => {
+  await loadLibrary();
+  if (msAccountOptions.value.length) {
+    const selected = store.config?.selected_account;
+    capeAccount.value = msAccountOptions.value.some((o) => o.value === selected)
+      ? (selected as string)
+      : msAccountOptions.value[0].value;
+  }
+});
+</script>
+
+<template>
+  <div class="page skins">
+    <header class="page-head">
+      <div>
+        <span class="eyebrow">DOCL / SKINS</span>
+      </div>
+      <div class="skins-head__tags">
+        <span class="tag">{{ items.length }} 件收藏</span>
+      </div>
+    </header>
+
+    <section class="card skins-lib">
+      <header class="skins-lib__head">
+        <div>
+          <span class="eyebrow">LIBRARY</span>
+          <div class="section-title">皮肤收藏</div>
+        </div>
+        <div class="skins-lib__actions">
+          <WoodButton variant="ghost" size="sm" @click="openHarvest">
+            <AppIcon name="user" :size="14" />
+            从账号收录
+          </WoodButton>
+          <WoodButton variant="ghost" size="sm" @click="playerOpen = true">
+            <AppIcon name="globe" :size="14" />
+            按玩家名抓取
+          </WoodButton>
+          <WoodButton variant="primary" size="sm" sheen @click="importOpen = true">
+            <AppIcon name="plus" :size="14" />
+            导入 PNG
+          </WoodButton>
+        </div>
+      </header>
+
+      <div v-if="loading" class="skins-empty">
+        <span class="muted small">正在读取皮肤库…</span>
+      </div>
+      <div v-else-if="error" class="skins-empty">
+        <span class="muted small">{{ error }}</span>
+        <WoodButton variant="ghost" size="sm" @click="loadLibrary">重试</WoodButton>
+      </div>
+      <div v-else-if="!items.length" class="skins-empty">
+        <span class="muted small">皮肤库还是空的，导入 PNG 或从账号收录一件吧</span>
+      </div>
+
+      <div v-else class="skins-grid">
+        <article v-for="item in items" :key="item.id" class="skin-card">
+          <div class="skin-card__preview">
+            <SkinModel :skin="item.data_url" :seed="item.id" :model="item.model" :height="200" />
+          </div>
+          <div class="skin-card__body">
+            <strong class="skin-card__name">{{ item.name }}</strong>
+            <div class="skin-card__tags">
+              <span class="tag">{{ item.model === "slim" ? "纤细" : "经典" }}</span>
+              <span class="tag skin-card__tag--src">{{ sourceLabel(item.source) }}</span>
+            </div>
+          </div>
+          <footer class="skin-card__foot">
+            <WoodButton variant="primary" size="sm" @click="openApply(item)">
+              应用
+            </WoodButton>
+            <IconButton icon="settings" label="重命名" :size="28" @click="openRename(item)" />
+            <IconButton icon="trash" label="删除" :size="28" variant="danger" @click="deleteTarget = item" />
+          </footer>
+        </article>
+      </div>
+    </section>
+
+    <section class="card skins-capes">
+      <header class="skins-lib__head">
+        <div>
+          <span class="eyebrow">CAPES</span>
+          <div class="section-title">披风管理</div>
+        </div>
+        <WoodSelect
+          v-if="msAccountOptions.length"
+          v-model="capeAccount"
+          :options="msAccountOptions"
+        />
+      </header>
+
+      <div v-if="!msAccountOptions.length" class="skins-empty">
+        <span class="muted small">只有微软账号支持披风，请先到账号页登录</span>
+      </div>
+      <div v-else-if="capesLoading" class="skins-empty">
+        <span class="muted small">正在读取披风…</span>
+      </div>
+      <div v-else-if="capesError" class="skins-empty">
+        <span class="muted small">{{ capesError }}</span>
+        <WoodButton variant="ghost" size="sm" @click="loadCapes">重试</WoodButton>
+      </div>
+      <div v-else-if="!capes.length" class="skins-empty">
+        <span class="muted small">这个账号没有可用的披风</span>
+      </div>
+
+      <div v-else class="capes-grid">
+        <article
+          v-for="cape in capes"
+          :key="cape.id"
+          class="cape-card"
+          :class="{ 'cape-card--active': cape.active }"
+        >
+          <div class="cape-card__preview">
+            <img :src="cape.url" :alt="cape.alias" loading="lazy" />
+          </div>
+          <div class="cape-card__body">
+            <strong class="cape-card__name">{{ cape.alias }}</strong>
+            <span v-if="cape.active" class="tag tag--grass">使用中</span>
+          </div>
+          <WoodButton
+            :variant="cape.active ? 'ghost' : 'primary'"
+            size="sm"
+            :disabled="capeBusy === cape.id"
+            @click="toggleCape(cape)"
+          >
+            {{ capeBusy === cape.id ? "处理中…" : cape.active ? "卸下" : "启用" }}
+          </WoodButton>
+        </article>
+      </div>
+    </section>
+
+    <WoodModal v-if="importOpen" title="导入皮肤 PNG" :width="440" @close="importOpen = false">
+      <div class="form">
+        <label class="field">
+          <span class="field__label">名称</span>
+          <WoodInput v-model="importName" placeholder="给皮肤起个名字" />
+        </label>
+        <label class="field">
+          <span class="field__label">模型</span>
+          <div class="seg">
+            <button
+              class="seg__btn"
+              :class="{ 'seg__btn--active': importModel === 'classic' }"
+              @click="importModel = 'classic'"
+            >
+              经典
+            </button>
+            <button
+              class="seg__btn"
+              :class="{ 'seg__btn--active': importModel === 'slim' }"
+              @click="importModel = 'slim'"
+            >
+              纤细
+            </button>
+          </div>
+        </label>
+        <div class="field">
+          <span class="field__label">皮肤文件</span>
+          <div class="file-row">
+            <span class="file-row__path mono">{{ importPath || "未选择文件" }}</span>
+            <WoodButton variant="ghost" size="sm" @click="pickImportFile">选择文件</WoodButton>
+          </div>
+        </div>
+      </div>
+      <template #footer>
+        <WoodButton variant="ghost" size="sm" @click="importOpen = false">取消</WoodButton>
+        <WoodButton variant="primary" size="sm" :disabled="importing" @click="confirmImport">
+          {{ importing ? "入库中…" : "确认入库" }}
+        </WoodButton>
+      </template>
+    </WoodModal>
+
+    <WoodModal v-if="harvestOpen" title="从账号收录皮肤" :width="440" @close="harvestOpen = false">
+      <div class="form">
+        <label class="field">
+          <span class="field__label">账号</span>
+          <WoodSelect v-model="harvestAccount" :options="accountOptions" />
+        </label>
+        <label class="field">
+          <span class="field__label">名称</span>
+          <WoodInput v-model="harvestName" placeholder="给皮肤起个名字" />
+        </label>
+        <p class="muted small">会把该账号当前使用的皮肤复制一份到皮肤库。</p>
+      </div>
+      <template #footer>
+        <WoodButton variant="ghost" size="sm" @click="harvestOpen = false">取消</WoodButton>
+        <WoodButton variant="primary" size="sm" :disabled="harvesting" @click="confirmHarvest">
+          {{ harvesting ? "收录中…" : "确认收录" }}
+        </WoodButton>
+      </template>
+    </WoodModal>
+
+    <WoodModal v-if="playerOpen" title="按玩家名抓取皮肤" :width="440" @close="playerOpen = false">
+      <div class="form">
+        <label class="field">
+          <span class="field__label">玩家名</span>
+          <WoodInput v-model="playerName" placeholder="例如 Notch" @keyup.enter="confirmPlayer" />
+        </label>
+        <p class="muted small">
+          通过 Mojang 官方接口抓取该正版玩家当前使用的皮肤，入库后会用玩家名命名。
+        </p>
+      </div>
+      <template #footer>
+        <WoodButton variant="ghost" size="sm" @click="playerOpen = false">取消</WoodButton>
+        <WoodButton
+          variant="primary"
+          size="sm"
+          :disabled="playerFetching || !playerName.trim()"
+          @click="confirmPlayer"
+        >
+          {{ playerFetching ? "抓取中…" : "抓取入库" }}
+        </WoodButton>
+      </template>
+    </WoodModal>
+
+    <WoodModal
+      v-if="applyTarget"
+      :title="`应用皮肤「${applyTarget.name}」`"
+      :width="440"
+      @close="applyTarget = null"
+    >
+      <div class="form">
+        <label class="field">
+          <span class="field__label">目标账号</span>
+          <WoodSelect v-model="applyAccount" :options="accountOptions" />
+        </label>
+        <label v-if="applyAccountView?.kind === 'microsoft'" class="toggle-row">
+          <WoodToggle v-model="applyUpload" />
+          <span>同步上传 Mojang（替换该账号的官方皮肤）</span>
+        </label>
+        <p v-else class="muted small">
+          离线账号的皮肤只用于启动器预览与导出，不会改变游戏内显示。
+        </p>
+      </div>
+      <template #footer>
+        <WoodButton variant="ghost" size="sm" @click="applyTarget = null">取消</WoodButton>
+        <WoodButton variant="primary" size="sm" :disabled="applying" @click="confirmApply">
+          {{ applying ? "应用中…" : "确认应用" }}
+        </WoodButton>
+      </template>
+    </WoodModal>
+
+    <WoodModal
+      v-if="renameTarget"
+      title="重命名皮肤"
+      :width="400"
+      @close="renameTarget = null"
+    >
+      <div class="form">
+        <label class="field">
+          <span class="field__label">新名称</span>
+          <WoodInput v-model="renameName" placeholder="皮肤名称" />
+        </label>
+      </div>
+      <template #footer>
+        <WoodButton variant="ghost" size="sm" @click="renameTarget = null">取消</WoodButton>
+        <WoodButton variant="primary" size="sm" :disabled="renaming" @click="confirmRename">
+          {{ renaming ? "保存中…" : "保存" }}
+        </WoodButton>
+      </template>
+    </WoodModal>
+
+    <WoodModal
+      v-if="deleteTarget"
+      title="删除皮肤"
+      :width="400"
+      @close="deleteTarget = null"
+    >
+      <p class="muted small">
+        确定要从皮肤库删除「{{ deleteTarget.name }}」吗？此操作不可恢复。
+      </p>
+      <template #footer>
+        <WoodButton variant="ghost" size="sm" @click="deleteTarget = null">取消</WoodButton>
+        <WoodButton variant="danger" size="sm" :disabled="deleting" @click="confirmDelete">
+          {{ deleting ? "删除中…" : "确认删除" }}
+        </WoodButton>
+      </template>
+    </WoodModal>
+  </div>
+</template>
+
+<style scoped>
+.skins {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.skins-head__tags {
+  display: flex;
+  gap: 8px;
+}
+
+.skins-lib,
+.skins-capes {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.skins-lib__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.skins-lib__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.skins-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 12px;
+}
+
+.skins-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.skin-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+  overflow: hidden;
+  transition: border-color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo),
+    box-shadow var(--dur-2) ease;
+}
+
+.skin-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-1);
+}
+
+.skin-card__preview {
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+
+.skin-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 6px;
+}
+
+.skin-card__name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--walnut-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skin-card__tags {
+  display: flex;
+  gap: 6px;
+}
+
+.skin-card__tag--src {
+  background: var(--panel);
+  color: var(--muted);
+}
+
+.skin-card__foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px 10px;
+}
+
+.skin-card__foot .btn,
+.skin-card__foot button:first-child {
+  flex: 1;
+}
+
+.capes-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.cape-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.cape-card--active {
+  border-color: rgba(var(--accent-rgb), 0.45);
+}
+
+.cape-card__preview {
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  background: var(--paper-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.cape-card__preview img {
+  height: 48px;
+  image-rendering: pixelated;
+}
+
+.cape-card__body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cape-card__name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--walnut-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.seg {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  align-self: flex-start;
+}
+
+.seg__btn {
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+
+.seg__btn--active {
+  background: var(--panel);
+  color: var(--walnut-deep);
+  box-shadow: var(--shadow-1);
+}
+
+.file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.file-row__path {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--ink-soft);
+}
+</style>

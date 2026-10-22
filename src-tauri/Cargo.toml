@@ -1,8 +1,9 @@
 [package]
 name = "mc-launcher"
-version = "0.1.0"
+version = "1.0.0"
 description = "DOCL - Minecraft 第三方启动器"
 authors = ["deepseekwork"]
+license = "AGPL-3.0-only"
 edition = "2021"
 rust-version = "1.77"
 
@@ -25,6 +26,7 @@ futures = "0.3"
 sha1 = "0.10"
 zip = "2"
 png = "0.17"
+flate2 = "1"
 anyhow = "1"
 thiserror = "2"
 dirs = "5"
@@ -32,4 +34,4 @@ uuid = { version = "1", features = ["v4"] }
 md5 = "0.7"
 base64 = "0.22"
 winreg = "0.55"
-windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_SystemInformation"] }

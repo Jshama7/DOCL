@@ -1,0 +1,164 @@
+use crate::config;
+use crate::http;
+use anyhow::{bail, Context, Result};
+use futures::StreamExt;
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+use std::time::Duration;
+use tauri::{AppHandle, Emitter};
+use tokio::io::AsyncWriteExt;
+
+pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateInfo {
+    pub current: String,
+    pub latest: String,
+    pub available: bool,
+    pub url: String,
+    pub notes: String,
+}
+
+#[derive(Deserialize)]
+struct Manifest {
+    version: String,
+    url: String,
+    #[serde(default)]
+    notes: String,
+}
+
+#[derive(Clone, Serialize)]
+pub struct UpdateProgress {
+    pub downloaded: u64,
+    pub total: u64,
+}
+
+fn version_numbers(raw: &str) -> Vec<u64> {
+    raw.split(|c: char| !c.is_ascii_digit())
+        .filter_map(|part| part.parse::<u64>().ok())
+        .collect()
+}
+
+/// 逐段比较版本号，1.10.0 大于 1.9.2。
+fn is_newer(latest: &str, current: &str) -> bool {
+    let newer = version_numbers(latest);
+    let older = version_numbers(current);
+    for index in 0..newer.len().max(older.len()) {
+        let left = *newer.get(index).unwrap_or(&0);
+        let right = *older.get(index).unwrap_or(&0);
+        if left != right {
+            return left > right;
+        }
+    }
+    false
+}
+
+fn validate_url(url: &str) -> Result<&str> {
+    let url = url.trim();
+    if url.is_empty() {
+        bail!("还没有配置更新清单地址");
+    }
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        bail!("更新清单地址必须以 http:// 或 https:// 开头");
+    }
+    Ok(url)
+}
+
+pub async fn check(url: &str) -> Result<UpdateInfo> {
+    let url = validate_url(url)?;
+    let manifest: Manifest = http::client()
+        .get(url)
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .context("请求更新清单失败")?
+        .error_for_status()
+        .context("更新清单返回了错误状态")?
+        .json()
+        .await
+        .context("更新清单格式不正确")?;
+    if manifest.version.trim().is_empty() || manifest.url.trim().is_empty() {
+        bail!("更新清单缺少 version 或 url 字段");
+    }
+    Ok(UpdateInfo {
+        current: CURRENT_VERSION.to_string(),
+        available: is_newer(&manifest.version, CURRENT_VERSION),
+        latest: manifest.version,
+        url: manifest.url,
+        notes: manifest.notes,
+    })
+}
+
+fn download_name(url: &str, version: &str) -> String {
+    let last = url
+        .rsplit(['/', '?'])
+        .next()
+        .map(|name| name.trim().to_string())
+        .unwrap_or_default();
+    if (last.ends_with(".exe") || last.ends_with(".msi"))
+        && last
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    {
+        return last;
+    }
+    let version = version
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    format!("DOCL-{version}-setup.exe")
+}
+
+pub async fn download(app: &AppHandle, url: &str, version: &str) -> Result<PathBuf> {
+    let url = validate_url(url)?;
+    let dir = config::data_dir().join("updates");
+    tokio::fs::create_dir_all(&dir).await?;
+    let target = dir.join(download_name(url, version));
+
+    let client = http::client();
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .context("下载安装包失败")?
+        .error_for_status()
+        .context("安装包地址返回了错误状态")?;
+    let total = response.content_length().unwrap_or(0);
+    let mut stream = response.bytes_stream();
+    let mut file = tokio::fs::File::create(&target).await?;
+    let mut downloaded = 0u64;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("下载安装包中断")?;
+        file.write_all(&chunk).await?;
+        downloaded += chunk.len() as u64;
+        let _ = app.emit(
+            "update-progress",
+            UpdateProgress {
+                downloaded,
+                total,
+            },
+        );
+    }
+    file.flush().await?;
+    let _ = app.emit("update-progress", UpdateProgress { downloaded, total });
+    Ok(target)
+}
+
+/// 启动完整安装包，随后关闭启动器让安装程序接管。
+pub fn install(app: &AppHandle, path: &str) -> Result<()> {
+    let target = PathBuf::from(path);
+    if !target.is_file() {
+        bail!("安装包不存在：{path}");
+    }
+    std::process::Command::new(&target)
+        .spawn()
+        .context("启动安装程序失败")?;
+    app.exit(0);
+    Ok(())
+}

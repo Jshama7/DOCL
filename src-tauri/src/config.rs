@@ -9,6 +9,12 @@ pub struct GameDirEntry {
     pub path: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ServerEntry {
+    pub address: String,
+    pub last_used: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -16,12 +22,34 @@ pub struct Config {
     pub game_dir: String,
     /// 保存过的游戏目录，可在设置里切换
     pub game_dirs: Vec<GameDirEntry>,
+    /// 最近连接过的服务器
+    pub recent_servers: Vec<ServerEntry>,
+    /// 房间大厅数据地址（返回 JSON 列表），留空表示不启用大厅
+    pub hall_url: String,
+    /// 自更新清单地址，留空表示不检查更新
+    pub update_url: String,
+    /// 启动器更新策略：auto（自动下载）/ notify（提示）/ off（关闭）
+    pub update_mode: String,
     /// 手动指定的 java.exe
     pub java_path: Option<String>,
     /// 最大内存（MB）
     pub memory_mb: u32,
+    /// 自动按系统内存推荐分配
+    pub memory_auto: bool,
+    /// auto / g1gc / zgc / custom
+    pub memory_mode: String,
     /// 额外 JVM 参数
     pub java_args: String,
+    /// 额外游戏参数
+    pub game_args: String,
+    /// 启动前执行的命令
+    pub pre_launch: String,
+    /// 不再向游戏注入 DOCL 启动器标识
+    pub disable_launch_wrapper: bool,
+    /// 不再注入 Java 24+ 的 LWJGL Unsafe 兼容参数
+    pub disable_lwjgl_unsafe: bool,
+    /// 为所选 Java 写入高性能显卡偏好
+    pub prefer_gpu: bool,
     pub window_width: u32,
     pub window_height: u32,
     pub fullscreen: bool,
@@ -32,12 +60,18 @@ pub struct Config {
     pub version_isolation: bool,
     pub selected_version: Option<String>,
     pub selected_account: Option<String>,
-    /// paper / celadon / terracotta / moon / nocturne
+    /// paper / celadon / terracotta / moon / nocturne / sakura / ocean / lavender / graphite
     pub theme: String,
     pub background_image: Option<String>,
     pub background_blur: u32,
     pub glass_opacity: u32,
     pub glass_blur: u32,
+    /// 背景遮罩暗度（0-60）
+    pub background_dim: u32,
+    /// default / sharp / round
+    pub ui_radius: String,
+    /// compact / normal / comfy
+    pub ui_density: String,
 }
 
 impl Default for Config {
@@ -45,9 +79,20 @@ impl Default for Config {
         Self {
             game_dir: default_game_dir().to_string_lossy().to_string(),
             game_dirs: Vec::new(),
+            recent_servers: Vec::new(),
+            hall_url: String::new(),
+            update_url: String::new(),
+            update_mode: "notify".into(),
             java_path: None,
             memory_mb: 4096,
+            memory_auto: true,
+            memory_mode: "auto".into(),
             java_args: String::new(),
+            game_args: String::new(),
+            pre_launch: String::new(),
+            disable_launch_wrapper: false,
+            disable_lwjgl_unsafe: false,
+            prefer_gpu: false,
             window_width: 1280,
             window_height: 720,
             fullscreen: false,
@@ -62,6 +107,9 @@ impl Default for Config {
             background_blur: 4,
             glass_opacity: 62,
             glass_blur: 18,
+            background_dim: 0,
+            ui_radius: "default".into(),
+            ui_density: "normal".into(),
         }
     }
 }

@@ -1,8 +1,10 @@
 use crate::config::{self, Config};
 use crate::install;
 use anyhow::{bail, Context, Result};
+use flate2::read::GzDecoder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 fn meta_path() -> PathBuf {
@@ -21,8 +23,14 @@ pub struct InstanceMeta {
     /// 该版本是否使用独立目录；整合包实例会强制开启
     pub isolated: Option<bool>,
     pub memory_mb: Option<u32>,
+    pub memory_mode: Option<String>,
     pub java_path: Option<String>,
     pub java_args: Option<String>,
+    pub game_args: Option<String>,
+    pub pre_launch: Option<String>,
+    pub disable_launch_wrapper: Option<bool>,
+    pub disable_lwjgl_unsafe: Option<bool>,
+    pub prefer_gpu: Option<bool>,
     pub window_width: Option<u32>,
     pub window_height: Option<u32>,
     pub fullscreen: Option<bool>,
@@ -102,12 +110,31 @@ pub fn apply(cfg: &Config, version_id: &str) -> Config {
     let mut merged = cfg.clone();
     if let Some(memory) = meta.memory_mb {
         merged.memory_mb = memory.max(512);
+        merged.memory_auto = false;
+    }
+    if let Some(mode) = meta.memory_mode.filter(|mode| !mode.trim().is_empty()) {
+        merged.memory_mode = mode;
     }
     if let Some(path) = meta.java_path.filter(|path| !path.trim().is_empty()) {
         merged.java_path = Some(path);
     }
     if let Some(args) = meta.java_args {
         merged.java_args = args;
+    }
+    if let Some(args) = meta.game_args {
+        merged.game_args = args;
+    }
+    if let Some(command) = meta.pre_launch {
+        merged.pre_launch = command;
+    }
+    if let Some(value) = meta.disable_launch_wrapper {
+        merged.disable_launch_wrapper = value;
+    }
+    if let Some(value) = meta.disable_lwjgl_unsafe {
+        merged.disable_lwjgl_unsafe = value;
+    }
+    if let Some(value) = meta.prefer_gpu {
+        merged.prefer_gpu = value;
     }
     if let Some(width) = meta.window_width.filter(|value| *value >= 320) {
         merged.window_width = width;
@@ -148,7 +175,28 @@ pub struct InstancePaths {
     pub shaderpacks: String,
     pub saves: String,
     pub screenshots: String,
+    pub datapacks: String,
+    pub schematics: String,
     pub game_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorldSummary {
+    /// 存档文件夹名，前端拼成 datapacks:<folder> 作为内容分类
+    pub folder: String,
+    pub name: String,
+    pub modified: u64,
+    pub datapacks: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct WorldSeed {
+    pub folder: String,
+    pub name: String,
+    /// 世界种子，读不到时为 None
+    pub seed: Option<String>,
+    /// level.dat 里记录的世界版本，例如 1.21.1
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -167,8 +215,14 @@ pub struct InstanceInfo {
     pub path: String,
     pub installed_at: u64,
     pub memory_mb: Option<u32>,
+    pub memory_mode: Option<String>,
     pub java_path: Option<String>,
     pub java_args: Option<String>,
+    pub game_args: Option<String>,
+    pub pre_launch: Option<String>,
+    pub disable_launch_wrapper: Option<bool>,
+    pub disable_lwjgl_unsafe: Option<bool>,
+    pub prefer_gpu: Option<bool>,
     pub window_width: Option<u32>,
     pub window_height: Option<u32>,
     pub fullscreen: Option<bool>,
@@ -182,6 +236,7 @@ fn content_subdir(kind: &str) -> Result<&'static str> {
         "shaderpacks" => Ok("shaderpacks"),
         "saves" => Ok("saves"),
         "screenshots" => Ok("screenshots"),
+        "schematics" => Ok("schematics"),
         _ => bail!("未知的内容分类：{kind}"),
     }
 }
@@ -199,12 +254,241 @@ pub fn game_dir(cfg: &Config, version_id: &str) -> PathBuf {
 }
 
 pub fn content_dir(cfg: &Config, version_id: &str, kind: &str) -> Result<PathBuf> {
+    // 数据包属于单个存档世界：datapacks:<folder>，不带后缀时取最近游玩的世界
+    if kind == "datapacks" {
+        return datapack_dir(cfg, version_id, None);
+    }
+    if let Some(world) = kind.strip_prefix("datapacks:") {
+        return datapack_dir(cfg, version_id, Some(world));
+    }
     Ok(game_dir(cfg, version_id).join(content_subdir(kind)?))
+}
+
+fn latest_world_dir(cfg: &Config, version_id: &str) -> Result<PathBuf> {
+    worlds(cfg, version_id)
+        .into_iter()
+        .next()
+        .map(|world| game_dir(cfg, version_id).join("saves").join(world.folder))
+        .ok_or_else(|| anyhow::anyhow!("还没有存档，请先在游戏里创建一个世界"))
+}
+
+fn datapack_dir(cfg: &Config, version_id: &str, world: Option<&str>) -> Result<PathBuf> {
+    let world_dir = match world.map(str::trim).filter(|name| !name.is_empty()) {
+        Some(name) => {
+            let name = safe_name(name)?;
+            let dir = game_dir(cfg, version_id).join("saves").join(name);
+            if !dir.is_dir() {
+                bail!("存档不存在：{name}");
+            }
+            dir
+        }
+        None => latest_world_dir(cfg, version_id)?,
+    };
+    let target = world_dir.join("datapacks");
+    std::fs::create_dir_all(&target)?;
+    Ok(target)
+}
+
+/// 实例下的全部存档世界，按最近游玩时间倒序。
+pub fn worlds(cfg: &Config, version_id: &str) -> Vec<WorldSummary> {
+    let saves = game_dir(cfg, version_id).join("saves");
+    let Ok(entries) = std::fs::read_dir(&saves) else {
+        return Vec::new();
+    };
+    let mut list = Vec::new();
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let folder = entry.file_name().to_string_lossy().to_string();
+        if folder.starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        let mut name = folder.clone();
+        if let Ok(text) = std::fs::read_to_string(path.join("levelname.txt")) {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() && trimmed.chars().count() <= 64 {
+                name = trimmed.to_string();
+            }
+        }
+        list.push(WorldSummary {
+            folder,
+            name,
+            modified: modified_secs(&path.join("level.dat")).max(modified_secs(&path)),
+            datapacks: path.join("datapacks").to_string_lossy().to_string(),
+        });
+    }
+    list.sort_by(|a, b| b.modified.cmp(&a.modified));
+    list
+}
+
+/// 读取单个存档的种子与世界版本，用于种子地图预览。
+pub fn world_seed(cfg: &Config, version_id: &str, folder: &str) -> Result<WorldSeed> {
+    let name = safe_name(folder)?;
+    let dir = game_dir(cfg, version_id).join("saves").join(name);
+    if !dir.is_dir() {
+        bail!("存档不存在：{name}");
+    }
+    let mut display = name.to_string();
+    if let Ok(text) = std::fs::read_to_string(dir.join("levelname.txt")) {
+        let trimmed = text.trim();
+        if !trimmed.is_empty() && trimmed.chars().count() <= 64 {
+            display = trimmed.to_string();
+        }
+    }
+    let raw = std::fs::read(dir.join("level.dat")).context("读取 level.dat 失败")?;
+    let data = if raw.starts_with(&[0x1f, 0x8b]) {
+        let mut decoder = GzDecoder::new(raw.as_slice());
+        let mut out = Vec::new();
+        decoder
+            .read_to_end(&mut out)
+            .context("解压 level.dat 失败")?;
+        out
+    } else {
+        raw
+    };
+    let (seed, version) = parse_level_dat(&data).unwrap_or((None, None));
+    Ok(WorldSeed {
+        folder: name.to_string(),
+        name: display,
+        seed: seed.map(|value| value.to_string()),
+        version,
+    })
+}
+
+struct LevelInfo {
+    seed: Option<i64>,
+    version: Option<String>,
+}
+
+/// 只解析 level.dat 根复合标签里的 Data.Seed / Data.Version.Name。
+fn parse_level_dat(data: &[u8]) -> Option<(Option<i64>, Option<String>)> {
+    let mut pos = 0usize;
+    if *data.get(pos)? != 10 {
+        return None;
+    }
+    pos += 1;
+    read_nbt_string(data, &mut pos)?;
+    let mut info = LevelInfo {
+        seed: None,
+        version: None,
+    };
+    scan_compound(data, &mut pos, &mut info, "root")?;
+    Some((info.seed, info.version))
+}
+
+fn scan_compound(data: &[u8], pos: &mut usize, info: &mut LevelInfo, scope: &str) -> Option<()> {
+    loop {
+        let tag = *data.get(*pos)?;
+        *pos += 1;
+        if tag == 0 {
+            return Some(());
+        }
+        let name = read_nbt_string(data, pos)?;
+        match tag {
+            10 if scope == "root" && name == "Data" => scan_compound(data, pos, info, "data")?,
+            10 if scope == "data" && name == "Version" => scan_compound(data, pos, info, "version")?,
+            10 if scope == "data" && name == "WorldGenSettings" => {
+                scan_compound(data, pos, info, "worldgen")?
+            }
+            4 if scope == "data" && (name == "Seed" || name == "RandomSeed") => {
+                let value = read_i64(data, pos)?;
+                if info.seed.is_none() || name == "Seed" {
+                    info.seed = Some(value);
+                }
+            }
+            4 if scope == "worldgen" && name == "seed" => {
+                info.seed = Some(read_i64(data, pos)?);
+            }
+            8 if scope == "version" && name == "Name" => {
+                info.version = Some(read_nbt_string(data, pos)?);
+            }
+            _ => skip_nbt_payload(data, pos, tag)?,
+        }
+    }
+}
+
+fn read_nbt_string(data: &[u8], pos: &mut usize) -> Option<String> {
+    let len = read_u16(data, pos)? as usize;
+    let slice = data.get(*pos..*pos + len)?;
+    *pos += len;
+    Some(String::from_utf8_lossy(slice).to_string())
+}
+
+fn read_u16(data: &[u8], pos: &mut usize) -> Option<u16> {
+    let bytes: [u8; 2] = data.get(*pos..*pos + 2)?.try_into().ok()?;
+    *pos += 2;
+    Some(u16::from_be_bytes(bytes))
+}
+
+fn read_i32(data: &[u8], pos: &mut usize) -> Option<i32> {
+    let bytes: [u8; 4] = data.get(*pos..*pos + 4)?.try_into().ok()?;
+    *pos += 4;
+    Some(i32::from_be_bytes(bytes))
+}
+
+fn read_i64(data: &[u8], pos: &mut usize) -> Option<i64> {
+    let bytes: [u8; 8] = data.get(*pos..*pos + 8)?.try_into().ok()?;
+    *pos += 8;
+    Some(i64::from_be_bytes(bytes))
+}
+
+fn skip_nbt_payload(data: &[u8], pos: &mut usize, tag: u8) -> Option<()> {
+    match tag {
+        1 => *pos += 1,
+        2 => *pos += 2,
+        3 => *pos += 4,
+        4 => *pos += 8,
+        5 => *pos += 4,
+        6 => *pos += 8,
+        7 => {
+            let len = read_i32(data, pos)?.max(0) as usize;
+            *pos += len;
+        }
+        8 => {
+            read_nbt_string(data, pos)?;
+        }
+        9 => {
+            let element = *data.get(*pos)?;
+            *pos += 1;
+            let len = read_i32(data, pos)?.max(0);
+            for _ in 0..len {
+                skip_nbt_payload(data, pos, element)?;
+            }
+        }
+        10 => loop {
+            let inner = *data.get(*pos)?;
+            *pos += 1;
+            if inner == 0 {
+                break;
+            }
+            read_nbt_string(data, pos)?;
+            skip_nbt_payload(data, pos, inner)?;
+        },
+        11 => {
+            let len = read_i32(data, pos)?.max(0) as usize;
+            *pos += len * 4;
+        }
+        12 => {
+            let len = read_i32(data, pos)?.max(0) as usize;
+            *pos += len * 8;
+        }
+        _ => return None,
+    }
+    data.get(*pos..*pos).map(|_| ())
 }
 
 pub fn paths(cfg: &Config, version_id: &str) -> InstancePaths {
     let root = game_dir(cfg, version_id);
-    for name in ["mods", "resourcepacks", "shaderpacks", "saves", "screenshots"] {
+    for name in [
+        "mods",
+        "resourcepacks",
+        "shaderpacks",
+        "saves",
+        "screenshots",
+        "schematics",
+    ] {
         let _ = std::fs::create_dir_all(root.join(name));
     }
     InstancePaths {
@@ -216,6 +500,10 @@ pub fn paths(cfg: &Config, version_id: &str) -> InstancePaths {
         shaderpacks: root.join("shaderpacks").to_string_lossy().to_string(),
         saves: root.join("saves").to_string_lossy().to_string(),
         screenshots: root.join("screenshots").to_string_lossy().to_string(),
+        datapacks: latest_world_dir(cfg, version_id)
+            .map(|world| world.join("datapacks").to_string_lossy().to_string())
+            .unwrap_or_default(),
+        schematics: root.join("schematics").to_string_lossy().to_string(),
         game_dir: root.to_string_lossy().to_string(),
     }
 }
@@ -227,6 +515,108 @@ fn modified_secs(path: &Path) -> u64 {
         .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|duration| duration.as_secs())
         .unwrap_or(0)
+}
+
+fn dir_size(path: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| {
+            let child = entry.path();
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => dir_size(&child),
+                _ => entry.metadata().map(|meta| meta.len()).unwrap_or(0),
+            }
+        })
+        .sum()
+}
+
+fn expand_rgba(src: &[u8], channels: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(src.len() / channels * 4);
+    for chunk in src.chunks_exact(channels) {
+        match channels {
+            1 => out.extend_from_slice(&[chunk[0], chunk[0], chunk[0], 255]),
+            2 => out.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]),
+            3 => out.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 255]),
+            _ => out.extend_from_slice(&chunk[..4]),
+        }
+    }
+    out
+}
+
+/// 把 PNG 等比缩到最长边 max 以内，编码后转成 data URL；失败时返回 None。
+fn png_thumb_data_url(path: &Path, max: u32) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut decoder = png::Decoder::new(std::io::BufReader::new(file));
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let (width, height) = (info.width, info.height);
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let used = info.buffer_size();
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => buf[..used].to_vec(),
+        png::ColorType::Rgb => expand_rgba(&buf[..used], 3),
+        png::ColorType::Grayscale => expand_rgba(&buf[..used], 1),
+        png::ColorType::GrayscaleAlpha => expand_rgba(&buf[..used], 2),
+        png::ColorType::Indexed => return None,
+    };
+
+    let (tw, th) = if width <= max && height <= max {
+        (width, height)
+    } else {
+        let scale = max as f64 / width.max(height) as f64;
+        (
+            ((width as f64 * scale).round() as u32).max(1),
+            ((height as f64 * scale).round() as u32).max(1),
+        )
+    };
+
+    let pixels = if tw == width && th == height {
+        rgba
+    } else {
+        let mut out = vec![0u8; (tw * th * 4) as usize];
+        for y in 0..th {
+            let sy0 = (y as u64 * height as u64 / th as u64) as u32;
+            let sy1 = (((y + 1) as u64 * height as u64 / th as u64) as u32).max(sy0 + 1).min(height);
+            for x in 0..tw {
+                let sx0 = (x as u64 * width as u64 / tw as u64) as u32;
+                let sx1 = (((x + 1) as u64 * width as u64 / tw as u64) as u32).max(sx0 + 1).min(width);
+                let mut sum = [0u32; 4];
+                let mut count = 0u32;
+                for sy in sy0..sy1 {
+                    for sx in sx0..sx1 {
+                        let i = ((sy * width + sx) * 4) as usize;
+                        for c in 0..4 {
+                            sum[c] += rgba[i + c] as u32;
+                        }
+                        count += 1;
+                    }
+                }
+                let o = ((y * tw + x) * 4) as usize;
+                let count = count.max(1);
+                for c in 0..4 {
+                    out[o + c] = (sum[c] / count) as u8;
+                }
+            }
+        }
+        out
+    };
+
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, tw, th);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().ok()?;
+        writer.write_image_data(&pixels).ok()?;
+    }
+    Some(crate::skins::to_data_url(&encoded, "image/png"))
 }
 
 pub fn list_files(cfg: &Config, version_id: &str, kind: &str) -> Result<Vec<InstanceFile>> {
@@ -246,12 +636,25 @@ pub fn list_files(cfg: &Config, version_id: &str, kind: &str) -> Result<Vec<Inst
             continue;
         }
         let enabled = !name.ends_with(".disabled");
-        let display_name = name.trim_end_matches(".disabled").to_string();
-        let size = if is_dir {
+        let mut display_name = name.trim_end_matches(".disabled").to_string();
+        let mut size = if is_dir {
             0
         } else {
             std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0)
         };
+        match kind {
+            "saves" => {
+                // 世界文件夹的 levelname.txt 才是玩家看到的存档名
+                if let Ok(text) = std::fs::read_to_string(path.join("levelname.txt")) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() && trimmed.chars().count() <= 64 {
+                        display_name = trimmed.to_string();
+                    }
+                }
+                size = dir_size(&path);
+            }
+            _ => {}
+        }
         files.push(InstanceFile {
             name,
             display_name,
@@ -307,6 +710,48 @@ pub fn delete_file(cfg: &Config, version_id: &str, kind: &str, name: &str) -> Re
         std::fs::remove_file(&path)?;
     }
     Ok(())
+}
+
+/// 按需生成缩略图：截图返回缩放后的 data URL，存档返回世界图标。
+pub fn thumb(cfg: &Config, version_id: &str, kind: &str, name: &str) -> Result<Option<String>> {
+    let name = safe_name(name)?;
+    let dir = content_dir(cfg, version_id, kind)?;
+    let path = dir.join(name);
+    if !path.exists() {
+        return Ok(None);
+    }
+    Ok(match kind {
+        "screenshots" => png_thumb_data_url(&path, 480),
+        "saves" => png_thumb_data_url(&path.join("icon.png"), 128)
+            .or_else(|| png_thumb_data_url(&path.join("level.png"), 128)),
+        _ => None,
+    })
+}
+
+/// 用系统默认程序打开实例内容目录里的文件（截图查看用）。
+pub fn open_content(cfg: &Config, version_id: &str, kind: &str, name: &str) -> Result<()> {
+    let name = safe_name(name)?;
+    let dir = content_dir(cfg, version_id, kind)?;
+    let path = dir.join(name);
+    if !path.exists() {
+        bail!("文件不存在：{name}");
+    }
+    #[cfg(windows)]
+    {
+        std::process::Command::new("explorer")
+            .arg(&path)
+            .spawn()
+            .context("打开文件失败")?;
+        return Ok(());
+    }
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path)
+            .spawn()
+            .context("打开文件失败")?;
+        Ok(())
+    }
 }
 
 fn unique_target(dir: &Path, name: &str) -> PathBuf {
@@ -436,8 +881,14 @@ pub fn info(cfg: &Config, version_id: &str) -> Result<InstanceInfo> {
             .to_string(),
         installed_at: entry.last_modified,
         memory_mb: meta.memory_mb,
+        memory_mode: meta.memory_mode,
         java_path: meta.java_path,
         java_args: meta.java_args,
+        game_args: meta.game_args,
+        pre_launch: meta.pre_launch,
+        disable_launch_wrapper: meta.disable_launch_wrapper,
+        disable_lwjgl_unsafe: meta.disable_lwjgl_unsafe,
+        prefer_gpu: meta.prefer_gpu,
         window_width: meta.window_width,
         window_height: meta.window_height,
         fullscreen: meta.fullscreen,

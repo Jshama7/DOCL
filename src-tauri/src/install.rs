@@ -707,7 +707,7 @@ async fn fetch_maven_metadata(
     bail!("无法获取加载器版本列表")
 }
 
-fn forge_installer_for(game_version: &str, version: &str) -> (String, String, String) {
+pub(crate) fn forge_installer_for(game_version: &str, version: &str) -> (String, String, String) {
     let coordinate = format!("{game_version}-{version}");
     let file = format!("forge-{coordinate}-installer.jar");
     (
@@ -717,7 +717,7 @@ fn forge_installer_for(game_version: &str, version: &str) -> (String, String, St
     )
 }
 
-fn neoforge_installer_for(game_version: &str, version: &str) -> (String, String, String) {
+pub(crate) fn neoforge_installer_for(game_version: &str, version: &str) -> (String, String, String) {
     if game_version == "1.20.1" {
         let coordinate = format!("1.20.1-{version}");
         let file = format!("forge-{coordinate}-installer.jar");

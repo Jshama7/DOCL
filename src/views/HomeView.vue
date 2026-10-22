@@ -6,6 +6,7 @@ import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
 import PlayerAvatar from "../components/PlayerAvatar.vue";
 import SkinHead from "../components/SkinHead.vue";
+import NewsPanel from "../components/NewsPanel.vue";
 import {
   launchVersion,
   selectedAccount,
@@ -231,6 +232,8 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
         <span class="hero__bit hero__bit--c" />
       </div>
     </section>
+
+    <NewsPanel />
   </div>
 </template>
 

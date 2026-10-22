@@ -15,6 +15,7 @@ import WoodInput from "../components/WoodInput.vue";
 import WoodSelect from "../components/WoodSelect.vue";
 import WoodToggle from "../components/WoodToggle.vue";
 import {
+  downloadModpack,
   importModpack,
   installCfFile,
   notify,
@@ -90,6 +91,7 @@ const filesError = ref("");
 
 const showImport = ref(false);
 const packPath = ref("");
+const packFromTemp = ref(false);
 const packPreview = ref<PackPreview | null>(null);
 const inspecting = ref(false);
 const importing = ref(false);
@@ -102,7 +104,6 @@ const importForm = reactive({
 });
 
 const label = computed(() => CLASS_LABELS[props.kind] ?? "资源");
-const installable = computed(() => props.kind !== "modpacks");
 const parentOptions = computed(() =>
   store.installed.map((item) => ({ value: item.id, label: item.id }))
 );
@@ -162,11 +163,13 @@ onMounted(async () => {
       ? preset.instanceId
       : "";
   instanceId.value =
-    fromPreset ||
-    (store.config?.selected_version &&
-    store.installed.some((v) => v.id === store.config?.selected_version)
-      ? store.config.selected_version
-      : store.installed[0]?.id ?? "");
+    props.kind === "modpacks"
+      ? ""
+      : fromPreset ||
+        (store.config?.selected_version &&
+        store.installed.some((v) => v.id === store.config?.selected_version)
+          ? store.config.selected_version
+          : store.installed[0]?.id ?? "");
   if (instanceId.value) {
     versionMode.value = "instance";
   } else if (preset?.gameVersion) {
@@ -174,9 +177,16 @@ onMounted(async () => {
   } else {
     versionMode.value = "all";
   }
+  if (preset?.query) query.value = preset.query;
   loadVersions();
   await loadContext();
   await search(true);
+  if (preset?.projectId) {
+    const hit =
+      items.value.find((project) => project.id === preset.projectId) ??
+      items.value[0];
+    if (hit) openProject(hit);
+  }
   store.communityContext = null;
 });
 
@@ -326,7 +336,7 @@ function install(project: CfProject, file: CfFileView) {
   if (!file.download_url || !instanceId.value) return;
   installCfFile(
     instanceId.value,
-    props.kind,
+    preset?.installKind ?? props.kind,
     file.download_url,
     file.file_name,
     `${project.name} ${file.name}`
@@ -373,23 +383,12 @@ function refresh() {
   search(true);
 }
 
-async function pickPack() {
-  if (store.installingId) {
-    notify("已有下载任务正在进行", "err");
-    return;
-  }
-  const selection = await openDialog({
-    multiple: false,
-    directory: false,
-    title: "选择整合包压缩包",
-    filters: [{ name: "整合包", extensions: ["zip", "mrpack"] }],
-  });
-  const path = Array.isArray(selection) ? selection[0] : selection;
-  if (!path) return;
+async function openPreview(path: string, fromTemp: boolean) {
   inspecting.value = true;
   try {
     const preview = await api.modpackInspect(path);
     packPath.value = path;
+    packFromTemp.value = fromTemp;
     packPreview.value = preview;
     importForm.name = preview.name;
     importForm.id = preview.suggested_id;
@@ -403,9 +402,37 @@ async function pickPack() {
     showImport.value = true;
   } catch (err) {
     notify(`读取整合包失败：${String(err)}`, "err");
+    if (fromTemp) api.modpackTempRemove(path).catch(() => {});
   } finally {
     inspecting.value = false;
   }
+}
+
+async function pickPack() {
+  if (store.installingId) {
+    notify("已有下载任务正在进行", "err");
+    return;
+  }
+  const selection = await openDialog({
+    multiple: false,
+    directory: false,
+    title: "选择整合包压缩包",
+    filters: [{ name: "整合包", extensions: ["zip", "mrpack"] }],
+  });
+  const path = Array.isArray(selection) ? selection[0] : selection;
+  if (!path) return;
+  await openPreview(path, false);
+}
+
+async function installPack(project: CfProject, file: CfFileView) {
+  if (!file.download_url || inspecting.value) return;
+  const path = await downloadModpack(
+    file.download_url,
+    file.file_name,
+    `${project.name} ${file.name}`
+  );
+  if (!path) return;
+  await openPreview(path, true);
 }
 
 async function confirmImport() {
@@ -430,6 +457,10 @@ async function confirmImport() {
   if (result) {
     showImport.value = false;
     packPreview.value = null;
+    if (packFromTemp.value) {
+      api.modpackTempRemove(packPath.value).catch(() => {});
+      packFromTemp.value = false;
+    }
     openInstance(result.instance_id);
   }
 }
@@ -480,7 +511,7 @@ async function confirmImport() {
           <WoodSelect v-model="sortField" :options="sortOptions" />
         </label>
 
-        <label class="cf-field">
+        <label v-if="kind !== 'modpacks'" class="cf-field">
           <span class="cf-field__label">目标实例</span>
           <WoodSelect
             v-if="instanceOptions.length"
@@ -513,7 +544,7 @@ async function confirmImport() {
           :size="38"
           @click="refresh"
         />
-        <span v-if="!instanceOptions.length" class="muted small cf-actions__hint">
+        <span v-if="!instanceOptions.length && kind !== 'modpacks'" class="muted small cf-actions__hint">
           还没安装版本也可以浏览；下载文件前需要先在「原版游戏」里安装一个实例。
         </span>
       </div>
@@ -557,6 +588,7 @@ async function confirmImport() {
               <template v-if="kind === 'mods' && loader">
                 · {{ LOADER_LABELS[loader] }}
               </template>
+              <template v-if="kind === 'modpacks'"> · 点下载直接安装成新实例</template>
             </p>
           </div>
         </div>
@@ -586,7 +618,16 @@ async function confirmImport() {
             <span class="cf-file__size mono">{{ formatBytes(file.size) }}</span>
             <span class="cf-file__date mono">{{ formatDate(file.file_date) }}</span>
             <IconButton
-              v-if="file.download_url && installable && instanceId"
+              v-if="file.download_url && kind === 'modpacks'"
+              icon="download"
+              :label="`安装 ${file.name}`"
+              variant="soft"
+              :size="30"
+              :disabled="!!store.installingId || inspecting"
+              @click="installPack(active, file)"
+            />
+            <IconButton
+              v-else-if="file.download_url && instanceId"
               icon="download"
               :label="`下载 ${file.name}`"
               variant="soft"
@@ -594,13 +635,10 @@ async function confirmImport() {
               :disabled="!!store.installingId"
               @click="install(active, file)"
             />
-            <span v-else-if="!installable" class="muted small cf-file__hint">
-              整合包安装将在下一步支持
+            <span v-else-if="!file.download_url" class="muted small cf-file__hint">
+              无下载地址
             </span>
-            <span v-else-if="!instanceId" class="muted small cf-file__hint">
-              先安装一个实例
-            </span>
-            <span v-else class="muted small cf-file__hint">无下载地址</span>
+            <span v-else class="muted small cf-file__hint">先安装一个实例</span>
           </div>
         </div>
       </section>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from "vue";
 import IconButton from "./IconButton.vue";
-import { store } from "../store";
+import { openCrashDialog, store } from "../store";
 
 const list = ref<HTMLElement | null>(null);
 
@@ -37,6 +37,7 @@ function clear() {
           <span class="muted small mono">{{ store.log.length }} LINES</span>
         </div>
         <div class="row">
+          <button class="drawer__btn" @click="openCrashDialog()">崩溃分析</button>
           <IconButton icon="trash" label="清空日志" :size="28" @click="clear" />
           <IconButton
             icon="chevron-down"

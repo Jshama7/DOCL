@@ -5,8 +5,9 @@ import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import SkinModel from "../components/SkinModel.vue";
 import WoodButton from "../components/WoodButton.vue";
+import WoodInput from "../components/WoodInput.vue";
 import WoodModal from "../components/WoodModal.vue";
-import type { AccountView } from "../api";
+import type { AccountView, DefaultSkin, SkinLibraryItem } from "../api";
 import { canvasFromSource, createDefaultSkin, seedFromString, SKIN_SIZE } from "../skin";
 import { loadSelectedSkin, notify, refreshAccounts, store } from "../store";
 
@@ -29,6 +30,11 @@ const uploadOpen = ref(false);
 const uploading = ref(false);
 const canUndo = ref(false);
 const canRedo = ref(false);
+const presets = ref<DefaultSkin[]>([]);
+const library = ref<SkinLibraryItem[]>([]);
+const libraryOpen = ref(false);
+const libraryName = ref("");
+const librarySaving = ref(false);
 
 const palette = [
   "#2b2118", "#4a3220", "#7a5230", "#c08a55",
@@ -299,15 +305,76 @@ function selectPart(value: typeof part.value) {
 }
 
 function resetSkin() {
-  const base = createDefaultSkin(seedFromString(props.account.uuid));
+  void loadSource();
+}
+
+async function applyPreset(preset: DefaultSkin) {
   if (!ctx) return;
-  ctx.clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
-  ctx.drawImage(base, 0, 0);
-  pushHistory();
-  schedulePreview();
+  try {
+    const base = await canvasFromSource(preset.data_url);
+    ctx.clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
+    ctx.drawImage(base, 0, 0);
+    pushHistory();
+    schedulePreview();
+    model.value = preset.model === "slim" ? "slim" : "classic";
+    notify(`已套用默认皮肤：${preset.name}`);
+  } catch (err) {
+    notify(`载入默认皮肤失败：${String(err)}`, "err");
+  }
+}
+
+async function loadLibrary() {
+  try {
+    library.value = await api.skinLibraryList();
+  } catch {
+    // 收藏库读取失败不影响编辑
+  }
+}
+
+async function applyLibrary(item: SkinLibraryItem) {
+  if (!ctx) return;
+  try {
+    const base = await canvasFromSource(item.data_url);
+    ctx.clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
+    ctx.drawImage(base, 0, 0);
+    pushHistory();
+    schedulePreview();
+    model.value = item.model === "slim" ? "slim" : "classic";
+    notify(`已载入收藏皮肤：${item.name}`);
+  } catch (err) {
+    notify(`载入收藏皮肤失败：${String(err)}`, "err");
+  }
+}
+
+function openSaveLibrary() {
+  libraryName.value = `${props.account.name} 皮肤`;
+  libraryOpen.value = true;
+}
+
+async function confirmSaveLibrary() {
+  const name = libraryName.value.trim();
+  if (!name || librarySaving.value) return;
+  librarySaving.value = true;
+  try {
+    await api.skinLibrarySave(name, model.value, currentPng());
+    await loadLibrary();
+    libraryOpen.value = false;
+    notify(`已存入收藏库：${name}`);
+  } catch (err) {
+    notify(`存入收藏库失败：${String(err)}`, "err");
+  } finally {
+    librarySaving.value = false;
+  }
 }
 
 onMounted(async () => {
+  void api
+    .defaultSkins()
+    .then((list) => {
+      presets.value = list;
+    })
+    .catch(() => {});
+  void loadLibrary();
   await nextTick();
   await loadSource();
 });
@@ -436,6 +503,53 @@ const partOptions = [
           </div>
         </div>
 
+        <div v-if="presets.length" class="preset-row">
+          <span class="tool-label">默认皮肤</span>
+          <div class="preset-list">
+            <button
+              v-for="preset in presets"
+              :key="preset.id"
+              class="preset"
+              :title="`套用 ${preset.name}`"
+              @click="applyPreset(preset)"
+            >
+              <span
+                class="preset-face"
+                :style="{ backgroundImage: `url(${preset.data_url})` }"
+              />
+              <span class="preset-name">{{ preset.name }}</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="preset-row">
+          <span class="tool-label">收藏库</span>
+          <div class="preset-list">
+            <button
+              v-for="item in library"
+              :key="item.id"
+              class="preset"
+              :title="`载入 ${item.name}`"
+              @click="applyLibrary(item)"
+            >
+              <span
+                class="preset-face"
+                :style="{ backgroundImage: `url(${item.data_url})` }"
+              />
+              <span class="preset-name">{{ item.name }}</span>
+            </button>
+            <button class="preset preset--add" title="把当前皮肤存入收藏库" @click="openSaveLibrary">
+              <span class="preset-face preset-face--add">
+                <AppIcon name="plus" :size="14" />
+              </span>
+              <span class="preset-name">存入</span>
+            </button>
+          </div>
+          <span v-if="!library.length" class="muted small preset-hint">
+            收藏库还是空的，可在皮肤库导入或抓取
+          </span>
+        </div>
+
         <div class="color-row">
           <div class="color-current" :style="{ background: color }" />
           <div class="palette">
@@ -514,6 +628,30 @@ const partOptions = [
         </section>
       </aside>
     </div>
+
+    <WoodModal
+      v-if="libraryOpen"
+      title="存入皮肤收藏库"
+      :width="400"
+      @close="libraryOpen = false"
+    >
+      <label class="library-field">
+        <span class="library-field__label">皮肤名称</span>
+        <WoodInput v-model="libraryName" placeholder="例如：夏日生存皮肤" />
+      </label>
+      <p class="muted small">同名皮肤会被覆盖，保存后可在皮肤库页面查看与套用。</p>
+      <template #footer>
+        <WoodButton variant="ghost" size="sm" @click="libraryOpen = false">取消</WoodButton>
+        <WoodButton
+          variant="primary"
+          size="sm"
+          :disabled="librarySaving || !libraryName.trim()"
+          @click="confirmSaveLibrary"
+        >
+          {{ librarySaving ? "保存中…" : "存入收藏库" }}
+        </WoodButton>
+      </template>
+    </WoodModal>
 
     <WoodModal
       v-if="uploadOpen"
@@ -618,6 +756,90 @@ const partOptions = [
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.preset-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  min-width: 0;
+}
+
+.preset-list {
+  display: flex;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 2px;
+}
+
+.preset {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 4px 5px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
+}
+
+.preset:hover {
+  border-color: var(--line-strong);
+  background: var(--panel-2);
+}
+
+.preset-face {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background-size: 272px 272px;
+  background-position: -34px -34px;
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+}
+
+.preset-name {
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  line-height: 1;
+}
+
+.preset-hint {
+  flex-shrink: 0;
+}
+
+.preset-face--add {
+  display: grid;
+  place-items: center;
+  border-style: dashed;
+  color: var(--muted);
+  background: transparent;
+}
+
+.preset--add:hover .preset-face--add {
+  border-color: var(--moss);
+  color: var(--moss);
+}
+
+.library-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.library-field__label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  letter-spacing: 0.04em;
 }
 
 .color-current {

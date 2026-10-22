@@ -9,7 +9,9 @@ const items: { key: Page; label: string; icon: string }[] = [
   { key: "home", label: "启动台", icon: "home" },
   { key: "versions", label: "版本", icon: "layers" },
   { key: "download", label: "下载", icon: "download" },
+  { key: "multiplayer", label: "联机", icon: "globe" },
   { key: "accounts", label: "账号", icon: "user" },
+  { key: "skins", label: "皮肤库", icon: "image" },
   { key: "settings", label: "设置", icon: "settings" },
 ];
 
@@ -305,17 +307,29 @@ function close() {
 .window-controls {
   display: flex;
   align-items: center;
+  gap: 4px;
   height: 100%;
-  margin-left: 4px;
+  margin-left: 6px;
+  padding-right: 8px;
+}
+
+.window-controls::before {
+  content: "";
+  width: 1px;
+  height: 18px;
+  margin-right: 6px;
+  background: var(--line);
 }
 
 .window-btn {
-  width: 44px;
-  height: 100%;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
   display: grid;
   place-items: center;
   color: var(--ink-soft);
-  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease,
+    transform var(--dur-1) ease, box-shadow var(--dur-1) ease;
 }
 
 .window-btn:hover {
@@ -323,9 +337,19 @@ function close() {
   color: var(--walnut-deep);
 }
 
+.window-btn:active {
+  transform: scale(0.92);
+}
+
+.window-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.4);
+}
+
 .window-btn--close:hover {
   background: #b4523a;
   color: #fffdf6;
+  box-shadow: 0 4px 12px rgba(180, 82, 58, 0.28);
 }
 
 @media (max-width: 1120px) {

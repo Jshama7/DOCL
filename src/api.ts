@@ -14,12 +14,121 @@ export interface GameDirsView {
   official: string;
 }
 
+export interface ServerEntry {
+  address: string;
+  last_used: number;
+}
+
+export interface LanRoom {
+  id: string;
+  motd: string;
+  host: string;
+  port: number;
+  address: string;
+  last_seen: number;
+}
+
+export interface LanView {
+  rooms: LanRoom[];
+  error: string | null;
+}
+
+export interface ServerPingResult {
+  motd: string;
+  version_name: string;
+  protocol: number;
+  players_online: number;
+  players_max: number;
+  players_sample: string[];
+  latency_ms: number;
+  favicon: string | null;
+}
+
+export interface ServerVersionOption {
+  id: string;
+  game_version: string;
+  java_major: number;
+  loader: string;
+}
+
+export interface ServerOptions {
+  port: number;
+  motd: string;
+  max_players: number;
+  view_distance: number;
+  online_mode: boolean;
+  white_list: boolean;
+  accept_eula: boolean;
+}
+
+export interface ServerSnapshot {
+  version_id: string;
+  game_version: string;
+  pid: number;
+  port: number;
+  lan_address: string;
+  local_address: string;
+  started_at: number;
+  online: boolean;
+  attached: boolean;
+  loader: string;
+  dir: string;
+  java: string;
+  log: string[];
+}
+
+export interface TcProfile {
+  machine_id: string;
+  name: string;
+  vendor: string;
+  kind: string;
+}
+
+export interface TcState {
+  state: string;
+  index: number;
+  room?: string;
+  url?: string;
+  difficulty?: string;
+  profiles?: TcProfile[];
+  type?: number;
+}
+
+export interface TcStatus {
+  running: boolean;
+  port: number;
+  version: string;
+  error: string | null;
+  state: TcState | null;
+}
+
+export interface HallRoom {
+  room: string;
+  name: string;
+  motd: string;
+  players: number;
+  max_players: number;
+  version: string;
+  updated: number;
+}
+
 export interface Config {
   game_dir: string;
   game_dirs: GameDirEntry[];
+  recent_servers: ServerEntry[];
+  hall_url: string;
+  update_url: string;
+  update_mode: string;
   java_path: string | null;
   memory_mb: number;
+  memory_auto: boolean;
+  memory_mode: string;
   java_args: string;
+  game_args: string;
+  pre_launch: string;
+  disable_launch_wrapper: boolean;
+  disable_lwjgl_unsafe: boolean;
+  prefer_gpu: boolean;
   window_width: number;
   window_height: number;
   fullscreen: boolean;
@@ -34,11 +143,41 @@ export interface Config {
   background_blur: number;
   glass_opacity: number;
   glass_blur: number;
+  background_dim: number;
+  ui_radius: string;
+  ui_density: string;
 }
 
 export interface BackgroundInfo {
   path: string;
   data_url: string;
+}
+
+export interface SystemMemory {
+  total_mb: number;
+  available_mb: number;
+}
+
+export interface NewsItem {
+  id: string;
+  title: string;
+  category: string;
+  tag: string;
+  date: string;
+  summary: string;
+  image_url: string | null;
+  url: string | null;
+  source: string;
+  version: string | null;
+  kind: string | null;
+  detail_path: string | null;
+}
+
+export interface NewsFeed {
+  items: NewsItem[];
+  updated_at: number;
+  stale: boolean;
+  errors: string[];
 }
 
 export interface VersionSummary {
@@ -84,6 +223,62 @@ export interface InstanceContext {
   loader: string;
 }
 
+export interface CrashLink {
+  label: string;
+  url: string;
+}
+
+export interface CrashMatch {
+  id: string;
+  title: string;
+  summary: string;
+  advice: string[];
+  evidence: string[];
+  links: CrashLink[];
+}
+
+export interface CrashReport {
+  version_id: string;
+  found: boolean;
+  source: string;
+  source_path: string;
+  source_kind: string;
+  modified: number;
+  headline: string;
+  description: string | null;
+  matches: CrashMatch[];
+  excerpt: string[];
+  scanned: string[];
+}
+
+export interface ModUpdate {
+  file_name: string;
+  mod_name: string;
+  current_version: string;
+  latest_version: string;
+  latest_file: string;
+  download_url: string;
+  sha1: string | null;
+  project_id: string;
+  slug: string;
+  icon_url: string | null;
+  version_type: string;
+  game_versions: string[];
+  source: string;
+  project_url: string;
+}
+
+export interface ModUpdateReport {
+  version_id: string;
+  game_version: string;
+  loader: string;
+  scanned: number;
+  matched: number;
+  up_to_date: number;
+  updates: ModUpdate[];
+  notes: string[];
+}
+
 export interface InstanceMeta {
   display_name: string | null;
   description: string;
@@ -91,8 +286,14 @@ export interface InstanceMeta {
   category: string;
   favorite: boolean;
   memory_mb: number | null;
+  memory_mode: string | null;
   java_path: string | null;
   java_args: string | null;
+  game_args: string | null;
+  pre_launch: string | null;
+  disable_launch_wrapper: boolean | null;
+  disable_lwjgl_unsafe: boolean | null;
+  prefer_gpu: boolean | null;
   window_width: number | null;
   window_height: number | null;
   fullscreen: boolean | null;
@@ -133,7 +334,36 @@ export interface InstancePaths {
   shaderpacks: string;
   saves: string;
   screenshots: string;
+  datapacks: string;
+  schematics: string;
   game_dir: string;
+}
+
+export interface WorldSummary {
+  folder: string;
+  name: string;
+  modified: number;
+  datapacks: string;
+}
+
+export interface WorldSeed {
+  folder: string;
+  name: string;
+  seed: string | null;
+  version: string | null;
+}
+
+export interface UpdateInfo {
+  current: string;
+  latest: string;
+  available: boolean;
+  url: string;
+  notes: string;
+}
+
+export interface UpdateProgress {
+  downloaded: number;
+  total: number;
 }
 
 export interface PackFilePreview {
@@ -204,6 +434,29 @@ export interface ExportResult {
   paths: string[];
   bytes: number;
   file_count: number;
+}
+
+export interface DefaultSkin {
+  id: string;
+  name: string;
+  model: string;
+  data_url: string;
+}
+
+export interface SkinLibraryItem {
+  id: string;
+  name: string;
+  model: string;
+  source: string;
+  created_at: number;
+  data_url: string;
+}
+
+export interface CapeView {
+  id: string;
+  alias: string;
+  url: string;
+  active: boolean;
 }
 
 export interface CfProject {
@@ -282,6 +535,9 @@ export interface GameExit {
 
 export const api = {
   getConfig: () => invoke<Config>("get_config"),
+  systemMemory: () => invoke<SystemMemory>("system_memory"),
+  newsFeed: (force = false) => invoke<NewsFeed>("news_feed", { force }),
+  newsArticle: (path: string) => invoke<string>("news_article", { path }),
   saveConfig: (config: Config) => invoke<Config>("save_config", { config }),
   gameDirs: () => invoke<GameDirsView>("game_dirs"),
   addGameDir: (path: string) => invoke<Config>("add_game_dir", { path }),
@@ -310,11 +566,47 @@ export const api = {
     invoke<void>("instance_toggle_file", { versionId, kind, name }),
   instanceDeleteFile: (versionId: string, kind: string, name: string) =>
     invoke<void>("instance_delete_file", { versionId, kind, name }),
+  instanceOpenContent: (versionId: string, kind: string, name: string) =>
+    invoke<void>("instance_open_content", { versionId, kind, name }),
+  instanceThumb: (versionId: string, kind: string, name: string) =>
+    invoke<string | null>("instance_thumb", { versionId, kind, name }),
   instanceImportFiles: (versionId: string, kind: string, paths: string[]) =>
     invoke<number>("instance_import_files", { versionId, kind, paths }),
   instancePaths: (versionId: string) =>
     invoke<InstancePaths>("instance_paths", { versionId }),
+  instanceWorlds: (versionId: string) =>
+    invoke<WorldSummary[]>("instance_worlds", { versionId }),
+  instanceWorldSeed: (versionId: string, folder: string) =>
+    invoke<WorldSeed>("instance_world_seed", { versionId, folder }),
+  appVersion: () => invoke<string>("app_version"),
+  updateCheck: (url: string) => invoke<UpdateInfo>("update_check", { url }),
+  updateDownload: (url: string, version: string) =>
+    invoke<string>("update_download", { url, version }),
+  updateInstall: (path: string) => invoke<void>("update_install", { path }),
+  exportSettings: (path: string) => invoke<void>("export_settings", { path }),
+  importSettings: (path: string) => invoke<Config>("import_settings", { path }),
+  crashAnalyze: (versionId: string) =>
+    invoke<CrashReport>("crash_analyze", { versionId }),
+  modUpdates: (versionId: string) =>
+    invoke<ModUpdateReport>("mod_updates", { versionId }),
+  modUpdateInstall: (
+    versionId: string,
+    url: string,
+    fileName: string,
+    oldName: string,
+    sha1: string | null
+  ) =>
+    invoke<string>("mod_update_install", {
+      versionId,
+      url,
+      fileName,
+      oldName,
+      sha1,
+    }),
   modpackInspect: (path: string) => invoke<PackPreview>("modpack_inspect", { path }),
+  modpackDownload: (url: string, fileName: string) =>
+    invoke<string>("modpack_download", { url, fileName }),
+  modpackTempRemove: (path: string) => invoke<void>("modpack_temp_remove", { path }),
   modpackImport: (path: string, options: ModpackImportOptions) =>
     invoke<ModpackImportResult>("modpack_import", { path, options }),
   modpackExportPreview: (versionId: string) =>
@@ -374,6 +666,7 @@ export const api = {
     invoke<string>("cf_install_file", { versionId, kind, url, fileName }),
   deleteVersion: (versionId: string) => invoke<void>("delete_version", { versionId }),
   defaultSkin: () => invoke<string>("default_skin"),
+  defaultSkins: () => invoke<DefaultSkin[]>("default_skins"),
   getAccounts: () => invoke<AccountView[]>("get_accounts"),
   createOfflineAccount: (name: string) => invoke<AccountView>("create_offline_account", { name }),
   removeAccount: (id: string) => invoke<void>("remove_account", { id }),
@@ -388,10 +681,49 @@ export const api = {
     invoke<void>("export_account_skin", { accountId, targetPath }),
   uploadAccountSkin: (accountId: string, pngBase64: string, model: string) =>
     invoke<AccountView>("upload_account_skin", { accountId, pngBase64, model }),
+  skinLibraryList: () => invoke<SkinLibraryItem[]>("skin_library_list"),
+  skinLibraryImport: (name: string, model: string, path: string) =>
+    invoke<SkinLibraryItem>("skin_library_import", { name, model, path }),
+  skinLibrarySave: (name: string, model: string, pngBase64: string) =>
+    invoke<SkinLibraryItem>("skin_library_save", { name, model, pngBase64 }),
+  skinLibraryFromAccount: (name: string, accountId: string) =>
+    invoke<SkinLibraryItem>("skin_library_from_account", { name, accountId }),
+  skinLibraryFromPlayer: (name: string) =>
+    invoke<SkinLibraryItem>("skin_library_from_player", { name }),
+  skinLibraryRename: (id: string, name: string) =>
+    invoke<void>("skin_library_rename", { id, name }),
+  skinLibraryRemove: (id: string) => invoke<void>("skin_library_remove", { id }),
+  skinLibraryApply: (id: string, accountId: string, upload: boolean) =>
+    invoke<AccountView>("skin_library_apply", { id, accountId, upload }),
+  accountCapes: (accountId: string) =>
+    invoke<CapeView[]>("account_capes", { accountId }),
+  capeSetActive: (accountId: string, capeId: string | null) =>
+    invoke<void>("cape_set_active", { accountId, capeId }),
   msLoginBegin: () => invoke<DeviceCode>("ms_login_begin"),
   detectJava: () => invoke<JavaInfo[]>("detect_java"),
   installJava: (major: number) => invoke<JavaInfo>("install_java", { major }),
   launchVersion: (versionId: string) => invoke<number>("launch_version", { versionId }),
+  launchServer: (versionId: string, address: string) =>
+    invoke<number>("launch_server", { versionId, address }),
+  lanRooms: () => invoke<LanView>("lan_rooms"),
+  hallRooms: () => invoke<HallRoom[]>("hall_rooms"),
+  serverVersions: () => invoke<ServerVersionOption[]>("server_versions"),
+  serverStatus: () => invoke<ServerSnapshot | null>("server_status"),
+  serverStart: (versionId: string, options: ServerOptions) =>
+    invoke<ServerSnapshot>("server_start", { versionId, options }),
+  serverCommand: (command: string) => invoke<void>("server_command", { command }),
+  serverStop: () => invoke<void>("server_stop"),
+  terracottaPrepare: () => invoke<TcStatus>("terracotta_prepare"),
+  terracottaStatus: () => invoke<TcStatus>("terracotta_status"),
+  terracottaHost: (room: string | null, player: string | null) =>
+    invoke<void>("terracotta_host", { room, player }),
+  terracottaJoin: (room: string, player: string | null) =>
+    invoke<void>("terracotta_join", { room, player }),
+  terracottaReset: () => invoke<void>("terracotta_reset"),
+  terracottaShutdown: () => invoke<void>("terracotta_shutdown"),
+  rememberServer: (address: string) => invoke<Config>("remember_server", { address }),
+  forgetServer: (address: string) => invoke<Config>("forget_server", { address }),
+  serverPing: (address: string) => invoke<ServerPingResult>("server_ping", { address }),
   killGame: () => invoke<void>("kill_game"),
   importBackground: (path: string) =>
     invoke<BackgroundInfo>("import_background", { path }),
@@ -434,6 +766,25 @@ export async function pickImage(): Promise<string | null> {
     filters: [
       { name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp", "gif"] },
     ],
+  });
+  return typeof result === "string" ? result : null;
+}
+
+export async function saveSettingsDialog(): Promise<string | null> {
+  const result = await save({
+    title: "导出设置",
+    defaultPath: "docl-settings.json",
+    filters: [{ name: "DOCL 设置", extensions: ["json"] }],
+  });
+  return typeof result === "string" ? result : null;
+}
+
+export async function pickSettingsFile(): Promise<string | null> {
+  const result = await open({
+    directory: false,
+    multiple: false,
+    title: "导入设置",
+    filters: [{ name: "DOCL 设置", extensions: ["json"] }],
   });
   return typeof result === "string" ? result : null;
 }

@@ -1,6 +1,17 @@
 <script setup lang="ts">
-import { nextTick, onMounted, reactive, ref, watch } from "vue";
-import { api, pickDirectory, pickImage, type Config, type GameDirEntry } from "../api";
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { listen } from "@tauri-apps/api/event";
+import {
+  api,
+  pickDirectory,
+  pickImage,
+  pickSettingsFile,
+  saveSettingsDialog,
+  type Config,
+  type GameDirEntry,
+  type UpdateInfo,
+  type UpdateProgress,
+} from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
 import WoodButton from "../components/WoodButton.vue";
@@ -19,15 +30,27 @@ import {
   refreshJava,
   refreshVersions,
   saveConfig,
+  startupUpdate,
   store,
 } from "../store";
 
 const form = reactive<Config>({
   game_dir: "",
   game_dirs: [],
+  recent_servers: [],
+  hall_url: "",
+  update_url: "",
+  update_mode: "notify",
   java_path: null,
   memory_mb: 4096,
+  memory_auto: true,
+  memory_mode: "auto",
   java_args: "",
+  game_args: "",
+  pre_launch: "",
+  disable_launch_wrapper: false,
+  disable_lwjgl_unsafe: false,
+  prefer_gpu: false,
   window_width: 1280,
   window_height: 720,
   fullscreen: false,
@@ -42,21 +65,111 @@ const form = reactive<Config>({
   background_blur: 18,
   glass_opacity: 78,
   glass_blur: 14,
+  background_dim: 0,
+  ui_radius: "default",
+  ui_density: "normal",
 });
+
+/// 从 store 同步到表单期间要抑制自动保存，避免刚打开页面就写盘。
+let syncing = false;
 
 watch(
   () => store.config,
-  (config) => {
-    if (config) Object.assign(form, config);
+  async (config) => {
+    if (!config) return;
+    syncing = true;
+    Object.assign(form, config);
+    await nextTick();
+    syncing = false;
   },
   { immediate: true }
+);
+
+/// 除游戏目录外的设置都即时保存；游戏目录允许手动输入，留给保存按钮校验。
+const autoSaveKeys: (keyof Config)[] = [
+  "theme",
+  "background_image",
+  "background_blur",
+  "glass_blur",
+  "glass_opacity",
+  "background_dim",
+  "ui_radius",
+  "ui_density",
+  "animations",
+  "hall_url",
+  "update_url",
+  "update_mode",
+  "java_path",
+  "memory_mb",
+  "memory_auto",
+  "memory_mode",
+  "java_args",
+  "game_args",
+  "pre_launch",
+  "disable_launch_wrapper",
+  "disable_lwjgl_unsafe",
+  "prefer_gpu",
+  "window_width",
+  "window_height",
+  "fullscreen",
+  "download_source",
+  "concurrency",
+  "version_isolation",
+];
+
+let autoTimer: number | undefined;
+let autoSeq = 0;
+let autoPending = false;
+
+function autoPatch(): Partial<Config> {
+  const patch: Partial<Config> = {};
+  for (const key of autoSaveKeys) {
+    (patch as Record<string, unknown>)[key] = form[key];
+  }
+  return patch;
+}
+
+async function runAutoSave() {
+  if (!store.config) return;
+  autoPending = false;
+  const seq = autoSeq;
+  try {
+    const saved = await api.saveConfig({ ...store.config, ...autoPatch() });
+    // 保存期间又改过设置就放弃回填，让下一次防抖保存继续写入新值
+    if (seq === autoSeq) {
+      syncing = true;
+      store.config = saved;
+      await nextTick();
+      syncing = false;
+    }
+  } catch (err) {
+    notify(`自动保存失败：${String(err)}`, "err");
+  }
+}
+
+watch(
+  () => autoSaveKeys.map((key) => form[key]),
+  () => {
+    if (syncing) return;
+    autoSeq += 1;
+    autoPending = true;
+    window.clearTimeout(autoTimer);
+    autoTimer = window.setTimeout(() => void runAutoSave(), 600);
+  }
 );
 
 const runtimeMajor = ref("21");
 const saving = ref(false);
 const runtimeBusy = ref(false);
 
-type SettingsTab = "game" | "java" | "appearance" | "performance" | "download";
+type SettingsTab =
+  | "game"
+  | "java"
+  | "appearance"
+  | "performance"
+  | "download"
+  | "multiplayer"
+  | "update";
 const settingsTab = ref<SettingsTab>("game");
 
 const settingsTabs: { value: SettingsTab; label: string; icon: string; no: string }[] = [
@@ -65,6 +178,8 @@ const settingsTabs: { value: SettingsTab; label: string; icon: string; no: strin
   { value: "appearance", label: "外观", icon: "image", no: "03" },
   { value: "performance", label: "性能与参数", icon: "sun", no: "04" },
   { value: "download", label: "下载", icon: "download", no: "05" },
+  { value: "multiplayer", label: "联机", icon: "globe", no: "06" },
+  { value: "update", label: "更新", icon: "refresh", no: "07" },
 ];
 
 async function selectTab(tab: SettingsTab) {
@@ -78,14 +193,89 @@ const themes = [
   { value: "celadon", label: "青瓷", colors: ["#eef1e8", "#3f6b57", "#7a9b6d"] },
   { value: "terracotta", label: "赤陶", colors: ["#f6e9dc", "#9b4f3a", "#7d8455"] },
   { value: "moon", label: "月白", colors: ["#eef1f6", "#4b5d78", "#5f8892"] },
+  { value: "sakura", label: "樱花", colors: ["#fdf1f2", "#b0566e", "#d99aab"] },
+  { value: "ocean", label: "深海", colors: ["#eaf2f6", "#2f6076", "#3e8c8c"] },
+  { value: "lavender", label: "香芋", colors: ["#f3eff8", "#6d5590", "#b49ccb"] },
   { value: "nocturne", label: "夜墨", colors: ["#1d1a16", "#c08a55", "#88a867"] },
+  { value: "graphite", label: "石墨", colors: ["#1b1d20", "#9fb4c7", "#8aa88a"] },
 ];
 
 const builtinBackgrounds = [
   { value: "forest", label: "林间晨雾" },
   { value: "dune", label: "赤陶沙丘" },
   { value: "night", label: "夜航星空" },
+  { value: "sakura", label: "樱花季" },
+  { value: "ocean", label: "深海波光" },
+  { value: "aurora", label: "极光" },
 ];
+
+const radiusOptions = [
+  { value: "sharp", label: "硬朗直角" },
+  { value: "default", label: "标准圆角" },
+  { value: "round", label: "柔和圆润" },
+];
+
+const densityOptions = [
+  { value: "compact", label: "紧凑" },
+  { value: "normal", label: "标准" },
+  { value: "comfy", label: "宽松" },
+];
+
+const memoryModes = [
+  { value: "auto", label: "自动（G1GC）" },
+  { value: "g1gc", label: "调优 G1GC" },
+  { value: "zgc", label: "ZGC（低暂停）" },
+  { value: "custom", label: "自定义（不追加 GC 参数）" },
+];
+
+const totalMb = computed(() => store.systemMemory.total_mb || 0);
+const usedMb = computed(() =>
+  Math.max(0, totalMb.value - (store.systemMemory.available_mb || 0))
+);
+const recommendedMb = computed(() => {
+  if (!totalMb.value) return 4096;
+  const target = Math.min(8192, Math.max(1024, Math.floor(totalMb.value / 3)));
+  return Math.max(1024, Math.floor(target / 512) * 512);
+});
+const sliderMax = computed(() =>
+  totalMb.value
+    ? Math.min(32768, Math.max(2048, Math.floor((totalMb.value - 1024) / 512) * 512))
+    : 16384
+);
+const effectiveMemory = computed(() =>
+  form.memory_auto ? recommendedMb.value : form.memory_mb
+);
+const memoryGb = computed(() => (effectiveMemory.value / 1024).toFixed(1));
+const usedPercent = computed(() =>
+  totalMb.value ? Math.min(100, (usedMb.value / totalMb.value) * 100) : 0
+);
+
+function memoryLabel(mb: number) {
+  return (mb / 1024).toFixed(1);
+}
+
+function setMemoryAuto() {
+  form.memory_auto = true;
+  form.memory_mb = recommendedMb.value;
+}
+
+function setMemoryManual() {
+  form.memory_auto = false;
+  if (form.memory_mb < 1024) form.memory_mb = recommendedMb.value;
+}
+
+function quickMemory(mb: number) {
+  form.memory_auto = false;
+  form.memory_mb = Math.max(512, Math.round(mb / 512) * 512);
+}
+
+watch(
+  () => [form.memory_auto, recommendedMb.value],
+  () => {
+    if (form.memory_auto) form.memory_mb = recommendedMb.value;
+  },
+  { immediate: true }
+);
 
 watch(
   () => form.theme,
@@ -104,6 +294,16 @@ watch(
   }
 );
 
+watch(
+  () => [form.background_dim, form.ui_radius, form.ui_density],
+  () => {
+    if (!store.config) return;
+    store.config.background_dim = form.background_dim;
+    store.config.ui_radius = form.ui_radius;
+    store.config.ui_density = form.ui_density;
+  }
+);
+
 async function chooseBackground() {
   const path = await pickImage();
   if (!path) return;
@@ -112,7 +312,7 @@ async function chooseBackground() {
     store.backgroundPreset = "";
     store.backgroundUrl = info.data_url;
     form.background_image = info.path;
-    notify("背景已应用，保存后长期保留");
+    notify("背景已应用并自动保存");
   } catch (err) {
     notify(`设置背景失败：${String(err)}`, "err");
   }
@@ -132,7 +332,7 @@ function clearBackground() {
   store.backgroundUrl = "";
   store.backgroundPreset = "";
   form.background_image = null;
-  notify("已移除背景，保存后生效");
+  notify("已移除背景");
 }
 
 const sourceOptions = [
@@ -148,6 +348,12 @@ const javaOptions = [
   { value: "25", label: "Java 25" },
 ];
 
+const updateModes = [
+  { value: "auto", label: "有新版本时自动下载" },
+  { value: "notify", label: "有新版本时提示" },
+  { value: "off", label: "关闭自动检查" },
+];
+
 async function chooseDir() {
   const dir = await pickDirectory();
   if (dir) form.game_dir = dir;
@@ -159,6 +365,98 @@ const officialDir = ref("");
 const dirBusy = ref(false);
 
 onMounted(loadDirs);
+
+const appVersion = ref("");
+const updateInfo = ref<UpdateInfo | null>(null);
+const updateBusy = ref(false);
+const updateError = ref("");
+const updatePath = ref("");
+const updateProgress = ref<UpdateProgress | null>(null);
+let stopUpdateProgress: (() => void) | null = null;
+
+const updatePercent = computed(() => {
+  const progress = updateProgress.value;
+  if (!progress || !progress.total) return 0;
+  return Math.min(100, Math.round((progress.downloaded / progress.total) * 100));
+});
+
+const updateProgressText = computed(() => {
+  const progress = updateProgress.value;
+  if (!progress) return "";
+  if (progress.total) return `${updatePercent.value}%`;
+  return `${(progress.downloaded / 1048576).toFixed(1)} MB`;
+});
+
+async function initUpdateSection() {
+  try {
+    appVersion.value = await api.appVersion();
+  } catch {
+    appVersion.value = "";
+  }
+  // 启动时已经检查到的新版本直接接续展示，不用再点一次检查
+  if (startupUpdate.value) {
+    updateInfo.value = startupUpdate.value.info;
+    updatePath.value = startupUpdate.value.path ?? "";
+  }
+  stopUpdateProgress = await listen<UpdateProgress>("update-progress", (event) => {
+    updateProgress.value = event.payload;
+  });
+}
+
+onMounted(() => {
+  void initUpdateSection();
+});
+
+onBeforeUnmount(() => {
+  window.clearTimeout(autoTimer);
+  if (autoPending) void runAutoSave();
+  stopUpdateProgress?.();
+});
+
+async function checkUpdate() {
+  if (updateBusy.value) return;
+  startupUpdate.value = null;
+  updateBusy.value = true;
+  updateError.value = "";
+  updateInfo.value = null;
+  updatePath.value = "";
+  updateProgress.value = null;
+  try {
+    updateInfo.value = await api.updateCheck(form.update_url);
+  } catch (err) {
+    updateError.value = String(err);
+  } finally {
+    updateBusy.value = false;
+  }
+}
+
+async function downloadUpdate() {
+  if (!updateInfo.value || updateBusy.value) return;
+  updateBusy.value = true;
+  updateError.value = "";
+  updatePath.value = "";
+  updateProgress.value = { downloaded: 0, total: 0 };
+  try {
+    updatePath.value = await api.updateDownload(
+      updateInfo.value.url,
+      updateInfo.value.latest
+    );
+  } catch (err) {
+    updateError.value = String(err);
+    updateProgress.value = null;
+  } finally {
+    updateBusy.value = false;
+  }
+}
+
+async function installUpdate() {
+  if (!updatePath.value) return;
+  try {
+    await api.updateInstall(updatePath.value);
+  } catch (err) {
+    updateError.value = String(err);
+  }
+}
 
 async function loadDirs() {
   try {
@@ -172,8 +470,11 @@ async function loadDirs() {
 }
 
 async function adoptConfig(config: Config) {
+  syncing = true;
   store.config = config;
   Object.assign(form, config);
+  await nextTick();
+  syncing = false;
   activeDir.value = config.game_dir;
   await refreshInstalled();
   await refreshVersions(true);
@@ -254,11 +555,48 @@ async function installRuntime() {
   }
 }
 
+const backupBusy = ref(false);
+
+async function exportSettings() {
+  if (backupBusy.value) return;
+  const path = await saveSettingsDialog();
+  if (!path) return;
+  backupBusy.value = true;
+  try {
+    await api.exportSettings(path);
+    notify("设置已导出");
+  } catch (err) {
+    notify(`导出设置失败：${String(err)}`, "err");
+  } finally {
+    backupBusy.value = false;
+  }
+}
+
+async function importSettings() {
+  const path = await pickSettingsFile();
+  if (!path) return;
+  backupBusy.value = true;
+  window.clearTimeout(autoTimer);
+  autoPending = false;
+  try {
+    const config = await api.importSettings(path);
+    await adoptConfig(config);
+    await loadBackground();
+    notify("设置已导入并生效");
+  } catch (err) {
+    notify(`导入设置失败：${String(err)}`, "err");
+  } finally {
+    backupBusy.value = false;
+  }
+}
+
 async function save() {
   if (!form.game_dir.trim()) {
     notify("请先选择游戏目录", "err");
     return;
   }
+  window.clearTimeout(autoTimer);
+  autoPending = false;
   saving.value = true;
   try {
     await saveConfig({ ...form });
@@ -281,6 +619,7 @@ function useAutoJava() {
     <header class="page-head">
       <div>
         <span class="eyebrow">DOCL / SETTINGS</span>
+        <div class="muted small">除游戏目录外，修改会自动保存</div>
       </div>
       <WoodButton variant="primary" sheen :disabled="saving" @click="save">
         <AppIcon name="check" :size="15" />
@@ -402,6 +741,22 @@ function useAutoJava() {
           </div>
         </div>
       </div>
+      <div class="setting setting--last">
+        <div class="setting__label">
+          <strong>配置备份</strong>
+          <span>导出为 JSON 文件，可在另一台电脑导入；不含账号、皮肤与存档</span>
+        </div>
+        <div class="setting__control">
+          <div class="row">
+            <WoodButton variant="soft" size="sm" :disabled="backupBusy" @click="exportSettings">
+              导出设置
+            </WoodButton>
+            <WoodButton variant="ghost" size="sm" :disabled="backupBusy" @click="importSettings">
+              导入设置
+            </WoodButton>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section v-if="settingsTab === 'java'" class="card card-pad group reveal" style="--i: 1">
@@ -493,12 +848,13 @@ function useAutoJava() {
         <span class="group-line" />
       </div>
 
-      <div class="setting">
+      <div class="setting setting--stack">
         <div class="setting__label">
           <strong>主题配色</strong>
-          <span>即时预览，保存后长期生效</span>
+          <span>即时预览并自动保存</span>
         </div>
-        <div class="theme-grid">
+        <div class="setting__control">
+          <div class="theme-grid">
           <button
             v-for="theme in themes"
             :key="theme.value"
@@ -517,10 +873,11 @@ function useAutoJava() {
               class="theme-chip__check"
             />
           </button>
+          </div>
         </div>
       </div>
 
-      <div class="setting">
+      <div class="setting setting--stack">
         <div class="setting__label">
           <strong>内置底图</strong>
           <span>点选即可预览磨砂玻璃效果，无需本地图片</span>
@@ -602,6 +959,36 @@ function useAutoJava() {
         </div>
       </div>
 
+      <div class="setting">
+        <div class="setting__label">
+          <strong>背景遮罩</strong>
+          <span>{{ form.background_dim }}%，压暗底图让内容更清晰</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <WoodSlider v-model="form.background_dim" :min="0" :max="60" :step="2" />
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>界面圆角</strong>
+          <span>卡片与面板的边角风格</span>
+        </div>
+        <div class="setting__control">
+          <WoodSelect v-model="form.ui_radius" :options="radiusOptions" />
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>界面密度</strong>
+          <span>控制间距与留白，小窗口可用紧凑</span>
+        </div>
+        <div class="setting__control">
+          <WoodSelect v-model="form.ui_density" :options="densityOptions" />
+        </div>
+      </div>
+
       <div class="setting setting--last">
         <div class="setting__label">
           <strong>界面动效</strong>
@@ -627,22 +1014,130 @@ function useAutoJava() {
         <span class="group-line" />
       </div>
 
-      <div class="setting">
+      <div class="setting setting--stack">
         <div class="setting__label">
-          <strong>最大内存</strong>
-          <span>{{ form.memory_mb }} MB（约 {{ (form.memory_mb / 1024).toFixed(1) }} GB）</span>
+          <strong>内存分配</strong>
+          <span>自动按物理内存推荐，也可以切到自定义手动拖动</span>
         </div>
         <div class="setting__control setting__control--wide">
-          <WoodSlider v-model="form.memory_mb" :min="1024" :max="16384" :step="512" />
+          <div class="memory">
+            <div class="memory__head">
+              <div class="memory__modes">
+                <button
+                  class="memory__mode"
+                  :class="{ 'memory__mode--active': form.memory_auto }"
+                  @click="setMemoryAuto"
+                >
+                  自动配置
+                </button>
+                <button
+                  class="memory__mode"
+                  :class="{ 'memory__mode--active': !form.memory_auto }"
+                  @click="setMemoryManual"
+                >
+                  自定义
+                </button>
+              </div>
+              <span class="memory__alloc display">{{ memoryGb }} GB</span>
+            </div>
+            <div class="memory__slider" :class="{ 'memory__slider--off': form.memory_auto }">
+              <WoodSlider v-model="form.memory_mb" :min="1024" :max="sliderMax" :step="512" />
+            </div>
+            <div class="memory__quick">
+              <button class="memory__chip" @click="quickMemory(2048)">2 GB</button>
+              <button class="memory__chip" @click="quickMemory(4096)">4 GB</button>
+              <button class="memory__chip" @click="quickMemory(6144)">6 GB</button>
+              <button class="memory__chip" @click="quickMemory(8192)">8 GB</button>
+              <button
+                class="memory__chip"
+                :disabled="!totalMb"
+                @click="quickMemory(totalMb / 2)"
+              >
+                半内存
+              </button>
+            </div>
+            <div class="memory__bar">
+              <span class="memory__bar-fill" :style="{ width: `${usedPercent}%` }" />
+            </div>
+            <div class="memory__legend">
+              <span>已使用 {{ memoryLabel(usedMb) }} GB / {{ memoryLabel(totalMb) }} GB</span>
+              <span>游戏分配 {{ memoryGb }} GB</span>
+            </div>
+          </div>
         </div>
       </div>
-      <div class="setting setting--last">
+
+      <div class="setting">
         <div class="setting__label">
-          <strong>额外 JVM 参数</strong>
-          <span>空格分隔，例如 -XX:+UseZGC</span>
+          <strong>内存管理</strong>
+          <span>决定追加的垃圾回收参数，自定义时不追加</span>
+        </div>
+        <div class="setting__control">
+          <WoodSelect v-model="form.memory_mode" :options="memoryModes" />
+        </div>
+      </div>
+
+      <div class="setting setting--stack">
+        <div class="setting__label">
+          <strong>Java 虚拟机参数</strong>
+          <span>追加在内存参数之后，空格分隔；可用引号包住带空格的路径</span>
         </div>
         <div class="setting__control setting__control--wide">
-          <WoodInput v-model="form.java_args" mono placeholder="-XX:+UseG1GC" />
+          <WoodInput
+            v-model="form.java_args"
+            mono
+            placeholder="-XX:-OmitStackTraceInFastThrow -Dfml.ignorePatchDiscrepancies=true"
+          />
+        </div>
+      </div>
+
+      <div class="setting setting--stack">
+        <div class="setting__label">
+          <strong>游戏参数</strong>
+          <span>追加到游戏主类之后，例如 --width 1600 --height 900</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <WoodInput v-model="form.game_args" mono placeholder="--width 1600 --height 900" />
+        </div>
+      </div>
+
+      <div class="setting setting--stack">
+        <div class="setting__label">
+          <strong>启动前执行命令</strong>
+          <span>工作目录为游戏目录，命中退出码不影响继续启动</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <WoodInput v-model="form.pre_launch" mono placeholder="例如 java -jar packwiz-installer-bootstrap.jar ..." />
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>禁用 Java Launch Wrapper</strong>
+          <span>不再向游戏注入 DOCL 启动器标识，部分反作弊需要关闭</span>
+        </div>
+        <div class="setting__control">
+          <WoodToggle v-model="form.disable_launch_wrapper" />
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>禁用 LWJGL Unsafe Agent</strong>
+          <span>Java 24+ 默认放行 LWJGL 的 Unsafe 内存访问，关闭后可能告警或崩溃</span>
+        </div>
+        <div class="setting__control">
+          <WoodToggle v-model="form.disable_lwjgl_unsafe" />
+        </div>
+      </div>
+
+      <div class="setting setting--last">
+        <div class="setting__label">
+          <strong>使用高性能显卡</strong>
+          <span>为当前 Java 写入 Windows 显卡偏好，下次启动生效</span>
+        </div>
+        <div class="setting__control">
+          <WoodToggle v-model="form.prefer_gpu" />
         </div>
       </div>
     </section>
@@ -680,12 +1175,228 @@ function useAutoJava() {
         </div>
       </div>
     </section>
+
+    <section
+      v-if="settingsTab === 'multiplayer'"
+      class="card card-pad group reveal"
+      :style="{ '--i': 5 }"
+    >
+      <div class="group-head">
+        <span class="group-no display">06</span>
+        <div class="group-titles">
+          <span class="eyebrow">MULTIPLAYER</span>
+          <div class="section-title">联机</div>
+        </div>
+        <span class="group-line" />
+      </div>
+
+      <div class="setting setting--stack setting--last">
+        <div class="setting__label">
+          <strong>房间大厅地址</strong>
+          <span>留空关闭大厅；填写后可返回 JSON 列表的地址，启动器会按此拉取房间</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <WoodInput
+            v-model="form.hall_url"
+            mono
+            placeholder="https://example.com/docl-rooms.json"
+          />
+        </div>
+      </div>
+
+      <p class="muted small settings-hall-hint">
+        支持 <span class="mono">{ "rooms": [ ... ] }</span> 或直接返回数组；每个房间至少包含
+        <span class="mono">room</span>（陶瓦邀请码），可选 name、motd、players、max_players、version、updated（Unix 秒）。
+      </p>
+    </section>
+
+    <section
+      v-if="settingsTab === 'update'"
+      class="card card-pad group reveal"
+      :style="{ '--i': 6 }"
+    >
+      <div class="group-head">
+        <span class="group-no display">07</span>
+        <div class="group-titles">
+          <span class="eyebrow">UPDATE</span>
+          <div class="section-title">启动器更新</div>
+        </div>
+        <span class="group-line" />
+        <span class="tag mono">v{{ appVersion || "—" }}</span>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>启动器更新</strong>
+          <span>启动时按此策略检查；关闭后仍可在这里手动检查</span>
+        </div>
+        <div class="setting__control">
+          <WoodSelect v-model="form.update_mode" :options="updateModes" />
+        </div>
+      </div>
+
+      <div class="setting setting--stack">
+        <div class="setting__label">
+          <strong>更新清单地址</strong>
+          <span>留空则不检查更新；填写一个返回版本信息的 JSON 地址</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <div class="row">
+            <WoodInput
+              v-model="form.update_url"
+              mono
+              placeholder="https://example.com/docl-update.json"
+            />
+            <WoodButton
+              variant="soft"
+              size="sm"
+              :disabled="updateBusy || !form.update_url.trim()"
+              @click="checkUpdate"
+            >
+              <AppIcon name="refresh" :size="14" />
+              {{ updateBusy ? "检查中…" : "检查更新" }}
+            </WoodButton>
+          </div>
+        </div>
+      </div>
+
+      <p class="muted small update-hint">
+        清单格式：
+        <span class="mono">{ "version": "0.2.0", "url": "https://…/DOCL_0.2.0-setup.exe", "notes": "更新说明" }</span>。
+        发现新版本后下载的是完整安装包，点击安装时启动器会自动退出。
+      </p>
+
+      <div v-if="updateError" class="update-error">
+        <AppIcon name="alert" :size="14" />
+        {{ updateError }}
+        <WoodButton variant="ghost" size="sm" @click="checkUpdate">重试</WoodButton>
+      </div>
+
+      <div v-else-if="updateInfo" class="update-panel">
+        <div class="update-panel__head">
+          <strong>
+            {{ updateInfo.available ? `发现新版本 ${updateInfo.latest}` : "已经是最新版本" }}
+          </strong>
+          <span class="muted small mono">当前 v{{ updateInfo.current }}</span>
+        </div>
+        <p v-if="updateInfo.notes" class="update-notes">{{ updateInfo.notes }}</p>
+        <div v-if="updateInfo.available" class="update-actions">
+          <div v-if="updateProgress" class="update-progress">
+            <span class="update-progress__bar">
+              <span :style="{ width: `${updatePercent}%` }" />
+            </span>
+            <span class="muted small mono">{{ updateProgressText }}</span>
+          </div>
+          <WoodButton
+            v-if="!updatePath"
+            variant="primary"
+            size="sm"
+            :disabled="updateBusy"
+            @click="downloadUpdate"
+          >
+            <AppIcon name="download" :size="14" />
+            {{ updateBusy ? "下载中…" : "下载安装包" }}
+          </WoodButton>
+          <WoodButton v-else variant="primary" size="sm" @click="installUpdate">
+            <AppIcon name="check" :size="14" />
+            安装并退出
+          </WoodButton>
+        </div>
+      </div>
+    </section>
       </div>
     </div>
   </div>
 </template>
 
 <style scoped>
+.settings-hall-hint {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.update-hint {
+  margin: 0;
+  line-height: 1.7;
+}
+
+.update-error {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.update-error .btn {
+  margin-left: auto;
+}
+
+.update-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel-2);
+}
+
+.update-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.update-panel__head strong {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.update-notes {
+  margin: 0;
+  font-size: 12px;
+  color: var(--ink-soft);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.update-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.update-progress {
+  flex: 1;
+  min-width: 180px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.update-progress__bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 99px;
+  background: rgba(var(--accent-rgb), 0.12);
+  overflow: hidden;
+}
+
+.update-progress__bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--moss), var(--walnut-light));
+  transition: width 0.2s ease;
+}
+
 .settings-layout {
   display: grid;
   grid-template-columns: 190px minmax(0, 1fr);
@@ -850,6 +1561,112 @@ function useAutoJava() {
   width: 230px;
 }
 
+.memory {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.memory__modes {
+  display: flex;
+  gap: 3px;
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.memory__mode {
+  height: 28px;
+  padding: 0 13px;
+  border-radius: 7px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease,
+    box-shadow var(--dur-1) ease;
+}
+
+.memory__mode:hover {
+  color: var(--walnut-deep);
+}
+
+.memory__mode--active {
+  background: var(--panel);
+  color: var(--walnut-deep);
+  box-shadow: var(--shadow-1);
+}
+
+.memory__alloc {
+  font-size: 24px;
+  line-height: 1;
+  color: var(--walnut-deep);
+}
+
+.memory__slider--off {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.memory__quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.memory__chip {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px dashed var(--line-strong);
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+  transition: border-color var(--dur-1) ease, color var(--dur-1) ease;
+}
+
+.memory__chip:hover:not(:disabled) {
+  border-color: var(--moss);
+  color: var(--moss);
+}
+
+.memory__chip:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.memory__bar {
+  height: 8px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: var(--paper-2);
+  overflow: hidden;
+}
+
+.memory__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--moss), var(--moss-bright));
+  transition: width var(--dur-3) var(--ease-out-expo);
+}
+
+.memory__legend {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
 .resolution__x {
   font-size: 13px;
 }
@@ -1012,8 +1829,7 @@ function useAutoJava() {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  justify-content: flex-end;
-  max-width: 470px;
+  width: 100%;
 }
 
 .theme-chip {
@@ -1064,7 +1880,7 @@ function useAutoJava() {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  justify-content: flex-end;
+  width: 100%;
 }
 
 .bg-chip {
@@ -1111,6 +1927,20 @@ function useAutoJava() {
 
 .bg-chip__swatch--night {
   background-image: linear-gradient(180deg, #141d2e 0 46%, #1e2c42 47% 72%, #16202e 73%);
+}
+
+.bg-chip__swatch--sakura {
+  background-image: linear-gradient(180deg, #fdeef2 0 38%, #f8d7e1 39% 66%, #e6a3ba 67%);
+}
+
+.bg-chip__swatch--ocean {
+  background-image: linear-gradient(180deg, #dff1f7 0 36%, #5f9cb2 37% 66%, #2f6076 67%);
+}
+
+.bg-chip__swatch--aurora {
+  background-image: radial-gradient(circle at 30% 25%, #78eabe 0 18%, transparent 40%),
+    radial-gradient(circle at 70% 45%, #9682f0 0 14%, transparent 36%),
+    linear-gradient(180deg, #101a2c 0 46%, #172a42 47% 72%, #101a2a 73%);
 }
 
 .bg-chip__swatch--none {

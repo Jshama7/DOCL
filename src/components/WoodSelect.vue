@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 
 const props = defineProps<{
   modelValue: string;
@@ -9,7 +9,10 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: "update:modelValue", value: string): void }>();
 
 const root = ref<HTMLElement | null>(null);
+const trigger = ref<HTMLElement | null>(null);
+const menu = ref<HTMLElement | null>(null);
 const open = ref(false);
+const menuStyle = ref<Record<string, string>>({});
 const current = computed(
   () => props.options.find((o) => o.value === props.modelValue)?.label ?? props.modelValue
 );
@@ -19,41 +22,116 @@ function pick(value: string) {
   open.value = false;
 }
 
-function onDocClick(event: MouseEvent) {
-  if (root.value && !root.value.contains(event.target as Node)) open.value = false;
+function positionMenu() {
+  const el = trigger.value;
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const menuWidth = menu.value?.offsetWidth || rect.width;
+  const menuHeight = menu.value?.offsetHeight || 0;
+  let left = rect.right - menuWidth;
+  if (left < 8) left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+  let top = rect.bottom + 7;
+  if (menuHeight && top + menuHeight > window.innerHeight - 10) {
+    top = Math.max(10, rect.top - menuHeight - 7);
+  }
+  menuStyle.value = {
+    left: `${Math.round(left)}px`,
+    top: `${Math.round(top)}px`,
+    minWidth: `${Math.round(rect.width)}px`,
+  };
 }
 
+function closeMenu() {
+  open.value = false;
+}
+
+/// 只有菜单外部的滚动才关闭，否则菜单自己滚动选项时会误关。
+function onWindowScroll(event: Event) {
+  const target = event.target;
+  if (menu.value && target instanceof Node && menu.value.contains(target)) return;
+  closeMenu();
+}
+
+function toggle() {
+  if (props.disabled) return;
+  if (!open.value) {
+    const rect = trigger.value?.getBoundingClientRect();
+    if (rect) {
+      menuStyle.value = {
+        left: `${Math.round(rect.right - rect.width)}px`,
+        top: `${Math.round(rect.bottom + 7)}px`,
+        minWidth: `${Math.round(rect.width)}px`,
+      };
+    }
+  }
+  open.value = !open.value;
+}
+
+function onDocClick(event: MouseEvent) {
+  const target = event.target as Node;
+  if (root.value?.contains(target) || menu.value?.contains(target)) return;
+  closeMenu();
+}
+
+watch(open, (value) => {
+  if (value) {
+    nextTick(positionMenu);
+    window.addEventListener("scroll", onWindowScroll, true);
+    window.addEventListener("resize", closeMenu);
+  } else {
+    window.removeEventListener("scroll", onWindowScroll, true);
+    window.removeEventListener("resize", closeMenu);
+  }
+});
+
 onMounted(() => document.addEventListener("mousedown", onDocClick));
-onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
+onBeforeUnmount(() => {
+  document.removeEventListener("mousedown", onDocClick);
+  window.removeEventListener("scroll", onWindowScroll, true);
+  window.removeEventListener("resize", closeMenu);
+});
 </script>
 
 <template>
   <div ref="root" class="select" :class="{ 'select--open': open }">
-    <button class="select__value" :disabled="disabled" @click.stop="open = !open">
+    <button
+      ref="trigger"
+      class="select__value"
+      :disabled="disabled"
+      @click.stop="toggle"
+    >
       <span class="select__text">{{ current }}</span>
       <span class="select__chev" />
     </button>
-    <transition name="drop">
-      <div v-if="open" class="select__menu">
-        <button
-          v-for="option in options"
-          :key="option.value"
-          class="select__option"
-          :class="{ 'select__option--active': option.value === modelValue }"
-          @click.stop="pick(option.value)"
+
+    <Teleport to="body">
+      <transition name="drop">
+        <div
+          v-if="open"
+          ref="menu"
+          class="select__menu"
+          :style="menuStyle"
         >
-          <span class="select__dot" />
-          {{ option.label }}
-        </button>
-      </div>
-    </transition>
+          <button
+            v-for="option in options"
+            :key="option.value"
+            class="select__option"
+            :class="{ 'select__option--active': option.value === modelValue }"
+            @click.stop="pick(option.value)"
+          >
+            <span class="select__dot" />
+            {{ option.label }}
+          </button>
+        </div>
+      </transition>
+    </Teleport>
   </div>
 </template>
 
 <style scoped>
 .select {
   position: relative;
-  min-width: 130px;
+  min-width: 160px;
 }
 
 .select__value {
@@ -66,6 +144,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   text-align: left;
   position: relative;
   color: var(--ink);
+  white-space: nowrap;
   transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
 }
 
@@ -99,11 +178,10 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
 }
 
 .select__menu {
-  position: absolute;
-  z-index: 30;
-  left: 0;
-  right: 0;
-  top: calc(100% + 7px);
+  position: fixed;
+  z-index: 95;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 10px;
@@ -120,6 +198,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
   border-radius: 7px;
   text-align: left;
   color: var(--ink-soft);
+  white-space: nowrap;
   display: flex;
   align-items: center;
   gap: 8px;

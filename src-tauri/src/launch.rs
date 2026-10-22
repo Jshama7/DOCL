@@ -2,6 +2,7 @@ use crate::auth::Account;
 use crate::config::Config;
 use crate::install;
 use crate::java;
+use crate::lan::ServerTarget;
 use crate::models::*;
 use anyhow::{anyhow, bail, Result};
 use serde::Serialize;
@@ -48,6 +49,83 @@ fn replace(template: &str, vars: &std::collections::HashMap<&str, String>) -> St
     out
 }
 
+/// 按空格拆参数，支持用双引号包住带空格的路径。
+fn split_args(raw: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    for ch in raw.chars() {
+        match quote {
+            Some(q) if ch == q => quote = None,
+            Some(_) => current.push(ch),
+            None if ch == '"' || ch == '\'' => quote = Some(ch),
+            None if ch.is_whitespace() => {
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            None => current.push(ch),
+        }
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// 内存管理预设，返回需要追加的 GC 参数。
+fn memory_args(mode: &str, java_major: u32) -> Vec<&'static str> {
+    match mode {
+        "g1gc" => vec![
+            "-XX:+UseG1GC",
+            "-XX:+UnlockExperimentalVMOptions",
+            "-XX:G1NewSizePercent=20",
+            "-XX:G1ReservePercent=20",
+            "-XX:MaxGCPauseMillis=50",
+            "-XX:G1HeapRegionSize=32M",
+        ],
+        "zgc" => {
+            if java_major >= 21 {
+                vec!["-XX:+UseZGC", "-XX:+ZGenerational"]
+            } else if java_major >= 15 {
+                vec!["-XX:+UseZGC"]
+            } else {
+                vec!["-XX:+UseG1GC"]
+            }
+        }
+        "custom" => Vec::new(),
+        _ => vec!["-XX:+UseG1GC"],
+    }
+}
+
+/// 启动参数与本地服务端共用的内存分配值。
+pub fn effective_memory_mb(cfg: &Config) -> u32 {
+    if cfg.memory_auto {
+        crate::system::recommended_memory_mb(crate::system::memory_info().total_mb)
+    } else {
+        cfg.memory_mb.max(512)
+    }
+}
+
+/// 1.20 起支持 --quickPlayMultiplayer；26.x 等新版本号同样走快速加入。
+fn supports_quick_play(game_version: &str) -> bool {
+    let mut parts = game_version.split(['.', '-', '+']);
+    let Some(major) = parts.next().and_then(|value| value.parse::<u32>().ok()) else {
+        return false;
+    };
+    if major >= 21 {
+        return true;
+    }
+    if major != 1 {
+        return false;
+    }
+    parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .map(|minor| minor >= 20)
+        .unwrap_or(false)
+}
+
 pub fn find_java(cfg: &Config, required: u32) -> Result<java::JavaInfo> {
     if let Some(path) = &cfg.java_path {
         if let Some(info) = java::inspect_java(std::path::Path::new(path), "手动指定") {
@@ -68,6 +146,7 @@ pub fn build(
     merged: &install::MergedDetail,
     version_id: &str,
     account: &Account,
+    server: Option<&ServerTarget>,
 ) -> Result<(PathBuf, Vec<String>, Vec<String>)> {
     let detail = &merged.detail;
     let game_root = cfg.game_root();
@@ -162,19 +241,31 @@ pub fn build(
         }
     }
 
+    let memory_mb = effective_memory_mb(cfg);
     let mut combined_jvm: Vec<String> = vec![
-        format!("-Xmx{}M", cfg.memory_mb.max(512)),
-        format!("-Xms{}M", (cfg.memory_mb / 2).clamp(256, 2048)),
-        "-XX:+UseG1GC".into(),
-        "-Dfile.encoding=UTF-8".into(),
-        "-Dstdout.encoding=UTF-8".into(),
-        "-Dstderr.encoding=UTF-8".into(),
+        format!("-Xmx{memory_mb}M"),
+        format!("-Xms{}M", (memory_mb / 2).clamp(256, 2048)),
     ];
+    for arg in memory_args(&cfg.memory_mode, java.major) {
+        combined_jvm.push(arg.to_string());
+    }
+    combined_jvm.push("-Dfile.encoding=UTF-8".into());
+    combined_jvm.push("-Dstdout.encoding=UTF-8".into());
+    combined_jvm.push("-Dstderr.encoding=UTF-8".into());
+    if !cfg.disable_launch_wrapper {
+        combined_jvm.push("-Dminecraft.launcher.brand=DOCL".into());
+        combined_jvm.push(format!(
+            "-Dminecraft.launcher.version={}",
+            env!("CARGO_PKG_VERSION")
+        ));
+    }
+    // Java 24 起 sun.misc.Unsafe 内存访问默认告警/拒绝，LWJGL 需要显式放行
+    if !cfg.disable_lwjgl_unsafe && java.major >= 24 {
+        combined_jvm.push("--sun-misc-unsafe-memory-access=allow".into());
+    }
     combined_jvm.extend(jvm_args);
-    for custom in cfg.java_args.split_whitespace() {
-        if !custom.trim().is_empty() {
-            combined_jvm.push(custom.to_string());
-        }
+    for custom in split_args(&cfg.java_args) {
+        combined_jvm.push(custom);
     }
     if !combined_jvm.iter().any(|a| a.starts_with("-Djava.library.path")) {
         combined_jvm.push(format!(
@@ -204,12 +295,140 @@ pub fn build(
         .clone()
         .unwrap_or_else(|| "net.minecraft.client.main.Main".into());
     command_args.push(main_class);
+    for extra in split_args(&cfg.game_args) {
+        game_args.push(extra);
+    }
     if cfg.fullscreen && !game_args.iter().any(|arg| arg == "--fullscreen") {
         game_args.push("--fullscreen".into());
+    }
+    if let Some(target) = server {
+        let game_version = merged
+            .chain
+            .last()
+            .cloned()
+            .unwrap_or_else(|| version_id.to_string());
+        if supports_quick_play(&game_version) {
+            game_args.push("--quickPlayMultiplayer".into());
+            game_args.push(target.address());
+        } else {
+            game_args.push("--server".into());
+            game_args.push(target.host.clone());
+            game_args.push("--port".into());
+            game_args.push(target.port.to_string());
+        }
     }
     command_args.extend(game_args);
 
     Ok((PathBuf::from(java.path), command_args, Vec::new()))
+}
+
+/// 让 Windows 为这个 java.exe 选择独立/高性能显卡。
+#[cfg(windows)]
+fn prefer_high_performance_gpu(java_path: &std::path::Path, app: &AppHandle) {
+    use std::os::windows::process::CommandExt;
+    let mut cmd = Command::new("reg");
+    cmd.args([
+        "add",
+        r"HKCU\Software\Microsoft\DirectX\UserGpuPreferences",
+        "/v",
+        &java_path.to_string_lossy(),
+        "/t",
+        "REG_SZ",
+        "/d",
+        "GpuPreference=2;",
+        "/f",
+    ])
+    .stdout(Stdio::null())
+    .stderr(Stdio::null())
+    .creation_flags(0x08000000);
+    match cmd.status() {
+        Ok(status) if status.success() => {
+            let _ = app.emit(
+                "game-log",
+                LogLine {
+                    stream: "system".into(),
+                    line: "已为当前 Java 写入高性能显卡偏好".into(),
+                },
+            );
+        }
+        _ => {
+            let _ = app.emit(
+                "game-log",
+                LogLine {
+                    stream: "system".into(),
+                    line: "写入高性能显卡偏好失败，可在显卡控制面板手动设置".into(),
+                },
+            );
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn prefer_high_performance_gpu(_java_path: &std::path::Path, _app: &AppHandle) {}
+
+/// 按配置在启动游戏前执行命令，工作目录为游戏目录。
+fn run_pre_launch(app: &AppHandle, cfg: &Config, game_dir: &std::path::Path) {
+    let command = cfg.pre_launch.trim();
+    if command.is_empty() {
+        return;
+    }
+    let _ = app.emit(
+        "game-log",
+        LogLine {
+            stream: "system".into(),
+            line: format!("执行启动前命令：{command}"),
+        },
+    );
+    let mut cmd = Command::new("cmd");
+    cmd.args(["/C", command])
+        .current_dir(game_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let output = match cmd.output() {
+        Ok(output) => output,
+        Err(err) => {
+            let _ = app.emit(
+                "game-log",
+                LogLine {
+                    stream: "system".into(),
+                    line: format!("启动前命令执行失败：{err}"),
+                },
+            );
+            return;
+        }
+    };
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let _ = app.emit(
+            "game-log",
+            LogLine {
+                stream: "stdout".into(),
+                line: line.to_string(),
+            },
+        );
+    }
+    for line in String::from_utf8_lossy(&output.stderr).lines() {
+        let _ = app.emit(
+            "game-log",
+            LogLine {
+                stream: "stderr".into(),
+                line: line.to_string(),
+            },
+        );
+    }
+    if !output.status.success() {
+        let _ = app.emit(
+            "game-log",
+            LogLine {
+                stream: "system".into(),
+                line: format!("启动前命令返回非零退出码：{:?}", output.status.code()),
+            },
+        );
+    }
 }
 
 pub fn spawn(
@@ -217,10 +436,11 @@ pub fn spawn(
     cfg: &Config,
     version_id: &str,
     account: &Account,
+    server: Option<&ServerTarget>,
 ) -> Result<u32> {
     let merged = install::resolve_detail(cfg, version_id)?;
     let game_dir = crate::instance::game_dir(cfg, version_id);
-    let (java_path, args, _) = build(cfg, &merged, version_id, account)?;
+    let (java_path, args, _) = build(cfg, &merged, version_id, account, server)?;
 
     let _ = app.emit(
         "game-log",
@@ -252,6 +472,11 @@ pub fn spawn(
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x08000000);
     }
+
+    if cfg.prefer_gpu {
+        prefer_high_performance_gpu(&java_path, app);
+    }
+    run_pre_launch(app, cfg, &game_dir);
 
     let mut child = cmd.spawn()?;
     let pid = child.id();

@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   api,
+  openExternal,
   openFolder,
   revealFile,
   savePackDialog,
@@ -11,17 +12,24 @@ import {
   type InstanceInfo,
   type InstanceMeta,
   type InstancePaths,
+  type ModUpdate,
+  type ModUpdateReport,
+  type WorldSeed,
+  type WorldSummary,
 } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
+import InstanceGlyph from "../components/InstanceGlyph.vue";
 import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
+import WoodModal from "../components/WoodModal.vue";
 import WoodSelect from "../components/WoodSelect.vue";
 import {
   exportModpack,
   launchVersion,
   notify,
   openCommunity,
+  openCrashDialog,
   refreshInstanceMetas,
   store,
 } from "../store";
@@ -33,6 +41,8 @@ type Tab =
   | "mods"
   | "resourcepacks"
   | "shaderpacks"
+  | "datapacks"
+  | "schematics"
   | "saves"
   | "screenshots";
 
@@ -42,14 +52,18 @@ const tabs: { key: Tab; label: string; icon: string; no: string }[] = [
   { key: "mods", label: "Mod", icon: "grid", no: "03" },
   { key: "resourcepacks", label: "资源包", icon: "image", no: "04" },
   { key: "shaderpacks", label: "光影", icon: "sun", no: "05" },
-  { key: "saves", label: "存档", icon: "database", no: "06" },
-  { key: "screenshots", label: "截图", icon: "folder", no: "07" },
+  { key: "datapacks", label: "数据包", icon: "package", no: "06" },
+  { key: "schematics", label: "投影", icon: "layers", no: "07" },
+  { key: "saves", label: "存档", icon: "database", no: "08" },
+  { key: "screenshots", label: "截图", icon: "folder", no: "09" },
 ];
 
 const contentTabs: Tab[] = [
   "mods",
   "resourcepacks",
   "shaderpacks",
+  "datapacks",
+  "schematics",
   "saves",
   "screenshots",
 ];
@@ -62,8 +76,20 @@ const saving = ref(false);
 const files = ref<InstanceFile[]>([]);
 const filesLoading = ref(false);
 const fileQuery = ref("");
+const worlds = ref<WorldSummary[]>([]);
+const datapackWorld = ref("");
+const projectionMods = ref<{ litematica: boolean; worldedit: boolean } | null>(null);
+const projectionLoading = ref(false);
+const seedOpen = ref(false);
+const seedBusy = ref(false);
+const seedInfo = ref<WorldSeed | null>(null);
 const confirmName = ref<string | null>(null);
 let confirmTimer: number | undefined;
+
+const modUpdates = ref<ModUpdateReport | null>(null);
+const updatesLoading = ref(false);
+const updateError = ref("");
+const updatingKey = ref("");
 
 const showExport = ref(false);
 const exportPreview = ref<ExportPreview | null>(null);
@@ -108,6 +134,32 @@ const fullscreenOptions = [
   { value: "off", label: "窗口模式" },
 ];
 
+const memoryModeOptions = [
+  { value: "inherit", label: "跟随全局" },
+  { value: "auto", label: "自动（G1GC）" },
+  { value: "g1gc", label: "调优 G1GC" },
+  { value: "zgc", label: "ZGC（低暂停）" },
+  { value: "custom", label: "自定义" },
+];
+
+const wrapperOptions = [
+  { value: "inherit", label: "跟随全局" },
+  { value: "on", label: "注入标识" },
+  { value: "off", label: "禁用 Wrapper" },
+];
+
+const unsafeOptions = [
+  { value: "inherit", label: "跟随全局" },
+  { value: "on", label: "启用兼容补丁" },
+  { value: "off", label: "禁用兼容补丁" },
+];
+
+const gpuOptions = [
+  { value: "inherit", label: "跟随全局" },
+  { value: "on", label: "使用高性能显卡" },
+  { value: "off", label: "不使用" },
+];
+
 const form = reactive({
   display_name: "",
   description: "",
@@ -117,6 +169,12 @@ const form = reactive({
   memory: "",
   javaPath: "",
   javaArgs: "",
+  memoryMode: "inherit",
+  gameArgs: "",
+  preLaunch: "",
+  wrapper: "inherit",
+  unsafe: "inherit",
+  gpu: "inherit",
   width: "",
   height: "",
   fullscreen: "inherit",
@@ -129,6 +187,13 @@ const javaOptions = computed(() => [
     label: `Java ${java.major} · ${java.source}`,
   })),
 ]);
+
+const recommendedMemory = computed(() => {
+  const total = store.systemMemory.total_mb;
+  if (!total) return 4096;
+  const target = Math.min(8192, Math.max(1024, Math.floor(total / 3)));
+  return Math.max(1024, Math.floor(target / 512) * 512);
+});
 
 const iconColor = computed(
   () => iconPresets.find((preset) => preset.value === form.icon)?.color ?? "#8b9d6f"
@@ -144,9 +209,28 @@ const isContentTab = computed(() => contentTabs.includes(tab.value));
 const contentLabel = computed(
   () => tabs.find((item) => item.key === tab.value)?.label ?? ""
 );
-const contentKind = computed(() =>
-  isContentTab.value ? (tab.value as string) : ""
+const contentKind = computed(() => {
+  if (!isContentTab.value) return "";
+  if (tab.value === "datapacks") {
+    return datapackWorld.value ? `datapacks:${datapackWorld.value}` : "datapacks";
+  }
+  return tab.value as string;
+});
+const worldOptions = computed(() =>
+  worlds.value.map((world) => ({ value: world.folder, label: world.name }))
 );
+const selectedWorld = computed(() =>
+  worlds.value.find((world) => world.folder === datapackWorld.value)
+);
+const noWorlds = computed(() => tab.value === "datapacks" && !worlds.value.length);
+const projectionStatus = computed(() => {
+  if (projectionLoading.value) return "正在检测已安装的投影 Mod…";
+  if (!projectionMods.value) return "";
+  const found: string[] = [];
+  if (projectionMods.value.litematica) found.push("Litematica");
+  if (projectionMods.value.worldedit) found.push("WorldEdit");
+  return found.length ? `已检测到 ${found.join(" / ")}` : "未检测到 Litematica 或 WorldEdit";
+});
 const filteredFiles = computed(() => {
   const keyword = fileQuery.value.trim().toLowerCase();
   if (!keyword) return files.value;
@@ -155,7 +239,11 @@ const filteredFiles = computed(() => {
   );
 });
 const canDownloadMore = computed(
-  () => tab.value === "mods" || tab.value === "resourcepacks" || tab.value === "shaderpacks"
+  () =>
+    tab.value === "mods" ||
+    tab.value === "resourcepacks" ||
+    tab.value === "shaderpacks" ||
+    tab.value === "datapacks"
 );
 
 const contentHint = computed(() => {
@@ -166,6 +254,10 @@ const contentHint = computed(() => {
       return "支持 .zip 资源包与文件夹形式的资源包";
     case "shaderpacks":
       return "光影包需要游戏内安装对应光影加载器";
+    case "datapacks":
+      return "数据包只对选中的存档世界生效，安装后在世界里执行 /reload 即可加载";
+    case "schematics":
+      return "投影文件本身不能直接生效，需要客户端安装 Litematica（.litematic）或 WorldEdit（.schem / .schematic）";
     case "saves":
       return "每个文件夹就是一个存档世界";
     case "screenshots":
@@ -186,10 +278,56 @@ onMounted(async () => {
 watch(tab, async (value) => {
   fileQuery.value = "";
   confirmName.value = null;
-  if (contentTabs.includes(value)) {
-    await loadFiles();
+  if (!contentTabs.includes(value)) return;
+  if (value === "schematics") void loadProjectionMods();
+  if (value === "datapacks") {
+    await loadWorlds();
+    if (!datapackWorld.value) {
+      files.value = [];
+      return;
+    }
   }
+  await loadFiles();
 });
+
+async function loadWorlds() {
+  if (!store.instanceId) return;
+  try {
+    const list = await api.instanceWorlds(store.instanceId);
+    worlds.value = list;
+    if (!list.some((world) => world.folder === datapackWorld.value)) {
+      datapackWorld.value = list[0]?.folder ?? "";
+    }
+  } catch (err) {
+    worlds.value = [];
+    datapackWorld.value = "";
+    notify(`读取存档列表失败：${String(err)}`, "err");
+  }
+}
+
+async function loadProjectionMods() {
+  if (!store.instanceId) return;
+  projectionLoading.value = true;
+  try {
+    const list = await api.instanceFiles(store.instanceId, "mods");
+    const names = list.map((file) => file.name.toLowerCase());
+    projectionMods.value = {
+      litematica: names.some((name) => name.includes("litematica")),
+      worldedit: names.some((name) => name.includes("worldedit")),
+    };
+  } catch {
+    projectionMods.value = null;
+  } finally {
+    projectionLoading.value = false;
+  }
+}
+
+async function switchWorld(value: string) {
+  if (datapackWorld.value === value) return;
+  datapackWorld.value = value;
+  fileQuery.value = "";
+  await loadFiles();
+}
 
 async function loadAll() {
   loading.value = true;
@@ -201,6 +339,9 @@ async function loadAll() {
     ]);
     info.value = detail;
     paths.value = folder;
+    modUpdates.value = null;
+    updateError.value = "";
+    projectionMods.value = null;
     applyForm(detail);
   } catch (err) {
     notify(`读取版本信息失败：${String(err)}`, "err");
@@ -222,6 +363,23 @@ function applyForm(detail: InstanceInfo) {
   form.memory = detail.memory_mb ? String(detail.memory_mb) : "";
   form.javaPath = detail.java_path ?? "";
   form.javaArgs = detail.java_args ?? "";
+  form.memoryMode = detail.memory_mode ?? "inherit";
+  form.gameArgs = detail.game_args ?? "";
+  form.preLaunch = detail.pre_launch ?? "";
+  form.wrapper =
+    detail.disable_launch_wrapper === null
+      ? "inherit"
+      : detail.disable_launch_wrapper
+        ? "off"
+        : "on";
+  form.unsafe =
+    detail.disable_lwjgl_unsafe === null
+      ? "inherit"
+      : detail.disable_lwjgl_unsafe
+        ? "off"
+        : "on";
+  form.gpu =
+    detail.prefer_gpu === null ? "inherit" : detail.prefer_gpu ? "on" : "off";
   form.width = detail.window_width ? String(detail.window_width) : "";
   form.height = detail.window_height ? String(detail.window_height) : "";
   form.fullscreen =
@@ -241,8 +399,14 @@ function buildMeta(): InstanceMeta {
     category: form.category,
     favorite: form.favorite,
     memory_mb: numberOrNull(form.memory, 512),
+    memory_mode: form.memoryMode === "inherit" ? null : form.memoryMode,
     java_path: form.javaPath || null,
     java_args: form.javaArgs.trim() || null,
+    game_args: form.gameArgs.trim() || null,
+    pre_launch: form.preLaunch.trim() || null,
+    disable_launch_wrapper: form.wrapper === "inherit" ? null : form.wrapper === "off",
+    disable_lwjgl_unsafe: form.unsafe === "inherit" ? null : form.unsafe === "off",
+    prefer_gpu: form.gpu === "inherit" ? null : form.gpu === "on",
     window_width: numberOrNull(form.width, 320),
     window_height: numberOrNull(form.height, 240),
     fullscreen:
@@ -273,14 +437,54 @@ async function toggleFavorite() {
 
 async function loadFiles() {
   if (!store.instanceId) return;
+  if (tab.value === "datapacks" && !datapackWorld.value) {
+    files.value = [];
+    return;
+  }
   filesLoading.value = true;
   try {
     files.value = await api.instanceFiles(store.instanceId, contentKind.value);
+    void loadThumbs();
   } catch (err) {
     notify(`读取文件失败：${String(err)}`, "err");
     files.value = [];
   } finally {
     filesLoading.value = false;
+  }
+}
+
+const thumbs = reactive<Record<string, string>>({});
+const thumbPending = new Set<string>();
+
+function thumbKey(file: InstanceFile) {
+  return `${contentKind.value}:${file.name}:${file.modified}`;
+}
+
+function thumbOf(file: InstanceFile) {
+  return thumbs[thumbKey(file)] ?? "";
+}
+
+/// 逐张按需生成缩略图，避免一次性解码整个截图目录卡住界面。
+async function loadThumbs() {
+  if (!store.instanceId || !["saves", "screenshots"].includes(contentKind.value)) return;
+  const versionId = store.instanceId;
+  const kind = contentKind.value;
+  for (const file of files.value) {
+    if (kind === "screenshots" && file.is_dir) continue;
+    if (kind === "saves" && !file.is_dir) continue;
+    const key = `${kind}:${file.name}:${file.modified}`;
+    if (thumbs[key] || thumbPending.has(key)) continue;
+    thumbPending.add(key);
+    try {
+      const data = await api.instanceThumb(versionId, kind, file.name);
+      if (data && store.instanceId === versionId && contentKind.value === kind) {
+        thumbs[key] = data;
+      }
+    } catch {
+      // 单张缩略图失败不影响列表
+    } finally {
+      thumbPending.delete(key);
+    }
   }
 }
 
@@ -295,8 +499,64 @@ async function refreshFiles() {
   }
 }
 
+async function checkModUpdates() {
+  if (!info.value || updatesLoading.value) return;
+  updatesLoading.value = true;
+  updateError.value = "";
+  try {
+    modUpdates.value = await api.modUpdates(info.value.id);
+  } catch (err) {
+    modUpdates.value = null;
+    updateError.value = String(err);
+  } finally {
+    updatesLoading.value = false;
+  }
+}
+
+async function applyModUpdate(item: ModUpdate) {
+  if (!info.value || updatingKey.value) return false;
+  updatingKey.value = item.file_name;
+  try {
+    await api.modUpdateInstall(
+      info.value.id,
+      item.download_url,
+      item.latest_file,
+      item.file_name,
+      item.sha1
+    );
+    notify(`${item.mod_name} 已更新到 ${item.latest_version}`);
+    if (modUpdates.value) {
+      modUpdates.value.updates = modUpdates.value.updates.filter(
+        (row) => row.file_name !== item.file_name
+      );
+      modUpdates.value.up_to_date += 1;
+    }
+    await refreshFiles();
+    return true;
+  } catch (err) {
+    notify(`更新 ${item.mod_name} 失败：${String(err)}`, "err");
+    return false;
+  } finally {
+    updatingKey.value = "";
+  }
+}
+
+async function applyAllModUpdates() {
+  const list = modUpdates.value ? [...modUpdates.value.updates] : [];
+  for (const item of list) {
+    const ok = await applyModUpdate(item);
+    if (!ok) break;
+  }
+}
+
 async function openContentFolder() {
-  if (!paths.value || !isContentTab.value) return;
+  if (!isContentTab.value) return;
+  if (tab.value === "datapacks") {
+    const target = selectedWorld.value?.datapacks;
+    if (target) openFolder(target);
+    return;
+  }
+  if (!paths.value) return;
   const target = paths.value[tab.value as keyof InstancePaths];
   if (target) openFolder(target);
 }
@@ -317,6 +577,47 @@ async function toggleFile(file: InstanceFile) {
   } catch (err) {
     notify(`切换失败：${String(err)}`, "err");
   }
+}
+
+async function openShot(file: InstanceFile) {
+  if (!store.instanceId) return;
+  try {
+    await api.instanceOpenContent(store.instanceId, "screenshots", file.name);
+  } catch (err) {
+    notify(`打开截图失败：${String(err)}`, "err");
+  }
+}
+
+async function openSeed(file: InstanceFile) {
+  if (!store.instanceId) return;
+  seedOpen.value = true;
+  seedBusy.value = true;
+  seedInfo.value = null;
+  try {
+    seedInfo.value = await api.instanceWorldSeed(store.instanceId, file.name);
+  } catch (err) {
+    seedOpen.value = false;
+    notify(`读取种子失败：${String(err)}`, "err");
+  } finally {
+    seedBusy.value = false;
+  }
+}
+
+async function copySeed() {
+  if (!seedInfo.value?.seed) return;
+  try {
+    await navigator.clipboard.writeText(seedInfo.value.seed);
+    notify("种子已复制");
+  } catch (err) {
+    notify(`复制失败：${String(err)}`, "err");
+  }
+}
+
+function openSeedMap() {
+  if (!seedInfo.value?.seed) return;
+  openExternal(
+    `https://www.chunkbase.com/apps/seed-map#seed=${encodeURIComponent(seedInfo.value.seed)}`
+  );
 }
 
 function requestDelete(file: InstanceFile) {
@@ -349,7 +650,15 @@ function importFilters() {
       return [{ name: "Mod", extensions: ["jar", "zip"] }];
     case "resourcepacks":
     case "shaderpacks":
+    case "datapacks":
       return [{ name: "压缩包", extensions: ["zip"] }];
+    case "schematics":
+      return [
+        {
+          name: "投影文件",
+          extensions: ["litematic", "schem", "schematic"],
+        },
+      ];
     case "screenshots":
       return [{ name: "图片", extensions: ["png", "jpg", "jpeg"] }];
     default:
@@ -397,6 +706,10 @@ function contentIcon() {
       return "database";
     case "screenshots":
       return "folder";
+    case "datapacks":
+      return "package";
+    case "schematics":
+      return "layers";
     default:
       return "package";
   }
@@ -412,10 +725,27 @@ function downloadMore() {
     mods: "mods",
     resourcepacks: "resourcepacks",
     shaderpacks: "shaders",
+    datapacks: "datapacks",
   };
   const kind = map[tab.value];
   if (!kind) return;
-  openCommunity(kind, info.value.id, info.value.game_version, info.value.loader);
+  const installKind =
+    tab.value === "datapacks" && datapackWorld.value
+      ? `datapacks:${datapackWorld.value}`
+      : undefined;
+  openCommunity(kind, info.value.id, info.value.game_version, info.value.loader, installKind);
+}
+
+function findProjectionMod(keyword: string) {
+  if (!info.value) return;
+  openCommunity(
+    "mods",
+    info.value.id,
+    info.value.game_version,
+    info.value.loader,
+    undefined,
+    keyword
+  );
 }
 
 async function openExport() {
@@ -515,7 +845,7 @@ function launch() {
         @click="store.page = 'versions'"
       />
       <span class="ins-tile" :style="{ '--tile': iconColor }">
-        <AppIcon name="cube" :size="24" />
+        <InstanceGlyph :preset="form.icon" :size="28" />
       </span>
       <div class="ins-head__text">
         <span class="eyebrow">DOCL / INSTANCE</span>
@@ -644,7 +974,7 @@ function launch() {
                       class="icon-chip__tile"
                       :style="{ '--tile': preset.color }"
                     >
-                      <AppIcon name="cube" :size="16" />
+                      <InstanceGlyph :preset="preset.value" :size="19" />
                     </span>
                     {{ preset.label }}
                   </button>
@@ -702,6 +1032,10 @@ function launch() {
               <WoodButton variant="soft" :disabled="exportBusy" @click="openExport">
                 <AppIcon name="download" :size="15" />
                 导出整合包
+              </WoodButton>
+              <WoodButton variant="soft" @click="openCrashDialog(info.id)">
+                <AppIcon name="alert" :size="15" />
+                崩溃分析
               </WoodButton>
             </div>
           </section>
@@ -797,11 +1131,21 @@ function launch() {
             <div class="setting__label">
               <strong>最大内存</strong>
               <span>
-                {{ form.memory ? `${form.memory} MB` : `跟随全局 · ${store.config?.memory_mb ?? 4096} MB` }}
+                {{ form.memory ? `${form.memory} MB` : `跟随全局 · ${store.config?.memory_auto ? `自动约 ${(recommendedMemory / 1024).toFixed(1)} GB` : `${store.config?.memory_mb ?? 4096} MB`}` }}
               </span>
             </div>
             <div class="setting__control">
               <WoodInput v-model="form.memory" type="number" placeholder="例如 6144" />
+            </div>
+          </div>
+
+          <div class="setting">
+            <div class="setting__label">
+              <strong>内存管理</strong>
+              <span>留空跟随全局；自定义时不追加任何 GC 参数</span>
+            </div>
+            <div class="setting__control">
+              <WoodSelect v-model="form.memoryMode" :options="memoryModeOptions" />
             </div>
           </div>
 
@@ -815,13 +1159,63 @@ function launch() {
             </div>
           </div>
 
-          <div class="setting">
+          <div class="setting setting--stack">
             <div class="setting__label">
               <strong>JVM 参数</strong>
               <span>追加在全局参数之后，空格分隔</span>
             </div>
             <div class="setting__control setting__control--wide">
               <WoodInput v-model="form.javaArgs" mono placeholder="例如 -XX:+UseZGC" />
+            </div>
+          </div>
+
+          <div class="setting setting--stack">
+            <div class="setting__label">
+              <strong>游戏参数</strong>
+              <span>追加到游戏主类之后，例如 --width 1600 --height 900</span>
+            </div>
+            <div class="setting__control setting__control--wide">
+              <WoodInput v-model="form.gameArgs" mono placeholder="--width 1600 --height 900" />
+            </div>
+          </div>
+
+          <div class="setting setting--stack">
+            <div class="setting__label">
+              <strong>启动前执行命令</strong>
+              <span>工作目录为版本游戏目录，输出会写入启动日志</span>
+            </div>
+            <div class="setting__control setting__control--wide">
+              <WoodInput v-model="form.preLaunch" mono placeholder="例如 java -jar packwiz-installer-bootstrap.jar ..." />
+            </div>
+          </div>
+
+          <div class="setting">
+            <div class="setting__label">
+              <strong>Java Launch Wrapper</strong>
+              <span>禁用后不再注入 DOCL 启动器标识，部分反作弊需要</span>
+            </div>
+            <div class="setting__control">
+              <WoodSelect v-model="form.wrapper" :options="wrapperOptions" />
+            </div>
+          </div>
+
+          <div class="setting">
+            <div class="setting__label">
+              <strong>LWJGL Unsafe 兼容</strong>
+              <span>Java 24+ 放行 Unsafe 内存访问，避免 LWJGL 告警</span>
+            </div>
+            <div class="setting__control">
+              <WoodSelect v-model="form.unsafe" :options="unsafeOptions" />
+            </div>
+          </div>
+
+          <div class="setting">
+            <div class="setting__label">
+              <strong>高性能显卡</strong>
+              <span>为当前 Java 写入 Windows 显卡偏好</span>
+            </div>
+            <div class="setting__control">
+              <WoodSelect v-model="form.gpu" :options="gpuOptions" />
             </div>
           </div>
 
@@ -861,7 +1255,17 @@ function launch() {
             <span class="group-line" />
             <div class="row">
               <WoodButton
-                v-if="canDownloadMore"
+                v-if="tab === 'mods'"
+                variant="soft"
+                size="sm"
+                :disabled="updatesLoading"
+                @click="checkModUpdates"
+              >
+                <AppIcon name="refresh" :size="14" />
+                {{ updatesLoading ? "检查中…" : "检查更新" }}
+              </WoodButton>
+              <WoodButton
+                v-if="canDownloadMore && !noWorlds"
                 variant="primary"
                 size="sm"
                 sheen
@@ -874,7 +1278,7 @@ function launch() {
                 <AppIcon name="folder" :size="14" />
                 打开文件夹
               </WoodButton>
-              <WoodButton variant="soft" size="sm" @click="importContent">
+              <WoodButton v-if="!noWorlds" variant="soft" size="sm" @click="importContent">
                 <AppIcon name="plus" :size="14" />
                 从文件导入
               </WoodButton>
@@ -889,6 +1293,151 @@ function launch() {
           </div>
 
           <p class="muted small">{{ contentHint }}</p>
+
+          <div v-if="tab === 'schematics'" class="proj-tip">
+            <span class="proj-tip__icon">
+              <AppIcon name="layers" :size="17" />
+            </span>
+            <div class="proj-tip__main">
+              <strong>投影助手</strong>
+              <span class="muted small">
+                投影文件放进 schematics 文件夹后，在游戏内用 Litematica 或 WorldEdit
+                载入并放置。缺 Mod 时可以先从资源站安装。
+              </span>
+              <span
+                v-if="projectionStatus"
+                class="proj-tip__status"
+                :class="{ 'proj-tip__status--on': projectionMods?.litematica || projectionMods?.worldedit }"
+              >
+                <AppIcon
+                  :name="projectionMods?.litematica || projectionMods?.worldedit ? 'check' : 'alert'"
+                  :size="12"
+                />
+                {{ projectionStatus }}
+              </span>
+            </div>
+            <div class="row">
+              <WoodButton variant="soft" size="sm" @click="findProjectionMod('litematica')">
+                <AppIcon name="download" :size="13" />
+                Litematica
+              </WoodButton>
+              <WoodButton variant="ghost" size="sm" @click="findProjectionMod('worldedit')">
+                WorldEdit
+              </WoodButton>
+            </div>
+          </div>
+
+          <div v-if="tab === 'datapacks'" class="world-pick">
+            <span class="world-pick__label">目标世界</span>
+            <WoodSelect
+              v-if="worlds.length"
+              :model-value="datapackWorld"
+              :options="worldOptions"
+              @update:model-value="switchWorld"
+            />
+            <span v-else class="muted small">
+              这个版本还没有存档世界，数据包需要放进具体世界。
+            </span>
+          </div>
+
+          <div v-if="tab === 'mods' && updatesLoading" class="update-state">
+            <span class="skeleton" />
+            正在对照 Modrinth 检查更新…
+          </div>
+          <div
+            v-else-if="tab === 'mods' && updateError"
+            class="update-state update-state--err"
+          >
+            <AppIcon name="alert" :size="14" />
+            {{ updateError }}
+            <WoodButton variant="ghost" size="sm" @click="checkModUpdates">
+              重试
+            </WoodButton>
+          </div>
+          <div v-else-if="tab === 'mods' && modUpdates" class="update-panel">
+            <header class="update-panel__head">
+              <div class="update-panel__title">
+                <span class="eyebrow">MODRINTH</span>
+                <strong>
+                  {{
+                    modUpdates.updates.length
+                      ? `${modUpdates.updates.length} 个 Mod 可更新`
+                      : "所有 Mod 都是最新的"
+                  }}
+                </strong>
+                <span class="muted small">
+                  扫描 {{ modUpdates.scanned }} 个 · 识别 {{ modUpdates.matched }} 个 · 已是最新
+                  {{ modUpdates.up_to_date }} 个
+                </span>
+              </div>
+              <div class="row">
+                <WoodButton
+                  v-if="modUpdates.updates.length"
+                  variant="primary"
+                  size="sm"
+                  :disabled="!!updatingKey"
+                  @click="applyAllModUpdates"
+                >
+                  <AppIcon name="download" :size="13" />
+                  {{ updatingKey ? "更新中…" : "全部更新" }}
+                </WoodButton>
+                <IconButton
+                  icon="close"
+                  label="关闭更新结果"
+                  :size="28"
+                  @click="modUpdates = null"
+                />
+              </div>
+            </header>
+
+            <div v-if="modUpdates.updates.length" class="update-list">
+              <div
+                v-for="item in modUpdates.updates"
+                :key="item.file_name"
+                class="update-row"
+              >
+                <span class="update-row__icon">
+                  <AppIcon name="package" :size="16" />
+                </span>
+                <div class="update-row__main">
+                  <strong>
+                    {{ item.mod_name }}
+                    <button
+                      v-if="item.project_url"
+                      class="update-row__link"
+                      title="打开项目页"
+                      @click="openExternal(item.project_url)"
+                    >
+                      <AppIcon name="external" :size="11" />
+                    </button>
+                  </strong>
+                  <span class="muted small mono">
+                    {{ item.current_version || "未知版本" }} → {{ item.latest_version }}
+                  </span>
+                  <span class="update-row__file mono">{{ item.latest_file }}</span>
+                </div>
+                <span class="tag">
+                  {{ item.source === "curseforge" ? "CF" : "MR" }}
+                </span>
+                <span v-if="item.version_type !== 'release'" class="tag">
+                  {{ item.version_type }}
+                </span>
+                <WoodButton
+                  variant="primary"
+                  size="sm"
+                  :disabled="!!updatingKey"
+                  @click="applyModUpdate(item)"
+                >
+                  {{ updatingKey === item.file_name ? "更新中…" : "更新" }}
+                </WoodButton>
+              </div>
+            </div>
+            <ul v-else-if="modUpdates.notes.length" class="update-notes">
+              <li v-for="(note, index) in modUpdates.notes" :key="index">
+                {{ note }}
+              </li>
+            </ul>
+          </div>
 
           <div v-if="files.length" class="file-search">
             <WoodInput
@@ -906,9 +1455,21 @@ function launch() {
             <AppIcon :name="contentIcon()" :size="28" />
             <div>
               <p class="file-empty__title">还没有{{ contentLabel }}</p>
-              <p class="muted small">点击「下载新{{ contentLabel }}」去资源站挑选，或者从本地文件导入。</p>
+              <p class="muted small">
+                {{
+                  noWorlds
+                    ? "先在游戏里创建一个世界，数据包会安装到该世界的 datapacks 文件夹。"
+                    : tab === "screenshots"
+                      ? "进游戏按 F2 截图，图片就会出现在这里。"
+                      : tab === "saves"
+                        ? "在游戏里新建世界，或从本地导入存档文件夹。"
+                        : tab === "schematics"
+                          ? "把 .litematic / .schem / .schematic 投影文件放进这里，游戏内用 Mod 载入。"
+                          : `点击「下载新${contentLabel}」去资源站挑选，或者从本地文件导入。`
+                }}
+              </p>
             </div>
-            <WoodButton variant="soft" size="sm" @click="importContent">
+            <WoodButton v-if="!noWorlds" variant="soft" size="sm" @click="importContent">
               <AppIcon name="plus" :size="14" />
               从文件导入
             </WoodButton>
@@ -916,9 +1477,39 @@ function launch() {
           <div v-else-if="!filteredFiles.length" class="file-state">
             <span class="muted small">没有匹配的文件</span>
           </div>
+          <div v-else-if="tab === 'screenshots'" class="shot-grid">
+            <article v-for="file in filteredFiles" :key="file.name" class="shot-card">
+              <button class="shot-card__thumb" @click="openShot(file)">
+                <img
+                  v-if="thumbOf(file)"
+                  :src="thumbOf(file)"
+                  :alt="file.display_name"
+                  loading="lazy"
+                />
+                <span v-else class="shot-card__blank">
+                  <AppIcon name="image" :size="22" />
+                </span>
+              </button>
+              <footer class="shot-card__foot">
+                <span class="shot-card__name" :title="file.display_name">
+                  {{ file.display_name }}
+                </span>
+                <IconButton
+                  icon="trash"
+                  :label="confirmName === file.name ? '确认删除' : '删除'"
+                  variant="danger"
+                  :size="26"
+                  @click="requestDelete(file)"
+                />
+              </footer>
+            </article>
+          </div>
           <div v-else class="file-list">
             <div v-for="file in filteredFiles" :key="file.name" class="file-row">
-              <span class="file-row__icon">
+              <span v-if="thumbOf(file)" class="file-row__thumb">
+                <img :src="thumbOf(file)" alt="" loading="lazy" />
+              </span>
+              <span v-else class="file-row__icon">
                 <AppIcon :name="contentIcon()" :size="16" />
               </span>
               <div class="file-row__main">
@@ -927,7 +1518,7 @@ function launch() {
                   <span v-if="!file.enabled" class="tag file-row__off">已禁用</span>
                 </span>
                 <span class="file-row__meta mono">
-                  {{ file.is_dir ? "文件夹" : formatBytes(file.size) }}
+                  {{ file.is_dir && !file.size ? "文件夹" : formatBytes(file.size) }}
                   · {{ formatDate(new Date(file.modified * 1000).toISOString()) }}
                 </span>
               </div>
@@ -938,6 +1529,14 @@ function launch() {
                 variant="ghost"
                 :size="30"
                 @click="toggleFile(file)"
+              />
+              <IconButton
+                v-if="tab === 'saves' && file.is_dir"
+                icon="globe"
+                label="种子预览"
+                variant="ghost"
+                :size="30"
+                @click="openSeed(file)"
               />
               <IconButton
                 icon="trash"
@@ -951,6 +1550,39 @@ function launch() {
         </section>
       </div>
     </div>
+
+    <WoodModal v-if="seedOpen" title="种子预览" :width="430" @close="seedOpen = false">
+      <div v-if="seedBusy" class="seed-loading">
+        <span class="skeleton" />
+        <span class="muted small">正在读取 level.dat…</span>
+      </div>
+      <div v-else-if="seedInfo" class="seed-body">
+        <div class="seed-world">
+          <strong>{{ seedInfo.name }}</strong>
+          <span class="muted small mono">
+            {{ seedInfo.folder }}<template v-if="seedInfo.version"> · {{ seedInfo.version }}</template>
+          </span>
+        </div>
+        <div class="seed-value">
+          <span v-if="seedInfo.seed" class="seed-value__text mono">{{ seedInfo.seed }}</span>
+          <span v-else class="muted small">这个存档的 level.dat 里没有读到种子。</span>
+        </div>
+        <p class="muted small seed-hint">
+          种子地图会在浏览器中打开，进入后选择对应的游戏版本即可查看生物群系、结构与要塞位置。
+        </p>
+      </div>
+      <template #footer>
+        <WoodButton variant="ghost" size="sm" @click="seedOpen = false">关闭</WoodButton>
+        <WoodButton variant="soft" size="sm" :disabled="!seedInfo?.seed" @click="copySeed">
+          <AppIcon name="copy" :size="13" />
+          复制种子
+        </WoodButton>
+        <WoodButton variant="primary" size="sm" :disabled="!seedInfo?.seed" @click="openSeedMap">
+          <AppIcon name="external" :size="13" />
+          打开种子地图
+        </WoodButton>
+      </template>
+    </WoodModal>
 
     <Teleport to="body">
       <Transition name="pack-modal">
@@ -1070,9 +1702,13 @@ function launch() {
   border-radius: 12px;
   display: grid;
   place-items: center;
-  color: rgba(255, 255, 255, 0.92);
-  background: linear-gradient(160deg, color-mix(in srgb, var(--tile) 78%, #ffffff), var(--tile));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), var(--shadow-1);
+  background: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--tile) 14%, #fffdf6),
+    color-mix(in srgb, var(--tile) 28%, #efe6d4)
+  );
+  border: 1px solid color-mix(in srgb, var(--tile) 32%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), var(--shadow-1);
   flex-shrink: 0;
 }
 
@@ -1230,6 +1866,21 @@ function launch() {
   border-bottom: none;
 }
 
+/* 长参数输入改为上下布局，避免和标签互相挤压 */
+.setting--stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.setting--stack .setting__label {
+  width: auto;
+}
+
+.setting--stack .setting__control {
+  justify-content: stretch;
+}
+
 .setting__label {
   width: 200px;
   flex-shrink: 0;
@@ -1327,8 +1978,13 @@ function launch() {
   border-radius: 6px;
   display: grid;
   place-items: center;
-  color: rgba(255, 255, 255, 0.9);
-  background: linear-gradient(160deg, color-mix(in srgb, var(--tile) 78%, #ffffff), var(--tile));
+  background: linear-gradient(
+    160deg,
+    color-mix(in srgb, var(--tile) 12%, #fffdf6),
+    color-mix(in srgb, var(--tile) 24%, #efe6d4)
+  );
+  border: 1px solid color-mix(in srgb, var(--tile) 30%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
 .quick-grid {
@@ -1410,6 +2066,122 @@ function launch() {
   margin: 4px 0;
 }
 
+.world-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line);
+  border-radius: 9px;
+  background: rgba(var(--accent-rgb), 0.03);
+}
+
+.proj-tip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 0 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+.proj-tip__icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background: rgba(var(--accent-rgb), 0.12);
+  color: var(--moss);
+}
+
+.proj-tip__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.proj-tip__main strong {
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.proj-tip__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.proj-tip__status--on {
+  color: var(--moss);
+}
+
+.proj-tip .row {
+  flex-shrink: 0;
+}
+
+.seed-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+}
+
+.seed-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.seed-world {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.seed-world strong {
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.seed-value {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px dashed var(--line-strong);
+  background: var(--panel-2);
+}
+
+.seed-value__text {
+  font-size: 19px;
+  letter-spacing: 0.04em;
+  color: var(--walnut-deep);
+  word-break: break-all;
+}
+
+.seed-hint {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.world-pick__label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  flex-shrink: 0;
+}
+
+.world-pick :deep(.select) {
+  min-width: 220px;
+}
+
 .file-search :deep(.input) {
   max-width: 320px;
 }
@@ -1467,6 +2239,94 @@ function launch() {
   background: var(--moss-soft);
   color: var(--moss);
   flex-shrink: 0;
+}
+
+.file-row__thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 7px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  flex-shrink: 0;
+}
+
+.file-row__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+}
+
+.shot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.shot-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  overflow: hidden;
+  background: var(--panel-2);
+  transition: border-color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo),
+    box-shadow var(--dur-2) ease;
+}
+
+.shot-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-1);
+}
+
+.shot-card__thumb {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  padding: 0;
+  border: 0;
+  background: var(--panel-2);
+  cursor: zoom-in;
+  overflow: hidden;
+}
+
+.shot-card__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform var(--dur-3) var(--ease-out-expo);
+}
+
+.shot-card__thumb:hover img {
+  transform: scale(1.04);
+}
+
+.shot-card__blank {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.shot-card__foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 10px;
+}
+
+.shot-card__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .file-row__main {
@@ -1706,5 +2566,133 @@ function launch() {
 .pack-modal-enter-from .pack-modal__card,
 .pack-modal-leave-to .pack-modal__card {
   transform: translateY(10px) scale(0.98);
+}
+
+/* Mod 更新检测 */
+.update-state {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px dashed var(--line-strong);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.update-state--err {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.update-state--err .btn,
+.update-state--err button:last-child {
+  margin-left: auto;
+}
+
+.update-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+  background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.06), transparent);
+}
+
+.update-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.update-panel__title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.update-panel__title strong {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--walnut-deep);
+}
+
+.update-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.update-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.update-row__icon {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--moss-soft);
+  color: var(--moss);
+  flex-shrink: 0;
+}
+
+.update-row__main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.update-row__main strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--walnut-deep);
+}
+
+.update-row__link {
+  display: inline-grid;
+  place-items: center;
+  color: var(--muted);
+  padding: 0;
+  transition: color var(--dur-1) ease;
+}
+
+.update-row__link:hover {
+  color: var(--moss);
+}
+
+.update-row__file {
+  font-size: 10px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-notes {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--muted);
 }
 </style>

@@ -1032,6 +1032,160 @@ a {
   --btn-fg: #fff8ea;
 }
 
+/* 主题：樱花 */
+:root[data-theme="sakura"] {
+  --paper: #fdf1f2;
+  --paper-2: #f7e2e6;
+  --panel: #fffbfb;
+  --panel-2: #fdf2f4;
+  --walnut: #b0566e;
+  --walnut-deep: #7c3348;
+  --walnut-light: #d99aab;
+  --moss: #b8687f;
+  --moss-bright: #d18fa0;
+  --moss-soft: #f8e6ea;
+  --amber: #d99a6a;
+  --ink: #33222a;
+  --ink-soft: #6e5560;
+  --muted: #a28e96;
+  --line: #eed9de;
+  --line-strong: #dfc1c9;
+  --danger: #a34e36;
+  --danger-soft: #f4e3dc;
+  --ambient-a: 216, 140, 160;
+  --ambient-b: 184, 104, 127;
+  --accent-rgb: 176, 86, 110;
+  --bar-a: #fbe7ea;
+  --bar-b: #f7dde2;
+  --hero-a: #fffbfb;
+  --hero-b: #fdf3f4;
+  --hero-c: #f9e8eb;
+  --hover: #fdf0f2;
+  --glass-rgb: 255, 251, 251;
+  --btn-a: #c26b83;
+  --btn-b: #b0566e;
+  --btn-c: #95455b;
+  --btn-border: #7c3348;
+  --btn-fg: #fff7f8;
+}
+
+/* 主题：深海 */
+:root[data-theme="ocean"] {
+  --paper: #eaf2f6;
+  --paper-2: #dbe8ef;
+  --panel: #f9fcfe;
+  --panel-2: #eef6fa;
+  --walnut: #2f6076;
+  --walnut-deep: #1d4254;
+  --walnut-light: #7fa9bd;
+  --moss: #3e8c8c;
+  --moss-bright: #6fb3b3;
+  --moss-soft: #e2f0f0;
+  --amber: #c9924f;
+  --ink: #1a2a32;
+  --ink-soft: #4b6270;
+  --muted: #7d94a2;
+  --line: #d3e2ea;
+  --line-strong: #b9cedb;
+  --danger: #a34e36;
+  --danger-soft: #f2e2db;
+  --ambient-a: 110, 160, 190;
+  --ambient-b: 62, 140, 140;
+  --accent-rgb: 47, 96, 118;
+  --bar-a: #e4eff5;
+  --bar-b: #d9e9f1;
+  --hero-a: #f9fcfe;
+  --hero-b: #eef7fb;
+  --hero-c: #e2eff6;
+  --hover: #e9f3f8;
+  --glass-rgb: 249, 252, 254;
+  --btn-a: #3d7590;
+  --btn-b: #2f6076;
+  --btn-c: #244c5e;
+  --btn-border: #1d4254;
+  --btn-fg: #f5fafc;
+}
+
+/* 主题：香芋 */
+:root[data-theme="lavender"] {
+  --paper: #f3eff8;
+  --paper-2: #e8e1f2;
+  --panel: #fdfbff;
+  --panel-2: #f6f1fb;
+  --walnut: #6d5590;
+  --walnut-deep: #4b3869;
+  --walnut-light: #b49ccb;
+  --moss: #8f7bb5;
+  --moss-bright: #b3a1cf;
+  --moss-soft: #f0eaf9;
+  --amber: #c9925f;
+  --ink: #2b2437;
+  --ink-soft: #5d526e;
+  --muted: #9489a6;
+  --line: #e3d9f0;
+  --line-strong: #cebfe2;
+  --danger: #a34e36;
+  --danger-soft: #f3e2dc;
+  --ambient-a: 180, 150, 210;
+  --ambient-b: 143, 123, 181;
+  --accent-rgb: 109, 85, 144;
+  --bar-a: #eee7f6;
+  --bar-b: #e7def2;
+  --hero-a: #fdfbff;
+  --hero-b: #f7f2fc;
+  --hero-c: #efe7f8;
+  --hover: #f4effb;
+  --glass-rgb: 253, 251, 255;
+  --btn-a: #8168a6;
+  --btn-b: #6d5590;
+  --btn-c: #594478;
+  --btn-border: #4b3869;
+  --btn-fg: #faf7ff;
+}
+
+/* 主题：石墨 */
+:root[data-theme="graphite"] {
+  --paper: #1b1d20;
+  --paper-2: #232629;
+  --panel: #26292d;
+  --panel-2: #2d3136;
+  --walnut: #9fb4c7;
+  --walnut-deep: #eef1f4;
+  --walnut-light: #7f95a8;
+  --moss: #8aa88a;
+  --moss-bright: #a8c4a8;
+  --moss-soft: #2b352c;
+  --amber: #c9a26a;
+  --ink: #eceff2;
+  --ink-soft: #c0c7cf;
+  --muted: #8d959e;
+  --line: #33373c;
+  --line-strong: #444a51;
+  --danger: #c96f57;
+  --danger-soft: #3b2620;
+  --ambient-a: 130, 150, 170;
+  --ambient-b: 138, 168, 138;
+  --accent-rgb: 159, 180, 199;
+  --bar-a: #26292d;
+  --bar-b: #202326;
+  --hero-a: #282c30;
+  --hero-b: #24272b;
+  --hero-c: #202327;
+  --hover: #2f3338;
+  --glass-rgb: 38, 41, 45;
+  --btn-a: #6b7f92;
+  --btn-b: #566b7d;
+  --btn-c: #465866;
+  --btn-border: #3a4a57;
+  --btn-fg: #f2f6f9;
+}
+
+/* 深色主题使用深色原生控件 */
+:root[data-theme="nocturne"],
+:root[data-theme="graphite"] {
+  color-scheme: dark;
+}
+
 /* 背景图 + 磨砂玻璃 */
 .wallpaper {
   position: fixed;
@@ -1100,6 +1254,112 @@ a {
     radial-gradient(1.4px 1.4px at 84% 42%, rgba(255, 255, 255, 0.75) 50%, transparent 51%),
     radial-gradient(1.1px 1.1px at 18% 48%, rgba(255, 255, 255, 0.6) 50%, transparent 51%),
     linear-gradient(180deg, #141d2e 0%, #1e2c42 52%, #16202e 100%);
+}
+
+.wallpaper--sakura .wallpaper__builtin {
+  background-image: radial-gradient(
+      circle at 76% 18%,
+      rgba(255, 250, 236, 0.95) 0 3%,
+      rgba(255, 250, 236, 0.3) 3.1% 8%,
+      transparent 9%
+    ),
+    radial-gradient(140px 90px at 16% 26%, rgba(255, 255, 255, 0.6), transparent 70%),
+    radial-gradient(180px 110px at 62% 8%, rgba(255, 255, 255, 0.45), transparent 72%),
+    radial-gradient(120px 80px at 88% 52%, rgba(255, 236, 242, 0.5), transparent 70%),
+    linear-gradient(180deg, #fdeef2 0%, #f8d7e1 42%, #efb9cb 72%, #e6a3ba 100%);
+}
+
+.wallpaper--ocean .wallpaper__builtin {
+  background-image: radial-gradient(
+      circle at 24% 16%,
+      rgba(255, 250, 232, 0.9) 0 2.6%,
+      rgba(255, 250, 232, 0.25) 2.7% 7%,
+      transparent 8%
+    ),
+    radial-gradient(ellipse 90% 40% at 20% 100%, rgba(24, 74, 92, 0.55), transparent 70%),
+    radial-gradient(ellipse 110% 34% at 80% 108%, rgba(18, 58, 74, 0.5), transparent 70%),
+    repeating-linear-gradient(
+      172deg,
+      transparent 0 46px,
+      rgba(255, 255, 255, 0.08) 48px 50px,
+      transparent 52px 96px
+    ),
+    linear-gradient(180deg, #dff1f7 0%, #a9d3e2 38%, #5f9cb2 64%, #2f6076 100%);
+}
+
+.wallpaper--aurora .wallpaper__builtin {
+  background-image: radial-gradient(
+      1.5px 1.5px at 14% 18%, rgba(255, 255, 255, 0.8) 50%, transparent 51%
+    ),
+    radial-gradient(1.2px 1.2px at 32% 30%, rgba(255, 255, 255, 0.6) 50%, transparent 51%),
+    radial-gradient(1.4px 1.4px at 48% 12%, rgba(255, 255, 255, 0.75) 50%, transparent 51%),
+    radial-gradient(1.1px 1.1px at 68% 26%, rgba(255, 255, 255, 0.55) 50%, transparent 51%),
+    radial-gradient(1.3px 1.3px at 86% 34%, rgba(255, 255, 255, 0.7) 50%, transparent 51%),
+    radial-gradient(ellipse 70% 28% at 30% 26%, rgba(120, 234, 190, 0.42), transparent 70%),
+    radial-gradient(ellipse 55% 22% at 70% 40%, rgba(150, 130, 240, 0.4), transparent 70%),
+    linear-gradient(180deg, #101a2c 0%, #172a42 46%, #101a2a 100%);
+}
+
+.wallpaper__dim {
+  position: absolute;
+  inset: 0;
+  background: rgba(14, 12, 10, var(--bg-dim, 0));
+}
+
+/* 界面圆角 */
+.app[data-radius="sharp"] {
+  --radius-sm: 4px;
+  --radius: 7px;
+  --radius-lg: 11px;
+}
+
+.app[data-radius="round"] {
+  --radius-sm: 12px;
+  --radius: 18px;
+  --radius-lg: 26px;
+}
+
+/* 界面密度 */
+.app[data-density="compact"] .main {
+  padding: 20px 30px 32px;
+}
+
+.app[data-density="compact"] .page {
+  gap: 16px;
+}
+
+.app[data-density="compact"] .card-pad {
+  padding: 14px 16px;
+}
+
+.app[data-density="compact"] .nav-item {
+  height: 36px;
+}
+
+.app[data-density="compact"] .sidebar {
+  width: 196px;
+  padding: 14px 10px 12px;
+}
+
+.app[data-density="comfy"] .main {
+  padding: 38px 54px 58px;
+}
+
+.app[data-density="comfy"] .page {
+  gap: 28px;
+}
+
+.app[data-density="comfy"] .card-pad {
+  padding: 24px 26px;
+}
+
+.app[data-density="comfy"] .nav-item {
+  height: 46px;
+}
+
+.app[data-density="comfy"] .sidebar {
+  width: 232px;
+  padding: 24px 16px 18px;
 }
 
 .wallpaper__tint {

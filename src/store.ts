@@ -1,4 +1,4 @@
-import { computed, reactive } from "vue";
+import { computed, reactive, ref } from "vue";
 import {
   api,
   onGameExit,
@@ -15,10 +15,20 @@ import {
   type JavaInfo,
   type LogLine,
   type ProgressSnapshot,
+  type SystemMemory,
+  type UpdateInfo,
   type VersionSummary,
 } from "./api";
 
-export type Page = "home" | "versions" | "download" | "accounts" | "instance" | "settings";
+export type Page =
+  | "home"
+  | "versions"
+  | "download"
+  | "multiplayer"
+  | "accounts"
+  | "skins"
+  | "instance"
+  | "settings";
 
 export const store = reactive({
   page: "home" as Page,
@@ -29,18 +39,28 @@ export const store = reactive({
     instanceId: string;
     gameVersion: string;
     loader: string;
+    query?: string;
+    projectId?: string;
+    /// 与 kind 不同的实际安装分类，例如数据包需要带上目标世界
+    installKind?: string;
   } | null,
   config: null as Config | null,
   versions: [] as VersionSummary[],
   installed: [] as InstalledVersion[],
   accounts: [] as AccountView[],
   javaList: [] as JavaInfo[],
+  systemMemory: { total_mb: 0, available_mb: 0 } as SystemMemory,
   loadingVersions: false,
   progress: null as ProgressSnapshot | null,
   installingId: null as string | null,
   log: [] as LogLine[],
   logOpen: false,
   gameRunning: false,
+  runningVersionId: null as string | null,
+  stoppedByUser: false,
+  crashOpen: false,
+  crashVersionId: null as string | null,
+  crashExitCode: null as number | null,
   backgroundUrl: "",
   backgroundPreset: "",
   downloadPanel: "hidden" as "hidden" | "open" | "ball",
@@ -68,6 +88,9 @@ export const selectedAccount = computed<AccountView | null>(() => {
   const id = store.config?.selected_account;
   return store.accounts.find((a) => a.id === id) ?? store.accounts[0] ?? null;
 });
+
+/// 启动时自动检查到的更新，供设置页直接显示安装入口
+export const startupUpdate = ref<{ info: UpdateInfo; path: string | null } | null>(null);
 
 let toastTimer: number | undefined;
 
@@ -100,14 +123,28 @@ export function openInstance(id: string) {
   store.page = "instance";
 }
 
+/// 打开崩溃分析弹层；不传版本时优先用正在运行或当前选中的版本。
+export function openCrashDialog(versionId?: string | null, exitCode: number | null = null) {
+  const target = versionId ?? store.runningVersionId ?? selectedVersion.value?.id ?? null;
+  if (!target) {
+    notify("请先选择一个游戏版本", "err");
+    return;
+  }
+  store.crashVersionId = target;
+  store.crashExitCode = exitCode;
+  store.crashOpen = true;
+}
+
 /// 从版本设置跳到下载页，并带上当前实例的版本与加载器。
 export function openCommunity(
   kind: string,
   instanceId: string,
   gameVersion: string,
-  loader: string
+  loader: string,
+  installKind?: string,
+  query?: string
 ) {
-  store.communityContext = { kind, instanceId, gameVersion, loader };
+  store.communityContext = { kind, instanceId, gameVersion, loader, installKind, query };
   store.page = "download";
 }
 
@@ -315,6 +352,38 @@ export async function installCfFile(
   }
 }
 
+export async function downloadModpack(
+  url: string,
+  fileName: string,
+  title: string
+): Promise<string | null> {
+  if (store.installingId) {
+    notify("已有下载任务正在进行", "err");
+    return null;
+  }
+  store.installingId = `整合包 · ${fileName}`;
+  store.progress = null;
+  store.lastProgress = null;
+  store.lastJobError = null;
+  store.lastJobTitle = title;
+  store.downloadPanel = "open";
+  primeProgress("install", `准备下载 ${title}…`);
+  try {
+    const path = await api.modpackDownload(url, fileName);
+    notify(`${title} 下载完成`);
+    return path;
+  } catch (err) {
+    store.lastJobError = String(err);
+    notify(`下载失败：${String(err)}`, "err");
+    return null;
+  } finally {
+    store.installingId = null;
+    window.setTimeout(() => {
+      if (!store.progress?.active) store.progress = null;
+    }, 800);
+  }
+}
+
 export async function importModpack(
   path: string,
   options: import("./api").ModpackImportOptions,
@@ -474,6 +543,7 @@ export async function launchVersion(id?: string) {
     return;
   }
   if (store.gameRunning) {
+    store.stoppedByUser = true;
     try {
       await api.killGame();
     } catch (err) {
@@ -481,12 +551,15 @@ export async function launchVersion(id?: string) {
     }
     return;
   }
+  store.runningVersionId = target;
+  store.stoppedByUser = false;
   store.gameRunning = true;
   try {
     await api.launchVersion(target);
     notify(`正在启动 ${target}`);
   } catch (err) {
     store.gameRunning = false;
+    store.runningVersionId = null;
     const message = String(err);
     if (message.includes("LAUNCH_NO_JAVA")) {
       notify(message.replace("LAUNCH_NO_JAVA:", ""), "err");
@@ -494,6 +567,53 @@ export async function launchVersion(id?: string) {
     } else {
       notify(`启动失败：${message}`, "err");
     }
+  }
+}
+
+export async function launchServer(address: string, id?: string) {
+  const target = id ?? selectedVersion.value?.id;
+  if (!target) {
+    notify("请先安装一个游戏版本", "err");
+    store.page = "download";
+    return;
+  }
+  if (store.gameRunning) {
+    notify("游戏已在运行，请先停止", "err");
+    return;
+  }
+  store.runningVersionId = target;
+  store.stoppedByUser = false;
+  store.gameRunning = true;
+  try {
+    await api.launchServer(target, address);
+    notify(`正在加入 ${address}`);
+  } catch (err) {
+    store.gameRunning = false;
+    store.runningVersionId = null;
+    const message = String(err);
+    if (message.includes("LAUNCH_NO_JAVA")) {
+      notify(message.replace("LAUNCH_NO_JAVA:", ""), "err");
+      store.page = "settings";
+    } else {
+      notify(`连接失败：${message}`, "err");
+    }
+  }
+}
+
+export async function rememberServer(address: string) {
+  try {
+    store.config = await api.rememberServer(address);
+  } catch (err) {
+    notify(`保存服务器失败：${String(err)}`, "err");
+  }
+}
+
+export async function forgetServer(address: string) {
+  try {
+    store.config = await api.forgetServer(address);
+    notify("已从最近服务器移除");
+  } catch (err) {
+    notify(`移除失败：${String(err)}`, "err");
   }
 }
 
@@ -530,6 +650,9 @@ export async function initApp() {
     refreshAccounts(),
     refreshJava(),
     refreshInstanceMetas(),
+    api.systemMemory().then((value) => {
+      store.systemMemory = value;
+    }),
     api.defaultSkin().then((value) => {
       store.defaultSkin = value;
     }),
@@ -547,11 +670,22 @@ export async function initApp() {
 
   await onGameExit((exit) => {
     store.gameRunning = false;
+    const stopped = store.stoppedByUser;
+    const versionId = store.runningVersionId;
+    store.stoppedByUser = false;
+    store.runningVersionId = null;
+    store.logOpen = true;
+    if (exit.code !== 0 && !stopped && versionId) {
+      notify(`游戏异常退出（代码 ${exit.code ?? "未知"}），正在分析日志`, "err");
+      store.crashVersionId = versionId;
+      store.crashExitCode = exit.code;
+      store.crashOpen = true;
+      return;
+    }
     notify(
-      exit.code === 0 ? "游戏已退出" : `游戏异常退出（代码 ${exit.code ?? "未知"}）`,
+      exit.code === 0 ? "游戏已退出" : `游戏已退出（代码 ${exit.code ?? "未知"}）`,
       exit.code === 0 ? "ok" : "err"
     );
-    store.logOpen = true;
   });
 
   await onMsLoginAccount(async (account) => {

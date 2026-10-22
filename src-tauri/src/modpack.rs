@@ -459,6 +459,52 @@ pub fn inspect(path: &str) -> Result<PackPreview> {
     Ok(parse_pack(path)?.preview)
 }
 
+/* ---------- 在线下载 ---------- */
+
+/// 把在线整合包下载到临时目录，返回本地路径；导入完成后由前端调用清理。
+pub async fn download(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    url: &str,
+    file_name: &str,
+    progress: Arc<ProgressState>,
+) -> Result<String> {
+    let name = Path::new(file_name)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "modpack.zip".to_string());
+    let dir = temp_dir();
+    std::fs::create_dir_all(&dir)?;
+    let dest = dir.join(&name);
+    let task = FileTask {
+        url: url.to_string(),
+        dest: dest.clone(),
+        sha1: None,
+        size: 0,
+        label: name,
+    };
+    download::run_tasks(app, client, vec![task], 1, false, progress).await?;
+    Ok(dest.to_string_lossy().to_string())
+}
+
+pub fn temp_dir() -> PathBuf {
+    crate::config::data_dir().join("temp").join("modpacks")
+}
+
+/// 删除临时目录里的整合包文件，仅允许清理 temp/modpacks 内的路径。
+pub fn temp_remove(path: &str) -> Result<()> {
+    let target = PathBuf::from(path);
+    let base = temp_dir();
+    if !target.starts_with(&base) {
+        bail!("只能清理下载的临时整合包");
+    }
+    if target.is_file() {
+        std::fs::remove_file(&target)?;
+    }
+    Ok(())
+}
+
 fn generic_prefix(names: &[String]) -> String {
     if let Some(name) = names
         .iter()

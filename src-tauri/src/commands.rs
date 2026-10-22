@@ -1,14 +1,26 @@
 use crate::auth::{self, Account, AccountView, DeviceCode};
+use crate::appupdate;
 use crate::config::{self, Config};
+use crate::crash;
 use crate::curseforge;
 use crate::download::{self, ProgressState};
+use crate::hall;
 use crate::install::{self, InstalledVersion, LoaderOption};
-use crate::instance::{self, InstanceFile, InstanceInfo, InstanceMeta, InstancePaths};
+use crate::instance::{
+    self, InstanceFile, InstanceInfo, InstanceMeta, InstancePaths, WorldSeed, WorldSummary,
+};
 use crate::java::{self, JavaInfo};
+use crate::lan;
 use crate::launch;
 use crate::models::*;
 use crate::modpack;
+use crate::news;
+use crate::ping::{self, ServerPingResult};
+use crate::server;
 use crate::skins;
+use crate::system;
+use crate::terracotta;
+use crate::update;
 use crate::AppState;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, State};
@@ -76,6 +88,24 @@ pub fn get_config(state: State<'_, AppState>) -> Config {
 }
 
 #[tauri::command]
+pub fn system_memory() -> system::MemoryInfo {
+    system::memory_info()
+}
+
+#[tauri::command]
+pub async fn news_feed(
+    state: State<'_, AppState>,
+    force: Option<bool>,
+) -> CmdResult<news::NewsFeed> {
+    Ok(news::feed(&state.client, force.unwrap_or(false)).await)
+}
+
+#[tauri::command]
+pub async fn news_article(state: State<'_, AppState>, path: String) -> CmdResult<String> {
+    news::article(&state.client, &path).await.map_err(err)
+}
+
+#[tauri::command]
 pub fn save_config(state: State<'_, AppState>, config: Config) -> CmdResult<Config> {
     let mut config = config;
     config.sync_game_dirs();
@@ -83,6 +113,54 @@ pub fn save_config(state: State<'_, AppState>, config: Config) -> CmdResult<Conf
     std::fs::create_dir_all(&config.game_dir).map_err(err)?;
     *state.config.lock().unwrap() = config.clone();
     Ok(config)
+}
+
+/// 把当前设置导出成可读 JSON，方便迁移到另一台电脑。
+#[tauri::command]
+pub fn export_settings(state: State<'_, AppState>, path: String) -> CmdResult<()> {
+    let config = state.config.lock().unwrap().clone();
+    let text = serde_json::to_string_pretty(&config).map_err(err)?;
+    std::fs::write(path.trim(), text).map_err(err)?;
+    Ok(())
+}
+
+/// 导入设置并立即生效；账号、皮肤等数据不在配置内，不会被覆盖。
+#[tauri::command]
+pub fn import_settings(state: State<'_, AppState>, path: String) -> CmdResult<Config> {
+    let bytes = std::fs::read(path.trim()).map_err(err)?;
+    let mut config: Config = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("配置文件格式不正确：{e}"))?;
+    config.sync_game_dirs();
+    config::save(&config).map_err(err)?;
+    *state.config.lock().unwrap() = config.clone();
+    Ok(config)
+}
+
+#[tauri::command]
+pub fn app_version() -> String {
+    appupdate::CURRENT_VERSION.to_string()
+}
+
+#[tauri::command]
+pub async fn update_check(url: String) -> CmdResult<appupdate::UpdateInfo> {
+    appupdate::check(&url).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn update_download(
+    app: AppHandle,
+    url: String,
+    version: String,
+) -> CmdResult<String> {
+    appupdate::download(&app, &url, &version)
+        .await
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn update_install(app: AppHandle, path: String) -> CmdResult<()> {
+    appupdate::install(&app, &path).map_err(err)
 }
 
 #[derive(serde::Serialize)]
@@ -381,6 +459,28 @@ pub fn instance_delete_file(
 }
 
 #[tauri::command]
+pub fn instance_thumb(
+    state: State<'_, AppState>,
+    version_id: String,
+    kind: String,
+    name: String,
+) -> CmdResult<Option<String>> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::thumb(&cfg, &version_id, &kind, &name).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_open_content(
+    state: State<'_, AppState>,
+    version_id: String,
+    kind: String,
+    name: String,
+) -> CmdResult<()> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::open_content(&cfg, &version_id, &kind, &name).map_err(err)
+}
+
+#[tauri::command]
 pub fn instance_import_files(
     state: State<'_, AppState>,
     version_id: String,
@@ -401,8 +501,108 @@ pub fn instance_paths(
 }
 
 #[tauri::command]
+pub fn instance_worlds(state: State<'_, AppState>, version_id: String) -> Vec<WorldSummary> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::worlds(&cfg, &version_id)
+}
+
+#[tauri::command]
+pub fn instance_world_seed(
+    state: State<'_, AppState>,
+    version_id: String,
+    folder: String,
+) -> CmdResult<WorldSeed> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::world_seed(&cfg, &version_id, &folder).map_err(err)
+}
+
+#[tauri::command]
+pub fn crash_analyze(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<crash::CrashReport> {
+    let cfg = state.config.lock().unwrap().clone();
+    crash::analyze(&cfg, &version_id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn hall_rooms(
+    state: State<'_, AppState>,
+) -> CmdResult<Vec<hall::HallRoom>> {
+    let url = state.config.lock().unwrap().hall_url.clone();
+    hall::fetch(&state.client, &url).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn mod_updates(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<update::ModUpdateReport> {
+    let cfg = state.config.lock().unwrap().clone();
+    update::check(&state.client, &cfg, &version_id)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn mod_update_install(
+    state: State<'_, AppState>,
+    version_id: String,
+    url: String,
+    file_name: String,
+    old_name: String,
+    sha1: Option<String>,
+) -> CmdResult<String> {
+    let cfg = state.config.lock().unwrap().clone();
+    update::install_update(
+        &state.client,
+        &cfg,
+        &version_id,
+        &url,
+        &file_name,
+        &old_name,
+        sha1,
+    )
+    .await
+    .map_err(err)
+}
+
+#[tauri::command]
 pub fn modpack_inspect(path: String) -> CmdResult<modpack::PackPreview> {
     modpack::inspect(&path).map_err(err)
+}
+
+#[tauri::command]
+pub async fn modpack_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    url: String,
+    file_name: String,
+) -> CmdResult<String> {
+    {
+        let guard = state.progress.lock().unwrap();
+        if let Some(p) = guard.as_ref() {
+            if p.active.load(Ordering::Relaxed) {
+                return Err("已有下载任务正在进行".into());
+            }
+        }
+    }
+    let progress = ProgressState::new("install");
+    progress.set_message(format!("准备下载 {file_name}…"));
+    *state.progress.lock().unwrap() = Some(progress.clone());
+
+    let result = modpack::download(&app, &state.client, &url, &file_name, progress.clone()).await;
+
+    progress.active.store(false, Ordering::Relaxed);
+    download::emit_now(&app, &progress);
+    *state.progress.lock().unwrap() = None;
+
+    result.map_err(err)
+}
+
+#[tauri::command]
+pub fn modpack_temp_remove(path: String) -> CmdResult<()> {
+    modpack::temp_remove(&path).map_err(err)
 }
 
 #[tauri::command]
@@ -640,6 +840,11 @@ pub fn default_skin() -> String {
 }
 
 #[tauri::command]
+pub fn default_skins() -> Vec<skins::DefaultSkinView> {
+    skins::default_skins()
+}
+
+#[tauri::command]
 pub fn get_accounts(state: State<'_, AppState>) -> Vec<AccountView> {
     // 每次从磁盘重新读取，确保微软登录完成后能立即看到新账号
     let accounts = auth::load_accounts();
@@ -652,7 +857,11 @@ pub fn create_offline_account(
     state: State<'_, AppState>,
     name: String,
 ) -> CmdResult<AccountView> {
-    let account = auth::create_offline(&name).map_err(err)?;
+    let mut account = auth::create_offline(&name).map_err(err)?;
+    if let Ok((path, model)) = skins::install_default(&account.id, &account.id) {
+        account.skin_path = Some(path.to_string_lossy().to_string());
+        account.skin_model = model;
+    }
     {
         let mut accounts = state.accounts.lock().unwrap();
         accounts.retain(|a| a.id != account.id);
@@ -786,6 +995,135 @@ pub async fn upload_account_skin(
 }
 
 #[tauri::command]
+pub fn skin_library_list() -> Vec<skins::LibraryItemView> {
+    skins::library_views()
+}
+
+#[tauri::command]
+pub fn skin_library_import(
+    name: String,
+    model: String,
+    path: String,
+) -> CmdResult<skins::LibraryItemView> {
+    let bytes = std::fs::read(path.trim()).map_err(err)?;
+    let entry = skins::library_add(&name, &model, bytes, "import").map_err(err)?;
+    skins::library_views()
+        .into_iter()
+        .find(|item| item.id == entry.id)
+        .ok_or_else(|| "皮肤入库失败".into())
+}
+
+#[tauri::command]
+pub fn skin_library_save(
+    name: String,
+    model: String,
+    png_base64: String,
+) -> CmdResult<skins::LibraryItemView> {
+    let bytes = skins::decode_and_normalize(&png_base64).map_err(err)?;
+    let entry = skins::library_add(&name, &model, bytes, "editor").map_err(err)?;
+    skins::library_views()
+        .into_iter()
+        .find(|item| item.id == entry.id)
+        .ok_or_else(|| "皮肤入库失败".into())
+}
+
+#[tauri::command]
+pub async fn skin_library_from_account(
+    state: State<'_, AppState>,
+    name: String,
+    account_id: String,
+) -> CmdResult<skins::LibraryItemView> {
+    let account = find_account(&account_id)?;
+    let (data_url, model, _source) = skins::load_skin(&state.client, &account).await;
+    let bytes = skins::decode_and_normalize(&data_url).map_err(err)?;
+    let entry = skins::library_add(&name, &model, bytes, "account").map_err(err)?;
+    skins::library_views()
+        .into_iter()
+        .find(|item| item.id == entry.id)
+        .ok_or_else(|| "皮肤入库失败".into())
+}
+
+#[tauri::command]
+pub async fn skin_library_from_player(
+    state: State<'_, AppState>,
+    name: String,
+) -> CmdResult<skins::LibraryItemView> {
+    let (player, bytes, model) = skins::player_skin(&state.client, &name)
+        .await
+        .map_err(err)?;
+    let entry = skins::library_add(&player, &model, bytes, "player").map_err(err)?;
+    skins::library_views()
+        .into_iter()
+        .find(|item| item.id == entry.id)
+        .ok_or_else(|| "皮肤入库失败".into())
+}
+
+#[tauri::command]
+pub fn skin_library_rename(id: String, name: String) -> CmdResult<()> {
+    skins::library_rename(&id, &name).map_err(err)
+}
+
+#[tauri::command]
+pub fn skin_library_remove(id: String) -> CmdResult<()> {
+    skins::library_remove(&id).map_err(err)
+}
+
+#[tauri::command]
+pub async fn skin_library_apply(
+    state: State<'_, AppState>,
+    id: String,
+    account_id: String,
+    upload: bool,
+) -> CmdResult<AccountView> {
+    let library = skins::load_library();
+    let entry = library
+        .iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| "皮肤不存在".to_string())?;
+    let bytes = skins::library_bytes(&id).map_err(err)?;
+    let data_url = skins::to_data_url(&bytes, "image/png");
+    let mut account = find_account(&account_id)?;
+    if upload {
+        skins::upload_skin(&state.client, &account, &data_url, &entry.model)
+            .await
+            .map_err(err)?;
+    }
+    let path = skins::save_local(&account_id, &data_url).map_err(err)?;
+    account.skin_path = Some(path.to_string_lossy().to_string());
+    account.skin_model = entry.model.clone();
+    let mut accounts = auth::load_accounts();
+    if let Some(slot) = accounts.iter_mut().find(|a| a.id == account_id) {
+        *slot = account.clone();
+    }
+    auth::save_accounts(&accounts).map_err(err)?;
+    *state.accounts.lock().unwrap() = accounts;
+    Ok(AccountView::from(&account))
+}
+
+#[tauri::command]
+pub async fn account_capes(
+    state: State<'_, AppState>,
+    account_id: String,
+) -> CmdResult<Vec<skins::CapeView>> {
+    let account = find_account(&account_id)?;
+    skins::list_capes(&state.client, &account)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub async fn cape_set_active(
+    state: State<'_, AppState>,
+    account_id: String,
+    cape_id: Option<String>,
+) -> CmdResult<()> {
+    let account = find_account(&account_id)?;
+    skins::set_cape(&state.client, &account, cape_id.as_deref())
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
 pub async fn ms_login_begin(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -844,14 +1182,7 @@ pub async fn install_java(
     }
 }
 
-#[tauri::command]
-pub async fn launch_version(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    version_id: String,
-) -> CmdResult<u32> {
-    // 版本级启动设置覆盖全局配置
-    let cfg = instance::apply(&state.config.lock().unwrap().clone(), &version_id);
+async fn resolve_account(app: &AppHandle, state: &AppState, cfg: &Config) -> Account {
     let accounts = state.accounts.lock().unwrap().clone();
     let selected = cfg
         .selected_account
@@ -884,10 +1215,147 @@ pub async fn launch_version(
             }
         }
     }
+    account
+}
 
-    let pid = launch::spawn(&app, &cfg, &version_id, &account).map_err(err)?;
+#[tauri::command]
+pub async fn launch_version(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<u32> {
+    // 版本级启动设置覆盖全局配置
+    let cfg = instance::apply(&state.config.lock().unwrap().clone(), &version_id);
+    let account = resolve_account(&app, &state, &cfg).await;
+    let pid = launch::spawn(&app, &cfg, &version_id, &account, None).map_err(err)?;
     *state.child_pid.lock().unwrap() = Some(pid);
     Ok(pid)
+}
+
+#[tauri::command]
+pub async fn launch_server(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: String,
+    address: String,
+) -> CmdResult<u32> {
+    let target = lan::parse_address(&address).map_err(err)?;
+    let cfg = instance::apply(&state.config.lock().unwrap().clone(), &version_id);
+    let account = resolve_account(&app, &state, &cfg).await;
+    let pid = launch::spawn(&app, &cfg, &version_id, &account, Some(&target)).map_err(err)?;
+    *state.child_pid.lock().unwrap() = Some(pid);
+    Ok(pid)
+}
+
+#[tauri::command]
+pub fn lan_rooms() -> lan::LanView {
+    lan::rooms()
+}
+
+#[tauri::command]
+pub fn server_versions(state: State<'_, AppState>) -> Vec<server::ServerVersionOption> {
+    let cfg = state.config.lock().unwrap().clone();
+    server::versions(&cfg)
+}
+
+#[tauri::command]
+pub fn server_status() -> Option<server::ServerSnapshot> {
+    server::status()
+}
+
+#[tauri::command]
+pub async fn server_start(
+    state: State<'_, AppState>,
+    version_id: String,
+    options: server::ServerOptions,
+) -> CmdResult<server::ServerSnapshot> {
+    let cfg = instance::apply(&state.config.lock().unwrap().clone(), &version_id);
+    server::start(&state.client, &cfg, &version_id, &options)
+        .await
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn server_command(command: String) -> CmdResult<()> {
+    server::send(&command).map_err(err)
+}
+
+#[tauri::command]
+pub fn server_stop() -> CmdResult<()> {
+    server::stop().map_err(err)
+}
+
+#[tauri::command]
+pub async fn terracotta_prepare(state: State<'_, AppState>) -> CmdResult<terracotta::TcStatus> {
+    terracotta::prepare(&state.client).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn terracotta_status() -> terracotta::TcStatus {
+    terracotta::status().await
+}
+
+#[tauri::command]
+pub async fn terracotta_host(
+    room: Option<String>,
+    player: Option<String>,
+) -> CmdResult<()> {
+    terracotta::host(room, player).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn terracotta_join(room: String, player: Option<String>) -> CmdResult<()> {
+    terracotta::join(room, player).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn terracotta_reset() -> CmdResult<()> {
+    terracotta::reset().await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn terracotta_shutdown() -> CmdResult<()> {
+    terracotta::shutdown().await.map_err(err)
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.as_secs())
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+pub fn remember_server(state: State<'_, AppState>, address: String) -> CmdResult<Config> {
+    let target = lan::parse_address(&address).map_err(err)?;
+    let normalized = target.address();
+    let mut cfg = state.config.lock().unwrap();
+    cfg.recent_servers
+        .retain(|entry| entry.address != normalized);
+    cfg.recent_servers.insert(
+        0,
+        config::ServerEntry {
+            address: normalized,
+            last_used: now_secs(),
+        },
+    );
+    cfg.recent_servers.truncate(12);
+    config::save(&cfg).map_err(err)?;
+    Ok(cfg.clone())
+}
+
+#[tauri::command]
+pub fn forget_server(state: State<'_, AppState>, address: String) -> CmdResult<Config> {
+    let mut cfg = state.config.lock().unwrap();
+    cfg.recent_servers.retain(|entry| entry.address != address);
+    config::save(&cfg).map_err(err)?;
+    Ok(cfg.clone())
+}
+
+#[tauri::command]
+pub async fn server_ping(address: String) -> CmdResult<ServerPingResult> {
+    let target = lan::parse_address(&address).map_err(err)?;
+    ping::ping(&target, 5000).await.map_err(err)
 }
 
 #[tauri::command]

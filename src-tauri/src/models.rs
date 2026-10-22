@@ -77,6 +77,8 @@ pub struct AssetIndexRef {
 #[derive(Debug, Clone, Deserialize)]
 pub struct VersionDownloads {
     pub client: Option<DownloadRef>,
+    #[serde(default)]
+    pub server: Option<DownloadRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

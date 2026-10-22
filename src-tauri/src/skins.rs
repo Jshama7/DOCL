@@ -35,9 +35,125 @@ pub fn to_data_url(bytes: &[u8], mime: &str) -> String {
 
 /// 内置的 Steve 皮肤，离线账号与未登录时使用。
 pub fn default_skin() -> String {
-    const STEVE: &[u8] = include_bytes!("../assets/steve.png");
-    let bytes = normalize_png(STEVE.to_vec()).unwrap_or_else(|_| STEVE.to_vec());
+    let entry = DEFAULT_SKINS
+        .iter()
+        .find(|skin| skin.id == "steve")
+        .unwrap_or(&DEFAULT_SKINS[0]);
+    let bytes = normalize_png(entry.bytes.to_vec()).unwrap_or_else(|_| entry.bytes.to_vec());
     to_data_url(&bytes, "image/png")
+}
+
+pub struct DefaultSkinEntry {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub model: &'static str,
+    pub bytes: &'static [u8],
+}
+
+const DEFAULT_SKINS: &[DefaultSkinEntry] = &[
+    DefaultSkinEntry {
+        id: "steve",
+        name: "Steve",
+        model: "classic",
+        bytes: include_bytes!("../assets/skins/steve.png"),
+    },
+    DefaultSkinEntry {
+        id: "alex",
+        name: "Alex",
+        model: "slim",
+        bytes: include_bytes!("../assets/skins/alex.png"),
+    },
+    DefaultSkinEntry {
+        id: "ari",
+        name: "Ari",
+        model: "slim",
+        bytes: include_bytes!("../assets/skins/ari.png"),
+    },
+    DefaultSkinEntry {
+        id: "kai",
+        name: "Kai",
+        model: "classic",
+        bytes: include_bytes!("../assets/skins/kai.png"),
+    },
+    DefaultSkinEntry {
+        id: "noor",
+        name: "Noor",
+        model: "classic",
+        bytes: include_bytes!("../assets/skins/noor.png"),
+    },
+    DefaultSkinEntry {
+        id: "sunny",
+        name: "Sunny",
+        model: "classic",
+        bytes: include_bytes!("../assets/skins/sunny.png"),
+    },
+    DefaultSkinEntry {
+        id: "zuri",
+        name: "Zuri",
+        model: "classic",
+        bytes: include_bytes!("../assets/skins/zuri.png"),
+    },
+    DefaultSkinEntry {
+        id: "makena",
+        name: "Makena",
+        model: "classic",
+        bytes: include_bytes!("../assets/skins/makena.png"),
+    },
+    DefaultSkinEntry {
+        id: "efe",
+        name: "Efe",
+        model: "classic",
+        bytes: include_bytes!("../assets/skins/efe.png"),
+    },
+];
+
+fn default_index(seed: &str) -> usize {
+    let mut hash: u32 = 2166136261;
+    for byte in seed.bytes() {
+        hash ^= byte as u32;
+        hash = hash.wrapping_mul(16777619);
+    }
+    hash as usize % DEFAULT_SKINS.len()
+}
+
+/// 每个账号固定挑一套默认皮肤，避免所有离线账号长一样。
+pub fn default_skin_for(seed: &str) -> (String, String) {
+    let entry = &DEFAULT_SKINS[default_index(seed)];
+    let bytes = normalize_png(entry.bytes.to_vec()).unwrap_or_else(|_| entry.bytes.to_vec());
+    (to_data_url(&bytes, "image/png"), entry.model.to_string())
+}
+
+pub fn install_default(account_id: &str, seed: &str) -> Result<(PathBuf, String)> {
+    let entry = &DEFAULT_SKINS[default_index(seed)];
+    let bytes = normalize_png(entry.bytes.to_vec()).context("默认皮肤损坏")?;
+    std::fs::create_dir_all(skins_dir())?;
+    let path = local_skin_path(account_id);
+    std::fs::write(&path, bytes)?;
+    Ok((path, entry.model.to_string()))
+}
+
+#[derive(serde::Serialize)]
+pub struct DefaultSkinView {
+    pub id: String,
+    pub name: String,
+    pub model: String,
+    pub data_url: String,
+}
+
+pub fn default_skins() -> Vec<DefaultSkinView> {
+    DEFAULT_SKINS
+        .iter()
+        .map(|entry| {
+            let bytes = normalize_png(entry.bytes.to_vec())
+                .unwrap_or_else(|_| entry.bytes.to_vec());
+            DefaultSkinView {
+                id: entry.id.to_string(),
+                name: entry.name.to_string(),
+                model: entry.model.to_string(),
+                data_url: to_data_url(&bytes, "image/png"),
+            }
+        })
+        .collect()
 }
 
 fn decode_base64(raw: &str) -> Result<Vec<u8>> {
@@ -266,7 +382,8 @@ pub async fn load_skin(
             );
         }
     }
-    (String::new(), account.skin_model.clone(), "default".into())
+    let (data_url, model) = default_skin_for(&account.id);
+    (data_url, model, "default".into())
 }
 
 pub async fn upload_skin(
@@ -315,4 +432,273 @@ pub fn export_bytes(account: &Account, target: &str) -> Result<()> {
     }
     std::fs::write(target, bytes)?;
     Ok(())
+}
+
+// ---------- 皮肤库 ----------
+
+fn library_dir() -> PathBuf {
+    skins_dir().join("library")
+}
+
+fn library_index_path() -> PathBuf {
+    library_dir().join("library.json")
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct LibraryEntry {
+    pub id: String,
+    pub name: String,
+    pub model: String,
+    pub source: String,
+    pub created_at: i64,
+}
+
+#[derive(serde::Serialize)]
+pub struct LibraryItemView {
+    pub id: String,
+    pub name: String,
+    pub model: String,
+    pub source: String,
+    pub created_at: i64,
+    pub data_url: String,
+}
+
+pub fn load_library() -> Vec<LibraryEntry> {
+    let raw = match std::fs::read(library_index_path()) {
+        Ok(raw) => raw,
+        Err(_) => return Vec::new(),
+    };
+    serde_json::from_slice(&raw).unwrap_or_default()
+}
+
+fn save_library(entries: &[LibraryEntry]) -> Result<()> {
+    std::fs::create_dir_all(library_dir())?;
+    let raw = serde_json::to_vec_pretty(entries)?;
+    std::fs::write(library_index_path(), raw)?;
+    Ok(())
+}
+
+fn library_png_path(id: &str) -> PathBuf {
+    library_dir().join(format!("{}.png", safe_id(id)))
+}
+
+fn new_library_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}", nanos)
+}
+
+pub fn library_add(
+    name: &str,
+    model: &str,
+    bytes: Vec<u8>,
+    source: &str,
+) -> Result<LibraryEntry> {
+    let name = name.trim();
+    if name.is_empty() {
+        bail!("名称不能为空");
+    }
+    let bytes = normalize_png(bytes)?;
+    let entry = LibraryEntry {
+        id: new_library_id(),
+        name: name.chars().take(32).collect(),
+        model: if model == "slim" { "slim".into() } else { "classic".into() },
+        source: source.to_string(),
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+    };
+    std::fs::create_dir_all(library_dir())?;
+    std::fs::write(library_png_path(&entry.id), bytes)?;
+    let mut entries = load_library();
+    entries.retain(|item| item.name != entry.name);
+    entries.push(entry.clone());
+    entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+    save_library(&entries)?;
+    Ok(entry)
+}
+
+pub fn library_rename(id: &str, name: &str) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        bail!("名称不能为空");
+    }
+    let mut entries = load_library();
+    let entry = entries
+        .iter_mut()
+        .find(|item| item.id == id)
+        .ok_or_else(|| anyhow!("皮肤不存在"))?;
+    entry.name = name.chars().take(32).collect();
+    save_library(&entries)
+}
+
+pub fn library_remove(id: &str) -> Result<()> {
+    let mut entries = load_library();
+    let before = entries.len();
+    entries.retain(|item| item.id != id);
+    if entries.len() == before {
+        bail!("皮肤不存在");
+    }
+    save_library(&entries)?;
+    let _ = std::fs::remove_file(library_png_path(id));
+    Ok(())
+}
+
+pub fn library_bytes(id: &str) -> Result<Vec<u8>> {
+    std::fs::read(library_png_path(id)).context("读取皮肤文件失败")
+}
+
+pub fn library_views() -> Vec<LibraryItemView> {
+    load_library()
+        .into_iter()
+        .filter_map(|entry| {
+            let bytes = library_bytes(&entry.id).ok()?;
+            Some(LibraryItemView {
+                id: entry.id,
+                name: entry.name,
+                model: entry.model,
+                source: entry.source,
+                created_at: entry.created_at,
+                data_url: to_data_url(&bytes, "image/png"),
+            })
+        })
+        .collect()
+}
+
+// ---------- 按玩家名抓取 ----------
+
+#[derive(Deserialize)]
+struct PlayerLookup {
+    id: String,
+    name: String,
+}
+
+/// 通过 Mojang 官方接口拉取指定玩家的当前皮肤，返回（玩家名，皮肤字节，模型）。
+pub async fn player_skin(client: &reqwest::Client, name: &str) -> Result<(String, Vec<u8>, String)> {
+    let name = name.trim();
+    if name.len() < 3 || name.len() > 16 || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        bail!("玩家名格式不正确（3-16 位字母、数字或下划线）");
+    }
+    let response = client
+        .get(format!(
+            "https://api.mojang.com/users/profiles/minecraft/{name}"
+        ))
+        .send()
+        .await?;
+    if response.status().as_u16() == 404 || response.status().as_u16() == 204 {
+        bail!("玩家不存在（仅限正版玩家名）");
+    }
+    let lookup: PlayerLookup = response
+        .error_for_status()?
+        .json()
+        .await
+        .context("解析玩家信息失败")?;
+    let (bytes, model) = official_skin(client, &lookup.id)
+        .await
+        .context("该玩家没有设置皮肤")?;
+    let bytes = normalize_png(bytes)?;
+    Ok((lookup.name, bytes, model))
+}
+
+// ---------- 披风 ----------
+
+#[derive(serde::Serialize)]
+pub struct CapeView {
+    pub id: String,
+    pub alias: String,
+    pub url: String,
+    pub active: bool,
+}
+
+#[derive(Deserialize)]
+struct CapeInfo {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    state: String,
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    alias: String,
+}
+
+#[derive(Deserialize)]
+struct ProfileCapes {
+    #[serde(default)]
+    capes: Vec<CapeInfo>,
+}
+
+pub async fn list_capes(client: &reqwest::Client, account: &Account) -> Result<Vec<CapeView>> {
+    if account.kind != "microsoft" {
+        bail!("只有微软账号支持披风");
+    }
+    let refreshed = auth::refresh(client, account)
+        .await
+        .context("刷新微软登录凭据失败")?;
+    let profile: ProfileCapes = client
+        .get("https://api.minecraftservices.com/minecraft/profile")
+        .bearer_auth(&refreshed.access_token)
+        .send()
+        .await?
+        .error_for_status()
+        .context("读取披风列表失败")?
+        .json()
+        .await
+        .context("解析披风列表失败")?;
+    Ok(profile
+        .capes
+        .into_iter()
+        .map(|cape| CapeView {
+            id: cape.id,
+            alias: cape.alias,
+            url: cape.url,
+            active: cape.state == "ACTIVE",
+        })
+        .collect())
+}
+
+pub async fn set_cape(
+    client: &reqwest::Client,
+    account: &Account,
+    cape_id: Option<&str>,
+) -> Result<()> {
+    if account.kind != "microsoft" {
+        bail!("只有微软账号支持披风");
+    }
+    let refreshed = auth::refresh(client, account)
+        .await
+        .context("刷新微软登录凭据失败")?;
+    let url = "https://api.minecraftservices.com/minecraft/profile/capes/active";
+    let response = match cape_id {
+        Some(id) => {
+            client
+                .put(url)
+                .bearer_auth(&refreshed.access_token)
+                .json(&serde_json::json!({ "capeId": id }))
+                .send()
+                .await?
+        }
+        None => {
+            client
+                .delete(url)
+                .bearer_auth(&refreshed.access_token)
+                .send()
+                .await?
+        }
+    };
+    let status = response.status();
+    if status.is_success() {
+        return Ok(());
+    }
+    let text = response.text().await.unwrap_or_default();
+    let message = match status.as_u16() {
+        401 => "登录凭据已失效，请重新登录微软账号".to_string(),
+        429 => "操作过于频繁，请稍后再试".to_string(),
+        _ => format!("披风设置失败（{status}）：{text}"),
+    };
+    bail!(message)
 }

@@ -1100,7 +1100,7 @@ pub async fn import(
     options: &ImportOptions,
     progress: Arc<ProgressState>,
 ) -> Result<ImportResult> {
-    progress.set_message("正在解析整合包…");
+    download::begin_stage(app, &progress, "正在解析整合包…");
     let parsed = parse_pack(path)?;
     let preview = &parsed.preview;
 
@@ -1176,28 +1176,39 @@ pub async fn import(
                 .cloned()
                 .filter(|(_, _, required)| *required || options.install_optional)
                 .collect();
-            progress.set_message(format!("正在获取 {} 个文件地址…", specs.len()));
+            let total_specs = specs.len();
+            download::begin_stage(
+                app,
+                &progress,
+                format!("正在获取 {total_specs} 个文件地址…"),
+            );
             let client_ref = client.clone();
             let mut tasks: Vec<FileTask> = Vec::new();
-            let results: Vec<Result<Option<(String, String)>>> =
-                stream::iter(specs.into_iter().map(|(project_id, file_id, required)| {
-                    let client = client_ref.clone();
-                    async move {
-                        match curseforge::file_download(&client, project_id, file_id).await {
-                            Ok(pair) => Ok(Some(pair)),
-                            Err(err) => {
-                                if required {
-                                    Err(err)
-                                } else {
-                                    Ok(None)
-                                }
+            let mut results: Vec<Result<Option<(String, String)>>> = Vec::new();
+            let mut stream = stream::iter(specs.into_iter().map(|(project_id, file_id, required)| {
+                let client = client_ref.clone();
+                async move {
+                    match curseforge::file_download(&client, project_id, file_id).await {
+                        Ok(pair) => Ok(Some(pair)),
+                        Err(err) => {
+                            if required {
+                                Err(err)
+                            } else {
+                                Ok(None)
                             }
                         }
                     }
-                }))
-                .buffer_unordered(8)
-                .collect()
-                .await;
+                }
+            }))
+            .buffer_unordered(8);
+            let mut resolved = 0usize;
+            while let Some(result) = stream.next().await {
+                results.push(result);
+                resolved += 1;
+                if resolved % 10 == 0 || resolved == total_specs {
+                    progress.set_detail(format!("正在获取文件地址 {resolved}/{total_specs}…"));
+                }
+            }
 
             let root = instance::game_dir(cfg, &instance_id);
             let mods_dir = root.join("mods");
@@ -1222,7 +1233,7 @@ pub async fn import(
                 }
             }
             if !tasks.is_empty() {
-                progress.set_message("正在下载整合包内容…");
+                download::begin_stage(app, &progress, "正在下载整合包内容…");
                 let count = tasks.len() as u32;
                 download::run_tasks(
                     app,
@@ -1236,7 +1247,7 @@ pub async fn import(
                 installed_files += count;
             }
 
-            progress.set_message("正在解压整合包覆盖文件…");
+            download::begin_stage(app, &progress, "正在解压整合包覆盖文件…");
             let path_owned = path.to_string();
             let overrides_owned = overrides.clone();
             let dest = root.clone();
@@ -1324,7 +1335,7 @@ pub async fn import(
                 });
             }
             if !tasks.is_empty() {
-                progress.set_message("正在下载整合包内容…");
+                download::begin_stage(app, &progress, "正在下载整合包内容…");
                 let count = tasks.len() as u32;
                 download::run_tasks(
                     app,
@@ -1338,7 +1349,7 @@ pub async fn import(
                 installed_files += count;
             }
 
-            progress.set_message("正在解压整合包覆盖文件…");
+            download::begin_stage(app, &progress, "正在解压整合包覆盖文件…");
             let path_owned = path.to_string();
             let dest = root.clone();
             for prefix in ["overrides/", "client-overrides/"] {
@@ -1394,7 +1405,7 @@ pub async fn import(
                 copy_dir_all(&natives, &install::natives_dir(cfg, &instance_id))?;
             }
 
-            progress.set_message("正在解压整合包文件…");
+            download::begin_stage(app, &progress, "正在解压整合包文件…");
             let path_owned = path.to_string();
             let prefix_owned = prefix.clone();
             let dest = instance::game_dir(cfg, &instance_id);

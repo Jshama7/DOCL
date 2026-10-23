@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { api, saveSkinDialog } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
@@ -42,6 +42,146 @@ const palette = [
   "#5e7b49", "#88a867", "#47623a", "#3f4a58",
   "#243a5e", "#c9a26a", "#f4ebdd", "#ffffff",
 ];
+
+/* ---- 取色器：色相 + 饱和度/明度面板 ---- */
+
+const svArea = ref<HTMLElement | null>(null);
+const hueBar = ref<HTMLElement | null>(null);
+const hue = ref(100);
+/// 0-100，便于直接当百分比用
+const sat = ref(55);
+const val = ref(48);
+let svDragging = false;
+let hueDragging = false;
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function hexToRgb(hex: string) {
+  const clean = hex.replace("#", "").trim();
+  const full = clean.length === 3 ? clean.split("").map((c) => c + c).join("") : clean;
+  if (full.length !== 6 || /[^0-9a-f]/i.test(full)) return null;
+  const value = Number.parseInt(full, 16);
+  return {
+    r: (value >> 16) & 255,
+    g: (value >> 8) & 255,
+    b: value & 255,
+  };
+}
+
+function rgbToHex(r: number, g: number, b: number) {
+  return (
+    "#" +
+    [r, g, b]
+      .map((item) => Math.round(clampNumber(item, 0, 255)).toString(16).padStart(2, "0"))
+      .join("")
+  );
+}
+
+function rgbToHsv(r: number, g: number, b: number) {
+  const rn = r / 255;
+  const gn = g / 255;
+  const bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const delta = max - min;
+  let h = 0;
+  if (delta > 0) {
+    if (max === rn) h = ((gn - bn) / delta) % 6;
+    else if (max === gn) h = (bn - rn) / delta + 2;
+    else h = (rn - gn) / delta + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return {
+    h,
+    s: max === 0 ? 0 : (delta / max) * 100,
+    v: max * 100,
+  };
+}
+
+function hsvToHex(h: number, s: number, v: number) {
+  const sn = s / 100;
+  const vn = v / 100;
+  const c = vn * sn;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = vn - c;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (h < 60) [r, g, b] = [c, x, 0];
+  else if (h < 120) [r, g, b] = [x, c, 0];
+  else if (h < 180) [r, g, b] = [0, c, x];
+  else if (h < 240) [r, g, b] = [0, x, c];
+  else if (h < 300) [r, g, b] = [x, 0, c];
+  else [r, g, b] = [c, 0, x];
+  return rgbToHex((r + m) * 255, (g + m) * 255, (b + m) * 255);
+}
+
+function applyHsv() {
+  color.value = hsvToHex(hue.value, sat.value, val.value);
+}
+
+/// 从吸管、色板、十六进制输入回填面板；自己产生的一致性变化不覆盖色相
+watch(
+  color,
+  (next) => {
+    if (hsvToHex(hue.value, sat.value, val.value).toLowerCase() === next.toLowerCase()) return;
+    const rgb = hexToRgb(next);
+    if (!rgb) return;
+    const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+    hue.value = hsv.h;
+    sat.value = hsv.s;
+    val.value = hsv.v;
+  },
+  { immediate: true }
+);
+
+function updateSv(event: PointerEvent) {
+  const area = svArea.value;
+  if (!area) return;
+  const rect = area.getBoundingClientRect();
+  sat.value = clampNumber(((event.clientX - rect.left) / rect.width) * 100, 0, 100);
+  val.value = clampNumber((1 - (event.clientY - rect.top) / rect.height) * 100, 0, 100);
+  applyHsv();
+}
+
+function onSvDown(event: PointerEvent) {
+  svDragging = true;
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  updateSv(event);
+}
+
+function onSvMove(event: PointerEvent) {
+  if (svDragging) updateSv(event);
+}
+
+function onSvUp() {
+  svDragging = false;
+}
+
+function updateHue(event: PointerEvent) {
+  const bar = hueBar.value;
+  if (!bar) return;
+  const rect = bar.getBoundingClientRect();
+  hue.value = clampNumber(((event.clientX - rect.left) / rect.width) * 360, 0, 359.9);
+  applyHsv();
+}
+
+function onHueDown(event: PointerEvent) {
+  hueDragging = true;
+  (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  updateHue(event);
+}
+
+function onHueMove(event: PointerEvent) {
+  if (hueDragging) updateHue(event);
+}
+
+function onHueUp() {
+  hueDragging = false;
+}
 
 const guideRects = computed<Record<string, [number, number, number, number][]>>(() => ({
   head: [[0, 0, 32, 16]],
@@ -550,24 +690,60 @@ const partOptions = [
           </span>
         </div>
 
-        <div class="color-row">
-          <div class="color-current" :style="{ background: color }" />
-          <div class="palette">
-            <button
-              v-for="item in palette"
-              :key="item"
-              class="swatch"
-              :class="{ 'swatch--active': color.toLowerCase() === item }"
-              :style="{ background: item }"
-              @click="color = item"
+        <div class="color-panel">
+          <div class="color-head">
+            <div class="color-current" :style="{ background: color }" />
+            <div class="palette">
+              <button
+                v-for="item in palette"
+                :key="item"
+                class="swatch"
+                :class="{ 'swatch--active': color.toLowerCase() === item }"
+                :style="{ background: item }"
+                @click="color = item"
+              />
+            </div>
+            <input
+              v-model="color"
+              class="hex-input mono"
+              maxlength="7"
+              spellcheck="false"
             />
           </div>
-          <input
-            v-model="color"
-            class="hex-input mono"
-            maxlength="7"
-            spellcheck="false"
-          />
+
+          <div
+            ref="svArea"
+            class="sv-area"
+            :style="{
+              background:
+                'linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, hsl(' +
+                hue +
+                ', 100%, 50%))',
+            }"
+            @pointerdown="onSvDown"
+            @pointermove="onSvMove"
+            @pointerup="onSvUp"
+            @pointercancel="onSvUp"
+          >
+            <span
+              class="sv-knob"
+              :style="{ left: `${sat}%`, top: `${100 - val}%`, background: color }"
+            />
+          </div>
+
+          <div
+            ref="hueBar"
+            class="hue-bar"
+            @pointerdown="onHueDown"
+            @pointermove="onHueMove"
+            @pointerup="onHueUp"
+            @pointercancel="onHueUp"
+          >
+            <span
+              class="hue-knob"
+              :style="{ left: `${(hue / 360) * 100}%`, background: `hsl(${hue}, 100%, 50%)` }"
+            />
+          </div>
         </div>
 
         <div class="canvas-scroll">
@@ -752,10 +928,68 @@ const partOptions = [
   padding: 0 6px;
 }
 
-.color-row {
+.color-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.color-head {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.sv-area {
+  position: relative;
+  height: 132px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  cursor: crosshair;
+  touch-action: none;
+  box-shadow: 0 1px 4px rgba(80, 58, 34, 0.16) inset;
+}
+
+.sv-knob {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  border: 2px solid #fffdf6;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.hue-bar {
+  position: relative;
+  height: 14px;
+  border-radius: 7px;
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+  touch-action: none;
+  background: linear-gradient(
+    to right,
+    #f00 0%,
+    #ff0 17%,
+    #0f0 33%,
+    #0ff 50%,
+    #00f 67%,
+    #f0f 83%,
+    #f00 100%
+  );
+}
+
+.hue-knob {
+  position: absolute;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  border: 2px solid #fffdf6;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  pointer-events: none;
 }
 
 .preset-row {
@@ -856,6 +1090,7 @@ const partOptions = [
   flex-wrap: wrap;
   gap: 4px;
   flex: 1;
+  min-width: 0;
 }
 
 .swatch {

@@ -5,6 +5,8 @@ mod config;
 mod crash;
 mod curseforge;
 mod download;
+mod dropzone;
+mod forge_native;
 mod hall;
 mod http;
 mod install;
@@ -14,6 +16,7 @@ mod lan;
 mod launch;
 mod mirror;
 mod modpack;
+mod moddeps;
 mod modrinth;
 mod models;
 mod news;
@@ -80,12 +83,17 @@ pub fn run() {
             commands::instance_info,
             commands::instance_metas,
             commands::instance_save_meta,
+            commands::instance_set_icon,
+            commands::instance_set_icon_image,
+            commands::instance_icon_image,
             commands::instance_files,
             commands::instance_toggle_file,
             commands::instance_delete_file,
             commands::instance_thumb,
             commands::instance_open_content,
             commands::instance_import_files,
+            commands::drop_inspect,
+            commands::instance_import_mods,
             commands::instance_paths,
             commands::instance_worlds,
             commands::instance_world_seed,
@@ -104,6 +112,7 @@ pub fn run() {
             commands::cf_files,
             commands::modrinth_search,
             commands::modrinth_files,
+            commands::content_projects,
             commands::cf_install_file,
             commands::default_skin,
             commands::default_skins,

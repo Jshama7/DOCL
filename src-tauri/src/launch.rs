@@ -4,11 +4,12 @@ use crate::install;
 use crate::java;
 use crate::lan::ServerTarget;
 use crate::models::*;
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Serialize;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Serialize, Clone)]
@@ -161,8 +162,37 @@ pub fn build(
     let required = detail.required_java();
     let java = find_java(cfg, required)?;
 
-    let classpath_entries =
-        install::merged_classpath_entries(cfg, detail, merged.jar_id.as_deref());
+    // Forge 1.17+ 引导参数用 ${version_name}.jar 把游戏 jar 排除出模块路径。
+    // 隔离实例的 version_name 和 Forge 版本 id 不同，游戏 jar 必须以实例名
+    // 落在实例目录里，否则它会被当成自动模块，和 fmlloader 找到的
+    // minecraft 模块导出同一批包直接崩（ResolutionException）。
+    // 注意官方清单没有 kind 字段，不能拿 kind 判断是否需要复制
+    let mut jar_id = merged.jar_id.clone();
+    if let Some(source_id) = jar_id.as_deref() {
+        if source_id != version_id {
+            let source = game_root
+                .join("versions")
+                .join(source_id)
+                .join(format!("{source_id}.jar"));
+            let dest = game_root
+                .join("versions")
+                .join(version_id)
+                .join(format!("{version_id}.jar"));
+            if source.exists() && !dest.exists() {
+                let parent = dest
+                    .parent()
+                    .ok_or_else(|| anyhow!("无效的版本路径：{}", dest.display()))?;
+                std::fs::create_dir_all(parent)?;
+                std::fs::copy(&source, &dest)
+                    .with_context(|| format!("复制游戏本体失败：{}", dest.display()))?;
+            }
+            if dest.exists() {
+                jar_id = Some(version_id.to_string());
+            }
+        }
+    }
+
+    let classpath_entries = install::merged_classpath_entries(cfg, detail, jar_id.as_deref());
     let classpath = classpath_entries
         .iter()
         .map(|p| p.to_string_lossy().to_string())
@@ -483,10 +513,40 @@ pub fn spawn(
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
+    // 把游戏输出同时落盘：进程被外部终止时也能留下现场
+    let log_path = crate::config::data_dir().join("logs").join("game.log");
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let logger = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .ok()
+        .map(|file| Arc::new(Mutex::new(BufWriter::new(file))));
+    if let Some(logger) = &logger {
+        if let Ok(mut writer) = logger.lock() {
+            let _ = writeln!(
+                writer,
+                "=== DOCL 启动 {version_id} · Java {} · pid {pid} ===",
+                java_path.display()
+            );
+            let _ = writer.flush();
+        }
+    }
+
     if let Some(stdout) = stdout {
         let app = app.clone();
+        let logger = logger.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(logger) = &logger {
+                    if let Ok(mut writer) = logger.lock() {
+                        let _ = writeln!(writer, "{line}");
+                        let _ = writer.flush();
+                    }
+                }
                 let _ = app.emit(
                     "game-log",
                     LogLine {
@@ -499,8 +559,15 @@ pub fn spawn(
     }
     if let Some(stderr) = stderr {
         let app = app.clone();
+        let logger = logger.clone();
         std::thread::spawn(move || {
             for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if let Some(logger) = &logger {
+                    if let Ok(mut writer) = logger.lock() {
+                        let _ = writeln!(writer, "[stderr] {line}");
+                        let _ = writer.flush();
+                    }
+                }
                 let _ = app.emit(
                     "game-log",
                     LogLine {
@@ -515,13 +582,14 @@ pub fn spawn(
     let app = app.clone();
     std::thread::spawn(move || {
         let status = child.wait();
-        let _ = app.emit(
-            "game-exit",
-            GameExit {
-                code: status.ok().and_then(|s| s.code()),
-                pid,
-            },
-        );
+        let code = status.as_ref().ok().and_then(|s| s.code());
+        if let Some(logger) = &logger {
+            if let Ok(mut writer) = logger.lock() {
+                let _ = writeln!(writer, "=== 游戏退出：代码 {code:?}（pid {pid}）===");
+                let _ = writer.flush();
+            }
+        }
+        let _ = app.emit("game-exit", GameExit { code, pid });
     });
 
     Ok(pid)

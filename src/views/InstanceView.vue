@@ -33,7 +33,7 @@ import {
   refreshInstanceMetas,
   store,
 } from "../store";
-import { formatBytes, formatDate, kindLabel } from "../utils";
+import { ICON_PRESETS, formatBytes, formatDate, kindLabel } from "../utils";
 
 type Tab =
   | "overview"
@@ -107,15 +107,7 @@ const exportFormats = [
   { value: "mrpack", label: "Modrinth .mrpack" },
 ];
 
-const iconPresets = [
-  { value: "auto", label: "自动", color: "#8b9d6f" },
-  { value: "grass", label: "草方块", color: "#6f8f5a" },
-  { value: "diamond", label: "钻石", color: "#5fa7a0" },
-  { value: "gold", label: "黄金", color: "#cf9f45" },
-  { value: "redstone", label: "红石", color: "#b8543f" },
-  { value: "nether", label: "下界", color: "#7c4a3f" },
-  { value: "end", label: "末地", color: "#6f5f86" },
-];
+const iconPresets = ICON_PRESETS;
 
 const categoryOptions = [
   { value: "auto", label: "自动" },
@@ -199,6 +191,42 @@ const iconColor = computed(
   () => iconPresets.find((preset) => preset.value === form.icon)?.color ?? "#8b9d6f"
 );
 
+/// form.icon 为 custom 时对应图片的 data URL
+const customIcon = ref<string | null>(null);
+
+async function loadCustomIcon() {
+  if (!store.instanceId || form.icon !== "custom") {
+    customIcon.value = null;
+    return;
+  }
+  try {
+    customIcon.value = await api.instanceIconImage(store.instanceId);
+  } catch {
+    customIcon.value = null;
+  }
+}
+
+watch(() => form.icon, loadCustomIcon);
+
+async function pickIconImage() {
+  if (!store.instanceId) return;
+  const source = await openDialog({
+    multiple: false,
+    title: "选择版本图标",
+    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp"] }],
+  });
+  if (!source || typeof source !== "string") return;
+  try {
+    await api.instanceSetIconImage(store.instanceId, source);
+    form.icon = "custom";
+    await loadCustomIcon();
+    await refreshInstanceMetas();
+    notify("已更新版本图标");
+  } catch (err) {
+    notify(`图标保存失败：${String(err)}`, "err");
+  }
+}
+
 const loaderLabel = computed(() => {
   const loader = info.value?.loader ?? "vanilla";
   if (loader === "vanilla") return "原版";
@@ -273,7 +301,17 @@ onMounted(async () => {
     return;
   }
   await loadAll();
+  await loadCustomIcon();
 });
+
+watch(
+  () => store.contentRevision,
+  () => {
+    if (!store.instanceId) return;
+    void loadAll();
+    if (contentTabs.includes(tab.value)) void loadFiles();
+  }
+);
 
 watch(tab, async (value) => {
   fileQuery.value = "";
@@ -845,7 +883,13 @@ function launch() {
         @click="store.page = 'versions'"
       />
       <span class="ins-tile" :style="{ '--tile': iconColor }">
-        <InstanceGlyph :preset="form.icon" :size="28" />
+        <img
+          v-if="form.icon === 'custom' && customIcon"
+          :src="customIcon"
+          class="ins-tile__img"
+          alt=""
+        />
+        <InstanceGlyph v-else :preset="form.icon" :size="28" />
       </span>
       <div class="ins-head__text">
         <span class="eyebrow">DOCL / INSTANCE</span>
@@ -977,6 +1021,22 @@ function launch() {
                       <InstanceGlyph :preset="preset.value" :size="19" />
                     </span>
                     {{ preset.label }}
+                  </button>
+                  <button
+                    class="icon-chip"
+                    :class="{ 'icon-chip--active': form.icon === 'custom' }"
+                    @click="pickIconImage"
+                  >
+                    <span class="icon-chip__tile" :style="{ '--tile': '#8b9d6f' }">
+                      <img
+                        v-if="customIcon"
+                        :src="customIcon"
+                        class="icon-chip__img"
+                        alt=""
+                      />
+                      <AppIcon v-else name="image" :size="18" />
+                    </span>
+                    自定义
                   </button>
                 </div>
               </div>
@@ -1710,6 +1770,13 @@ function launch() {
   border: 1px solid color-mix(in srgb, var(--tile) 32%, transparent);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75), var(--shadow-1);
   flex-shrink: 0;
+  overflow: hidden;
+}
+
+.ins-tile__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .ins-head__text {
@@ -1985,6 +2052,13 @@ function launch() {
   );
   border: 1px solid color-mix(in srgb, var(--tile) 30%, transparent);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.icon-chip__img {
+  width: 100%;
+  height: 100%;
+  border-radius: 5px;
+  object-fit: cover;
 }
 
 .quick-grid {

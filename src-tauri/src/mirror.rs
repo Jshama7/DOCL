@@ -24,6 +24,10 @@ const HOST_MAPPINGS: &[(&str, &str)] = &[
         "https://bmclapi2.bangbang93.com/maven/",
     ),
     (
+        "https://maven.minecraftforge.net/",
+        "https://bmclapi2.bangbang93.com/maven/",
+    ),
+    (
         "https://resources.download.minecraft.net/",
         "https://bmclapi2.bangbang93.com/assets/",
     ),

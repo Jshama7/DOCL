@@ -1,0 +1,307 @@
+<script setup lang="ts">
+import { computed, ref } from "vue";
+import { api, type DroppedItem } from "../api";
+import AppIcon from "./AppIcon.vue";
+import WoodButton from "./WoodButton.vue";
+import WoodModal from "./WoodModal.vue";
+import WoodSelect from "./WoodSelect.vue";
+import {
+  importModpack,
+  notify,
+  refreshInstanceMetas,
+  selectedVersion,
+  store,
+} from "../store";
+
+const props = defineProps<{ items: DroppedItem[] }>();
+const emit = defineEmits<{ (e: "close"): void; (e: "done"): void }>();
+
+const ICONS: Record<string, string> = {
+  mods: "grid",
+  resourcepacks: "image",
+  shaderpacks: "sun",
+  datapacks: "database",
+  saves: "cube",
+  schematics: "layers",
+  modpack: "package",
+};
+
+const kindOptions = [
+  { value: "mods", label: "模组" },
+  { value: "resourcepacks", label: "资源包" },
+  { value: "shaderpacks", label: "光影包" },
+  { value: "datapacks", label: "数据包" },
+  { value: "saves", label: "存档" },
+  { value: "schematics", label: "投影文件" },
+];
+
+const versions = computed(() =>
+  store.installed
+    .filter((item) => !item.dependency)
+    .map((item) => {
+      const meta = store.metas[item.id];
+      const name = meta?.display_name?.trim();
+      return {
+        value: item.id,
+        label: name && name !== item.id ? `${name}（${item.id}）` : item.id,
+      };
+    })
+);
+
+const target = ref(
+  store.instanceId ?? selectedVersion.value?.id ?? versions.value[0]?.value ?? ""
+);
+const overrides = ref<Record<string, string>>({});
+const busy = ref(false);
+
+const content = computed(() => props.items.filter((item) => item.kind !== "modpack"));
+const packs = computed(() => props.items.filter((item) => item.kind === "modpack"));
+const unknown = computed(() => content.value.filter((item) => item.kind === "unknown"));
+
+/// 未识别的条目要等用户选好分类才能导入
+const unresolved = computed(() => unknown.value.filter((item) => !overrides.value[item.path]));
+const canInstall = computed(
+  () => !!target.value && content.value.length > 0 && unresolved.value.length === 0
+);
+
+function kindOf(item: DroppedItem) {
+  return item.kind === "unknown" ? overrides.value[item.path] ?? "" : item.kind;
+}
+
+async function installContent() {
+  if (!canInstall.value || busy.value) return;
+  busy.value = true;
+  try {
+    let count = 0;
+    const installed: string[] = [];
+    const failed: string[] = [];
+    const unresolved: string[] = [];
+    for (const item of content.value) {
+      const kind = kindOf(item);
+      if (!kind) continue;
+      if (kind === "mods") {
+        // 模组走带前置检测的通道，装完会自动补齐 Fabric API 之类的必需依赖
+        const result = await api.instanceImportMods(target.value, [item.path]);
+        count += result.imported;
+        installed.push(...result.dependencies.installed);
+        failed.push(...result.dependencies.failed);
+        unresolved.push(...result.dependencies.unresolved);
+      } else {
+        count += await api.instanceImportFiles(target.value, kind, [item.path]);
+      }
+    }
+    await refreshInstanceMetas();
+    store.contentRevision += 1;
+
+    const notes: string[] = [];
+    if (installed.length) notes.push(`已自动补齐前置 ${Array.from(new Set(installed)).join("、")}`);
+    if (failed.length) notes.push(`前置下载失败：${Array.from(new Set(failed)).join("、")}`);
+    if (unresolved.length) notes.push(`未能自动安装的前置：${Array.from(new Set(unresolved)).join("、")}`);
+    notify(
+      `已导入 ${count} 项到 ${target.value}${notes.length ? `，${notes.join("；")}` : ""}`,
+      unresolved.length || failed.length ? "err" : "ok"
+    );
+    emit("done");
+  } catch (err) {
+    notify(`导入失败：${String(err)}`, "err");
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function importPacks() {
+  if (!packs.value.length || busy.value) return;
+  busy.value = true;
+  try {
+    let last: string | null = null;
+    for (const pack of packs.value) {
+      const result = await importModpack(
+        pack.path,
+        { parent_version: target.value || null },
+        pack.file_name
+      );
+      if (result) last = result.instance_id;
+    }
+    if (last) emit("done");
+  } finally {
+    busy.value = false;
+  }
+}
+</script>
+
+<template>
+  <WoodModal title="导入文件" :width="540" @close="emit('close')">
+    <p class="hint">已自动识别文件类型，确认后装到所选版本。整合包会作为新实例导入。</p>
+
+    <ul class="drop-list">
+      <li
+        v-for="item in items"
+        :key="item.path"
+        class="drop-item"
+        :class="{ 'drop-item--pack': item.kind === 'modpack' }"
+      >
+        <span class="drop-item__icon">
+          <AppIcon :name="ICONS[item.kind] ?? 'package'" :size="16" />
+        </span>
+        <div class="drop-item__text">
+          <strong class="drop-item__name" :title="item.file_name">{{ item.file_name }}</strong>
+          <span class="drop-item__meta">
+            {{ item.label }}<template v-if="item.detail"> · {{ item.detail }}</template>
+          </span>
+        </div>
+        <div v-if="item.kind === 'unknown'" class="drop-item__override">
+          <WoodSelect
+            v-model="overrides[item.path]"
+            :options="kindOptions"
+          />
+        </div>
+      </li>
+    </ul>
+
+    <div v-if="content.length" class="target">
+      <span class="target__label">安装到</span>
+      <WoodSelect
+        v-model="target"
+        :options="versions"
+        :disabled="busy"
+      />
+    </div>
+
+    <p class="supported">可拖入：模组、资源包、光影、数据包、存档、投影文件、整合包（.zip / .mrpack / .jar）</p>
+
+    <template #footer>
+      <span class="footnote">
+        {{ packs.length ? `整合包将创建新实例` : "" }}
+      </span>
+      <div class="actions">
+        <WoodButton variant="ghost" :disabled="busy" @click="emit('close')">取消</WoodButton>
+        <WoodButton
+          v-if="packs.length"
+          variant="soft"
+          :disabled="busy"
+          @click="importPacks"
+        >
+          {{ busy ? "导入中…" : `作为整合包导入 (${packs.length})` }}
+        </WoodButton>
+        <WoodButton
+          v-if="content.length"
+          variant="primary"
+          :disabled="busy || !canInstall"
+          @click="installContent"
+        >
+          {{ busy ? "导入中…" : `导入到所选版本 (${content.length})` }}
+        </WoodButton>
+      </div>
+    </template>
+  </WoodModal>
+</template>
+
+<style scoped>
+.hint {
+  margin: 0 0 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.drop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 0;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.drop-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.drop-item--pack {
+  border-color: var(--moss);
+  background: var(--moss-soft);
+}
+
+.drop-item__icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--moss);
+  flex-shrink: 0;
+}
+
+.drop-item__text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.drop-item__name {
+  font-size: 13px;
+  color: var(--walnut-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drop-item__meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.drop-item__override {
+  width: 130px;
+  flex-shrink: 0;
+}
+
+.target {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.target__label {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.target :deep(.select) {
+  flex: 1;
+  min-width: 0;
+}
+
+.supported {
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.footnote {
+  flex: 1;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+</style>

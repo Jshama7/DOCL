@@ -23,19 +23,33 @@ pub struct FileTask {
 pub struct ProgressState {
     pub stage: String,
     message: Mutex<String>,
+    /// 依次经过的安装阶段，供下载面板显示成步骤列表
+    steps: Mutex<Vec<ProgressStep>>,
     pub files_done: AtomicU64,
     pub files_total: AtomicU64,
     pub bytes_done: AtomicU64,
     pub bytes_total: AtomicU64,
     pub cancel: AtomicBool,
     pub active: AtomicBool,
+    /// 是否已有刷新联动的任务，避免重复起多个
+    ticking: AtomicBool,
     started: Instant,
+}
+
+/// 面板最多展示的步骤数量，避免加载器日志刷屏
+const MAX_STEPS: usize = 8;
+
+#[derive(Clone, Debug, Serialize)]
+pub struct ProgressStep {
+    pub label: String,
+    pub done: bool,
 }
 
 #[derive(Clone, Serialize)]
 pub struct ProgressSnapshot {
     pub stage: String,
     pub message: String,
+    pub steps: Vec<ProgressStep>,
     pub files_done: u64,
     pub files_total: u64,
     pub bytes_done: u64,
@@ -49,19 +63,61 @@ impl ProgressState {
         Arc::new(Self {
             stage: stage.to_string(),
             message: Mutex::new(String::new()),
+            steps: Mutex::new(Vec::new()),
             files_done: AtomicU64::new(0),
             files_total: AtomicU64::new(0),
             bytes_done: AtomicU64::new(0),
             bytes_total: AtomicU64::new(0),
             cancel: AtomicBool::new(false),
             active: AtomicBool::new(true),
+            ticking: AtomicBool::new(false),
             started: Instant::now(),
         })
     }
 
     pub fn set_message(&self, msg: impl Into<String>) {
+        let msg = msg.into();
+        if msg.trim().is_empty() {
+            return;
+        }
+        if let Ok(mut steps) = self.steps.lock() {
+            let repeated = steps
+                .last()
+                .map(|step| step.label == msg)
+                .unwrap_or(false);
+            if !repeated {
+                if let Some(last) = steps.last_mut() {
+                    last.done = true;
+                }
+                steps.push(ProgressStep {
+                    label: msg.clone(),
+                    done: false,
+                });
+                if steps.len() > MAX_STEPS {
+                    steps.remove(0);
+                }
+            }
+        }
         if let Ok(mut guard) = self.message.lock() {
-            *guard = msg.into();
+            *guard = msg;
+        }
+    }
+
+    /// 只更新当前阶段的细节（安装器实时输出），不新增步骤。
+    pub fn set_detail(&self, msg: impl Into<String>) {
+        let msg = msg.into();
+        if msg.trim().is_empty() {
+            return;
+        }
+        if let Ok(mut steps) = self.steps.lock() {
+            if let Some(last) = steps.last_mut() {
+                if !last.done {
+                    last.label = msg.clone();
+                }
+            }
+        }
+        if let Ok(mut guard) = self.message.lock() {
+            *guard = msg;
         }
     }
 
@@ -70,6 +126,18 @@ impl ProgressState {
     }
 
     pub fn snapshot(&self) -> ProgressSnapshot {
+        let active = self.active.load(Ordering::Relaxed);
+        let mut steps = self
+            .steps
+            .lock()
+            .map(|list| list.clone())
+            .unwrap_or_default();
+        // 任务结束后最后一步也视为完成
+        if !active {
+            if let Some(last) = steps.last_mut() {
+                last.done = true;
+            }
+        }
         ProgressSnapshot {
             stage: self.stage.clone(),
             message: self
@@ -77,12 +145,13 @@ impl ProgressState {
                 .lock()
                 .map(|m| m.clone())
                 .unwrap_or_default(),
+            steps,
             files_done: self.files_done.load(Ordering::Relaxed),
             files_total: self.files_total.load(Ordering::Relaxed),
             bytes_done: self.bytes_done.load(Ordering::Relaxed),
             bytes_total: self.bytes_total.load(Ordering::Relaxed),
             elapsed_ms: self.started.elapsed().as_millis() as u64,
-            active: self.active.load(Ordering::Relaxed),
+            active,
         }
     }
 }
@@ -92,6 +161,10 @@ pub fn emit_now(app: &AppHandle, progress: &Arc<ProgressState>) {
 }
 
 fn start_ticker(app: AppHandle, progress: Arc<ProgressState>) {
+    // 已经在刷新就不重复起任务；任务结束后由本轮循环复位
+    if progress.ticking.swap(true, Ordering::Relaxed) {
+        return;
+    }
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_millis(180)).await;
@@ -100,7 +173,16 @@ fn start_ticker(app: AppHandle, progress: Arc<ProgressState>) {
                 break;
             }
         }
+        progress.ticking.store(false, Ordering::Relaxed);
     });
+}
+
+/// 进入一个没有逐文件进度的阶段：更新文案、保持界面刷新。
+pub fn begin_stage(app: &AppHandle, progress: &Arc<ProgressState>, message: impl Into<String>) {
+    progress.set_message(message);
+    progress.active.store(true, Ordering::Relaxed);
+    start_ticker(app.clone(), progress.clone());
+    emit_now(app, progress);
 }
 
 pub async fn get_bytes(

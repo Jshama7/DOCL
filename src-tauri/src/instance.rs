@@ -81,7 +81,100 @@ pub fn remove(cfg: &Config, version_id: &str) -> Result<()> {
     if changed {
         save_map(&map)?;
     }
+    remove_icon_images(version_id);
     Ok(())
+}
+
+/* ---------- 自定义图标 ---------- */
+
+fn icon_dir() -> PathBuf {
+    config::data_dir().join("instance_icons")
+}
+
+fn icon_stem(version_id: &str) -> String {
+    version_id
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .take(64)
+        .collect()
+}
+
+fn remove_icon_images(version_id: &str) {
+    let stem = icon_stem(version_id);
+    let Ok(entries) = std::fs::read_dir(icon_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .file_stem()
+            .map(|value| value.to_string_lossy() == stem)
+            .unwrap_or(false)
+        {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+/// 只改图标字段，避免前端为了换图标重传整份设置
+pub fn set_icon(cfg: &Config, version_id: &str, icon: &str) -> Result<()> {
+    let mut meta = get(cfg, version_id);
+    meta.icon = icon.to_string();
+    save(cfg, version_id, &meta)
+}
+
+/// 把用户选的图片复制进数据目录并标记为自定义图标
+pub fn set_icon_image(cfg: &Config, version_id: &str, source: &str) -> Result<String> {
+    let src = Path::new(source);
+    let ext = src
+        .extension()
+        .map(|value| value.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "gif" | "bmp") {
+        bail!("图标只支持 png / jpg / webp / gif / bmp 图片");
+    }
+    std::fs::create_dir_all(icon_dir())?;
+    remove_icon_images(version_id);
+    let dest = icon_dir().join(format!("{}.{ext}", icon_stem(version_id)));
+    std::fs::copy(src, &dest)
+        .with_context(|| format!("复制图标失败：{}", src.display()))?;
+    set_icon(cfg, version_id, "custom")?;
+    Ok("custom".into())
+}
+
+/// 返回自定义图标的 data URL，前端直接放进 img
+pub fn icon_image(cfg: &Config, version_id: &str) -> Option<String> {
+    if get(cfg, version_id).icon != "custom" {
+        return None;
+    }
+    let stem = icon_stem(version_id);
+    let entries = std::fs::read_dir(icon_dir()).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .file_stem()
+            .map(|value| value.to_string_lossy() == stem)
+            .unwrap_or(false)
+        {
+            let bytes = std::fs::read(&path).ok()?;
+            let mime = match path
+                .extension()
+                .map(|value| value.to_string_lossy().to_lowercase())
+                .as_deref()
+            {
+                Some("png") => "image/png",
+                Some("webp") => "image/webp",
+                Some("gif") => "image/gif",
+                Some("bmp") => "image/bmp",
+                _ => "image/jpeg",
+            };
+            return Some(format!(
+                "data:{mime};base64,{}",
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes)
+            ));
+        }
+    }
+    None
 }
 
 /// 只返回当前游戏目录下的版本元数据，前端按版本 ID 取用。
@@ -229,16 +322,32 @@ pub struct InstanceInfo {
     pub counts: InstanceCounts,
 }
 
+/// 前端与下载源对同一分类的叫法并不统一（例如 Modrinth 用 shaders，目录叫 shaderpacks），
+/// 这里统一收口，避免「未知的内容分类」把安装流程中断。
 fn content_subdir(kind: &str) -> Result<&'static str> {
     match kind {
-        "mods" => Ok("mods"),
-        "resourcepacks" => Ok("resourcepacks"),
-        "shaderpacks" => Ok("shaderpacks"),
-        "saves" => Ok("saves"),
-        "screenshots" => Ok("screenshots"),
-        "schematics" => Ok("schematics"),
+        "mods" | "mod" => Ok("mods"),
+        "resourcepacks" | "resourcepack" | "texturepacks" => Ok("resourcepacks"),
+        "shaderpacks" | "shaders" | "shader" => Ok("shaderpacks"),
+        "saves" | "worlds" | "world" => Ok("saves"),
+        "screenshots" | "screenshot" => Ok("screenshots"),
+        "schematics" | "projection" | "litematica" => Ok("schematics"),
         _ => bail!("未知的内容分类：{kind}"),
     }
+}
+
+pub fn content_dir(cfg: &Config, version_id: &str, kind: &str) -> Result<PathBuf> {
+    // 数据包属于单个存档世界：datapacks:<folder>，不带后缀时取最近游玩的世界
+    if kind == "datapacks" {
+        return datapack_dir(cfg, version_id, None);
+    }
+    if let Some(world) = kind.strip_prefix("datapacks:") {
+        return datapack_dir(cfg, version_id, Some(world));
+    }
+    let dir = game_dir(cfg, version_id).join(content_subdir(kind)?);
+    // 实例目录是懒创建的：首次安装这类内容时目录还不存在
+    std::fs::create_dir_all(&dir)?;
+    Ok(dir)
 }
 
 /// 实例实际使用的游戏目录，整合包可以通过元数据强制独立。
@@ -251,17 +360,6 @@ pub fn game_dir(cfg: &Config, version_id: &str) -> PathBuf {
     } else {
         cfg.game_root()
     }
-}
-
-pub fn content_dir(cfg: &Config, version_id: &str, kind: &str) -> Result<PathBuf> {
-    // 数据包属于单个存档世界：datapacks:<folder>，不带后缀时取最近游玩的世界
-    if kind == "datapacks" {
-        return datapack_dir(cfg, version_id, None);
-    }
-    if let Some(world) = kind.strip_prefix("datapacks:") {
-        return datapack_dir(cfg, version_id, Some(world));
-    }
-    Ok(game_dir(cfg, version_id).join(content_subdir(kind)?))
 }
 
 fn latest_world_dir(cfg: &Config, version_id: &str) -> Result<PathBuf> {

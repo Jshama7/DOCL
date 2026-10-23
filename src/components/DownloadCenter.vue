@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import AppIcon from "./AppIcon.vue";
 import IconButton from "./IconButton.vue";
 import WoodButton from "./WoodButton.vue";
 import WoodProgress from "./WoodProgress.vue";
@@ -52,6 +53,20 @@ const stageLabel = computed(() => {
 const title = computed(
   () => store.installingId || store.lastJobTitle || "下载任务"
 );
+
+/// 后端记录的阶段序列；旧任务没有步骤时用当前消息兜底
+const steps = computed(() => {
+  const list = snapshot.value?.steps ?? [];
+  if (list.length) return list;
+  const fallback = snapshot.value?.message || stageLabel.value;
+  return fallback ? [{ label: fallback, done: !active.value }] : [];
+});
+
+const remainingFiles = computed(() => {
+  const p = snapshot.value;
+  if (!p || !p.files_total) return "—";
+  return String(Math.max(0, p.files_total - p.files_done));
+});
 
 const ringStyle = computed(() => ({
   background: `conic-gradient(var(--moss) ${percent.value * 3.6}deg, rgba(var(--glass-rgb), 0.28) 0)`,
@@ -128,51 +143,77 @@ onBeforeUnmount(() => {
             </div>
             <div class="row">
               <span
-                class="tag"
-                :class="{ 'tag--grass': !failed, 'tag--danger': failed }"
+                class="dl-status"
+                :class="{
+                  'dl-status--ok': finished && !failed,
+                  'dl-status--err': failed,
+                  'dl-status--busy': active && !failed,
+                }"
+                :title="stageLabel"
               >
-                {{ stageLabel }}
+                <AppIcon :name="failed ? 'alert' : active ? 'download' : 'check'" :size="14" />
               </span>
               <IconButton icon="minimize" label="收起到右下角" :size="30" @click="closePanel" />
             </div>
           </header>
 
-          <div class="dl-panel__progress">
-            <div class="row-between">
-              <strong class="dl-percent">{{ Math.round(percent) }}%</strong>
-              <span class="muted small">{{ snapshot?.message }}</span>
-            </div>
-            <WoodProgress :value="percent" :height="9" />
-          </div>
+          <div class="dl-body">
+            <aside class="dl-metrics">
+              <div class="dl-metric">
+                <span class="dl-metric__label">总进度</span>
+                <strong class="dl-metric__value">
+                  {{ Math.round(percent) }}<em>%</em>
+                </strong>
+              </div>
+              <div class="dl-metric">
+                <span class="dl-metric__label">下载速度</span>
+                <strong class="dl-metric__value dl-metric__value--small">{{ speed }}</strong>
+              </div>
+              <div class="dl-metric">
+                <span class="dl-metric__label">剩余文件</span>
+                <strong class="dl-metric__value dl-metric__value--small">{{ remainingFiles }}</strong>
+              </div>
+            </aside>
 
-          <div class="dl-stats">
-            <div class="dl-stat">
-              <span>已下载</span>
-              <strong>{{ formatBytes(snapshot?.bytes_done ?? 0) }}</strong>
-            </div>
-            <div class="dl-stat">
-              <span>总大小</span>
-              <strong>{{ formatBytes(snapshot?.bytes_total ?? 0) }}</strong>
-            </div>
-            <div class="dl-stat">
-              <span>文件</span>
-              <strong>{{ snapshot?.files_done ?? 0 }} / {{ snapshot?.files_total ?? 0 }}</strong>
-            </div>
-            <div class="dl-stat">
-              <span>速度</span>
-              <strong>{{ speed }}</strong>
-            </div>
-            <div class="dl-stat">
-              <span>已用时</span>
-              <strong>{{ formatDuration(snapshot?.elapsed_ms ?? 0) }}</strong>
-            </div>
-            <div class="dl-stat">
-              <span>剩余</span>
-              <strong>{{ eta }}</strong>
-            </div>
-          </div>
+            <section class="dl-task">
+              <header class="dl-task__head">
+                <span class="dl-task__label">任务明细</span>
+                <span class="dl-task__state" :class="{ 'dl-task__state--err': failed }">
+                  {{ failed ? "安装失败" : active ? "进行中" : "已完成" }}
+                </span>
+              </header>
 
-          <p v-if="failed" class="dl-error">{{ store.lastJobError }}</p>
+              <ul class="dl-steps">
+                <li
+                  v-for="(step, index) in steps"
+                  :key="`${index}-${step.label}`"
+                  class="dl-step"
+                  :class="{
+                    'dl-step--done': step.done,
+                    'dl-step--current': !step.done && active,
+                  }"
+                >
+                  <span class="dl-step__mark">
+                    <AppIcon v-if="step.done" name="check" :size="10" />
+                    <span v-else class="dl-step__dot" />
+                  </span>
+                  <span class="dl-step__label">{{ step.label }}</span>
+                  <span v-if="!step.done && active" class="dl-step__pct mono">
+                    {{ Math.round(percent) }}%
+                  </span>
+                </li>
+              </ul>
+
+              <WoodProgress :value="percent" :height="6" />
+              <div class="dl-task__bytes mono">
+                {{ formatBytes(snapshot?.bytes_done ?? 0) }} /
+                {{ formatBytes(snapshot?.bytes_total ?? 0) }}
+                · {{ formatDuration(snapshot?.elapsed_ms ?? 0) }}
+              </div>
+
+              <p v-if="failed" class="dl-error">{{ store.lastJobError }}</p>
+            </section>
+          </div>
 
           <footer class="dl-panel__foot">
             <WoodButton v-if="active" variant="danger" size="sm" @click="cancelInstall">
@@ -191,8 +232,16 @@ onBeforeUnmount(() => {
         <div v-if="hovered" class="dl-tip">
           <div class="dl-tip__head">
             <strong>{{ title }}</strong>
-            <span class="tag" :class="{ 'tag--grass': !failed, 'tag--danger': failed }">
-              {{ stageLabel }}
+            <span
+              class="dl-status dl-status--small"
+              :class="{
+                'dl-status--ok': finished && !failed,
+                'dl-status--err': failed,
+                'dl-status--busy': active && !failed,
+              }"
+              :title="stageLabel"
+            >
+              <AppIcon :name="failed ? 'alert' : active ? 'download' : 'check'" :size="11" />
             </span>
           </div>
           <div class="dl-tip__bar">
@@ -250,7 +299,7 @@ onBeforeUnmount(() => {
 }
 
 .dl-panel {
-  width: min(560px, 90vw);
+  width: min(680px, 92vw);
   background: var(--panel);
   border: 1px solid var(--line-strong);
   border-radius: 16px;
@@ -258,7 +307,7 @@ onBeforeUnmount(() => {
   padding: 20px 22px 16px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 16px;
   position: relative;
   overflow: hidden;
   animation: dl-pop 280ms var(--ease-out-expo) both;
@@ -286,45 +335,218 @@ onBeforeUnmount(() => {
   margin-top: 2px;
 }
 
-.dl-panel__progress {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.dl-percent {
-  font-family: var(--font-display);
-  font-size: 22px;
-  color: var(--walnut-deep);
-}
-
-.dl-stats {
+.dl-body {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 14px;
+  align-items: stretch;
 }
 
-.dl-stat {
+/* 左侧大字指标 */
+.dl-metrics {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 9px 11px;
+  gap: 12px;
+  padding: 16px 16px 14px;
+  border-radius: 12px;
   border: 1px solid var(--line);
-  border-radius: 9px;
   background: var(--panel-2);
 }
 
-.dl-stat span {
-  font-size: 10px;
-  letter-spacing: 0.1em;
-  color: var(--muted);
-  text-transform: uppercase;
-  font-family: var(--font-mono);
+.dl-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
 }
 
-.dl-stat strong {
-  font-size: 12.5px;
-  color: var(--ink);
+.dl-metric:last-child {
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
+.dl-metric__label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.dl-metric__value {
+  font-family: var(--font-display);
+  font-size: 27px;
+  line-height: 1;
+  color: var(--walnut-deep);
+}
+
+.dl-metric__value em {
+  font-size: 13px;
+  font-style: normal;
+  color: var(--muted);
+  margin-left: 2px;
+}
+
+.dl-metric__value--small {
+  font-family: var(--font-mono);
+  font-size: 17px;
+}
+
+/* 右侧任务卡片 */
+.dl-task {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.dl-task__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dl-task__label {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--muted);
+}
+
+.dl-task__state {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--moss);
+}
+
+.dl-task__state--err {
+  color: var(--danger);
+}
+
+.dl-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 170px;
+  overflow-y: auto;
+}
+
+.dl-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dl-step__mark {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+}
+
+.dl-step--done .dl-step__mark {
+  color: var(--moss);
+  border-color: #d3dfc8;
+  background: var(--moss-soft);
+}
+
+.dl-step--current .dl-step__mark {
+  border-color: var(--moss);
+}
+
+.dl-step__dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.dl-step__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dl-step--done .dl-step__label {
+  color: var(--ink-soft);
+}
+
+.dl-step--current .dl-step__label {
+  color: var(--walnut-deep);
+  font-weight: 600;
+}
+
+.dl-step__pct {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--moss);
+}
+
+.dl-task__bytes {
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+/* 安装状态用图标表示，避免长文本挤坏标题栏 */
+.dl-status {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+}
+
+.dl-status--small {
+  width: 20px;
+  height: 20px;
+}
+
+.dl-status--ok {
+  color: var(--moss);
+  background: var(--moss-soft);
+  border-color: #d3dfc8;
+}
+
+.dl-status--err {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: #ecd3ca;
+}
+
+.dl-status--busy {
+  color: var(--walnut);
+}
+
+.dl-tip .dl-status {
+  background: rgba(255, 253, 246, 0.1);
+  border-color: rgba(255, 253, 246, 0.18);
+  color: #fbf4e6;
+}
+
+.dl-tip .dl-status--ok {
+  color: #b7d49a;
+}
+
+.dl-tip .dl-status--err {
+  color: #f0a58d;
 }
 
 .dl-error {

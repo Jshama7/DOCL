@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::File;
 use std::io::copy;
 use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
@@ -22,6 +23,8 @@ pub struct InstalledVersion {
     pub has_jar: bool,
     pub last_modified: u64,
     pub java_major: u32,
+    /// 仅作为整合包父版本存在，不在版本页默认展示
+    pub dependency: bool,
 }
 
 pub async fn fetch_manifest(client: &reqwest::Client, use_mirror: bool) -> Result<VersionManifest> {
@@ -34,15 +37,32 @@ pub fn list_installed(cfg: &Config) -> Vec<InstalledVersion> {
     let Ok(entries) = std::fs::read_dir(&dir) else {
         return result;
     };
-    for entry in entries.flatten() {
-        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+    let versions: Vec<(String, PathBuf)> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|entry| {
+            let id = entry.file_name().to_string_lossy().to_string();
+            (id, entry.path())
+        })
+        .filter(|(id, path)| path.join(format!("{id}.json")).exists())
+        .collect();
+
+    // 整合包实例会继承原版与加载器版本，这些父版本在版本页默认折叠
+    let mut dependencies: HashSet<String> = HashSet::new();
+    for (id, _) in &versions {
+        if crate::instance::get(cfg, id).category != "modpack" {
             continue;
         }
-        let id = entry.file_name().to_string_lossy().to_string();
-        let json_path = entry.path().join(format!("{id}.json"));
-        if !json_path.exists() {
-            continue;
+        if let Ok(merged) = resolve_detail(cfg, id) {
+            for part in merged.chain {
+                if &part != id {
+                    dependencies.insert(part);
+                }
+            }
         }
+    }
+
+    for (id, path) in versions {
         let resolved = resolve_detail(cfg, &id).ok();
         let (kind, java_major) = match &resolved {
             Some(merged) => (merged.detail.kind.clone(), merged.detail.required_java()),
@@ -50,7 +70,7 @@ pub fn list_installed(cfg: &Config) -> Vec<InstalledVersion> {
         };
         let jar_path = match resolved.as_ref().and_then(|m| m.jar_id.as_ref()) {
             Some(jar_id) => dir.join(jar_id).join(format!("{jar_id}.jar")),
-            None => entry.path().join(format!("{id}.jar")),
+            None => path.join(format!("{id}.jar")),
         };
         let (jar_size, has_jar, modified) = match std::fs::metadata(&jar_path) {
             Ok(meta) => (
@@ -65,6 +85,7 @@ pub fn list_installed(cfg: &Config) -> Vec<InstalledVersion> {
             Err(_) => (0, false, 0),
         };
         result.push(InstalledVersion {
+            dependency: dependencies.contains(&id),
             id,
             kind,
             jar_size,
@@ -125,7 +146,7 @@ pub fn rules_allow(rules: Option<&Vec<Rule>>) -> bool {
     }
 }
 
-fn maven_parts(name: &str) -> Option<(String, String, String, Option<String>, String)> {
+pub(crate) fn maven_parts(name: &str) -> Option<(String, String, String, Option<String>, String)> {
     let (coords, ext) = match name.split_once('@') {
         Some((c, e)) => (c, e.to_string()),
         None => (name, "jar".to_string()),
@@ -141,7 +162,7 @@ fn maven_parts(name: &str) -> Option<(String, String, String, Option<String>, St
     Some((group, artifact, version, classifier, ext))
 }
 
-fn maven_path(name: &str) -> Option<String> {
+pub(crate) fn maven_path(name: &str) -> Option<String> {
     let (group, artifact, version, classifier, ext) = maven_parts(name)?;
     let file = match classifier {
         Some(c) => format!("{artifact}-{version}-{c}.{ext}"),
@@ -156,7 +177,7 @@ fn maven_path(name: &str) -> Option<String> {
     ))
 }
 
-fn library_is_native(lib: &Library) -> bool {
+pub(crate) fn library_is_native(lib: &Library) -> bool {
     // 旧版清单用 natives 映射 + extract 表示需要解压；
     // 1.19 之后 natives 作为普通 classifier 库，直接进 classpath。
     lib.natives
@@ -166,7 +187,7 @@ fn library_is_native(lib: &Library) -> bool {
         || lib.extract.is_some()
 }
 
-fn library_artifact(lib: &Library) -> Option<(DownloadRef, String)> {
+pub(crate) fn library_artifact(lib: &Library) -> Option<(DownloadRef, String)> {
     if let Some(downloads) = &lib.downloads {
         if let Some(artifact) = &downloads.artifact {
             let path = artifact
@@ -440,6 +461,7 @@ pub async fn install_version(
     let kind = detail.kind.clone();
     let java_major = detail.required_java();
     Ok(InstalledVersion {
+        dependency: false,
         id: version_id.to_string(),
         kind,
         jar_size: std::fs::metadata(&jar_path).map(|m| m.len()).unwrap_or(0),
@@ -539,14 +561,24 @@ pub fn resolve_detail(cfg: &Config, version_id: &str) -> Result<MergedDetail> {
         }
         visited.push(id.clone());
         let detail = read_installed_detail(cfg, &id)?;
-        if jar_id.is_none()
-            && detail
-                .downloads
-                .as_ref()
-                .and_then(|d| d.client.as_ref())
-                .is_some()
-        {
-            jar_id = Some(id.clone());
+        if jar_id.is_none() {
+            // 链上每一级先看自己的 jar（Forge 1.17+ 是处理器产出的补丁客户端），
+            // 再看清单是否自带客户端下载；落到原版 jar 会让模块系统同时
+            // 看到两份 Minecraft 类直接崩
+            let own_jar = cfg
+                .game_root()
+                .join("versions")
+                .join(&id)
+                .join(format!("{id}.jar"));
+            if own_jar.exists()
+                || detail
+                    .downloads
+                    .as_ref()
+                    .and_then(|d| d.client.as_ref())
+                    .is_some()
+            {
+                jar_id = Some(id.clone());
+            }
         }
         current = detail.inherits_from.clone();
         chain.push(detail);
@@ -909,6 +941,153 @@ pub async fn loader_versions(
     bail!("不支持的加载器：{loader}")
 }
 
+/// 安装器中途被打断时仍会返回成功码，但写出的清单缺少核心库条目，
+/// 启动阶段会抛 module ResolutionException，所以装完必须校验一次。
+pub(crate) fn verify_loader_manifest(
+    cfg: &Config,
+    id: &str,
+    loader: &str,
+    game_version: &str,
+) -> Result<()> {
+    let path = cfg
+        .game_root()
+        .join("versions")
+        .join(id)
+        .join(format!("{id}.json"));
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("安装器已结束，但没有生成 {}", path.display()))?;
+    let value: serde_json::Value = serde_json::from_str(&text)?;
+    let names: Vec<&str> = value
+        .get("libraries")
+        .and_then(|list| list.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|lib| lib.get("name").and_then(|name| name.as_str()))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let mut missing = Vec::new();
+    // 1.17 起核心库改为 fmlloader 引导 + 处理器产出的补丁客户端当版本 jar，
+    // 清单里不再有 forge universal 与 net.minecraft:client 条目
+    let split_client = game_version
+        .split('.')
+        .nth(1)
+        .and_then(|value| value.parse::<u32>().ok())
+        .map(|minor| minor >= 17)
+        .unwrap_or(false);
+
+    if loader == "neoforge" {
+        if !names.iter().any(|name| {
+            name.contains("neoforged") || name.starts_with("net.minecraftforge:fmlloader:")
+        }) {
+            missing.push("NeoForge 引导库");
+        }
+    } else if split_client {
+        if !names
+            .iter()
+            .any(|name| name.starts_with("net.minecraftforge:fmlloader:"))
+        {
+            missing.push("Forge 引导库");
+        }
+    } else if !names
+        .iter()
+        .any(|name| name.starts_with("net.minecraftforge:forge:"))
+    {
+        missing.push("Forge 核心库");
+    }
+    if split_client
+        && !cfg
+            .game_root()
+            .join("versions")
+            .join(id)
+            .join(format!("{id}.jar"))
+            .exists()
+    {
+        missing.push("补丁版客户端");
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    // 半成品清单留着只会让游戏静默退出，直接清掉让用户重装
+    let _ = std::fs::remove_dir_all(cfg.game_root().join("versions").join(id));
+    bail!(
+        "{loader} 安装器提前结束，清单缺少{}，已清理该版本。请重新安装 {loader}",
+        missing.join("、")
+    );
+}
+
+/// 安装器见到已存在的版本目录会跳过重写直接返回成功码，残缺清单会一直
+/// 留在盘上。所以装前先体检：完整的同名加载器直接复用，残缺的当场删掉。
+fn check_existing_loader(
+    cfg: &Config,
+    game_version: &str,
+    loader: &str,
+    requested: Option<&str>,
+) -> Option<String> {
+    let mut reuse: Option<String> = None;
+    for (name, id) in installed_loaders(cfg, game_version) {
+        if name != loader {
+            continue;
+        }
+        let version_matches = requested.map(|v| id.contains(v)).unwrap_or(true);
+        if verify_loader_manifest(cfg, &id, loader, game_version).is_ok() {
+            if version_matches && reuse.is_none() {
+                reuse = Some(id);
+            }
+            continue;
+        }
+        let _ = std::fs::remove_dir_all(cfg.game_root().join("versions").join(&id));
+    }
+    reuse
+}
+
+/// 加载器装好后的统一收尾：复制父版本 natives、汇总版本信息
+fn finish_loader_install(
+    cfg: &Config,
+    game_version: &str,
+    target: &str,
+) -> Result<InstalledVersion> {
+    if let Some(parent_natives) = {
+        let path = natives_dir(cfg, game_version);
+        path.exists().then_some(path)
+    } {
+        let dest = natives_dir(cfg, target);
+        if !dest.exists() {
+            std::fs::create_dir_all(&dest)?;
+            copy_dir_all(&parent_natives, &dest)?;
+        }
+    }
+    let detail = resolve_detail(cfg, target)?;
+    let jar_size = detail
+        .jar_id
+        .as_ref()
+        .and_then(|jar_id| {
+            std::fs::metadata(
+                cfg.game_root()
+                    .join("versions")
+                    .join(jar_id)
+                    .join(format!("{jar_id}.jar")),
+            )
+            .ok()
+        })
+        .map(|m| m.len())
+        .unwrap_or(0);
+    Ok(InstalledVersion {
+        dependency: false,
+        id: target.to_string(),
+        kind: "modded".into(),
+        jar_size,
+        has_jar: true,
+        last_modified: std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs(),
+        java_major: detail.detail.required_java(),
+    })
+}
+
 async fn install_forge_like(
     app: &AppHandle,
     client: &reqwest::Client,
@@ -918,11 +1097,20 @@ async fn install_forge_like(
     requested: Option<&str>,
     progress: Arc<ProgressState>,
 ) -> Result<InstalledVersion> {
+    // 清单完整的同名加载器不必重装，直接复用（重复导入整合包时秒过）
+    if let Some(existing) = check_existing_loader(cfg, game_version, loader, requested) {
+        download::begin_stage(app, &progress, format!("{loader} 已安装，直接复用"));
+        progress.files_total.store(1, Ordering::Relaxed);
+        progress.files_done.store(1, Ordering::Relaxed);
+        download::emit_now(app, &progress);
+        return finish_loader_install(cfg, game_version, &existing);
+    }
+
     let required = read_installed_detail(cfg, game_version)?.required_java();
     let java = launch::find_java(cfg, required)?;
 
     progress.set_message(format!("正在获取 {loader} 安装器地址…"));
-    let (version, url, file_name) = if let Some(version) = requested {
+    let (_, url, file_name) = if let Some(version) = requested {
         if loader == "neoforge" {
             neoforge_installer_for(game_version, version)
         } else {
@@ -945,15 +1133,57 @@ async fn install_forge_like(
         tokio::fs::write(&installer_path, bytes).await?;
     }
 
-    progress.set_message(format!(
-        "正在运行 {loader} 安装器（可能需要几分钟）…"
-    ));
+    // 官方安装器的 JVM 联网不受我们控制（--mirror 不覆盖 Mojang 源），
+    // 带处理器配置的安装器（Forge 1.13+ / 同代 NeoForge）优先原生安装
+    if crate::forge_native::supports_native(&installer_path) {
+        let target = crate::forge_native::install(
+            app,
+            client,
+            cfg,
+            &installer_path,
+            loader,
+            game_version,
+            &java.path,
+            progress,
+        )
+        .await?;
+        return finish_loader_install(cfg, game_version, &target);
+    }
+
     progress.files_total.store(1, Ordering::Relaxed);
     progress.files_done.store(0, Ordering::Relaxed);
-    progress.active.store(true, Ordering::Relaxed);
-    download::emit_now(app, &progress);
+    // 上一阶段（整合包下载）的字节数不能带进来，否则进度会直接显示 100%
+    progress.bytes_done.store(0, Ordering::Relaxed);
+    progress.bytes_total.store(0, Ordering::Relaxed);
+    download::begin_stage(
+        app,
+        &progress,
+        format!("正在运行 {loader} 安装器（可能需要几分钟）…"),
+    );
+
+    // Forge 安装器会检查目标目录里的启动器配置文件，没有就直接报错退出
+    let profiles = cfg.game_root().join("launcher_profiles.json");
+    if !profiles.exists() {
+        let _ = std::fs::write(
+            &profiles,
+            br#"{"profiles":{},"settings":{"language":"zh_cn"},"version":3}"#,
+        );
+    }
 
     let mut command = tokio::process::Command::new(&java.path);
+    // JVM 参数必须写在 -jar 之前，否则会被当成安装器自己的参数直接报错退出
+    if let Some(proxy) = crate::http::usable_system_proxy() {
+        let address = proxy
+            .trim_start_matches("http://")
+            .trim_start_matches("https://");
+        if let Some((host, port)) = address.rsplit_once(':') {
+            command
+                .arg(format!("-Dhttp.proxyHost={host}"))
+                .arg(format!("-Dhttp.proxyPort={port}"))
+                .arg(format!("-Dhttps.proxyHost={host}"))
+                .arg(format!("-Dhttps.proxyPort={port}"));
+        }
+    }
     command
         .arg("-jar")
         .arg(&installer_path)
@@ -976,52 +1206,128 @@ async fn install_forge_like(
     let mut child = command.spawn().context("启动 Forge/NeoForge 安装器失败")?;
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
+    // 保留最近几行安装器输出，失败时直接写进报错里
+    let tail: Arc<std::sync::Mutex<Vec<String>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
 
+    // 安装器用 \r 刷新进度条而不是换行，按行读会一直读不到东西
     let read_stream = |stream: Option<tokio::process::ChildStdout>,
-                       progress: Arc<ProgressState>| async move {
-        if let Some(stream) = stream {
-            use tokio::io::{AsyncBufReadExt, BufReader};
-            let mut lines = BufReader::new(stream).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let text = line.trim();
-                if !text.is_empty() {
-                    progress.set_message(text.chars().take(120).collect::<String>());
+                       progress: Arc<ProgressState>,
+                       tail: Arc<std::sync::Mutex<Vec<String>>>| async move {
+        if let Some(mut stream) = stream {
+            use tokio::io::AsyncReadExt;
+            let mut buffer = [0u8; 4096];
+            let mut pending = String::new();
+            loop {
+                match stream.read(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        pending.push_str(&String::from_utf8_lossy(&buffer[..read]));
+                        if let Some(position) = pending.rfind(['\r', '\n']) {
+                            let last = pending[..position].rsplit(['\r', '\n']).next().unwrap_or("");
+                            let text = last.trim();
+                            if !text.is_empty() {
+                                progress.set_detail(text.chars().take(120).collect::<String>());
+                                if let Ok(mut log) = tail.lock() {
+                                    log.push(text.chars().take(160).collect::<String>());
+                                    if log.len() > 8 {
+                                        log.remove(0);
+                                    }
+                                }
+                            }
+                            pending = pending[position + 1..].to_string();
+                        }
+                        if pending.len() > 4096 {
+                            pending.clear();
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
         }
     };
     let read_err = |stream: Option<tokio::process::ChildStderr>,
-                    progress: Arc<ProgressState>| async move {
-        if let Some(stream) = stream {
-            use tokio::io::{AsyncBufReadExt, BufReader};
-            let mut lines = BufReader::new(stream).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let text = line.trim();
-                if !text.is_empty() {
-                    progress.set_message(text.chars().take(120).collect::<String>());
+                    progress: Arc<ProgressState>,
+                    tail: Arc<std::sync::Mutex<Vec<String>>>| async move {
+        if let Some(mut stream) = stream {
+            use tokio::io::AsyncReadExt;
+            let mut buffer = [0u8; 4096];
+            let mut pending = String::new();
+            loop {
+                match stream.read(&mut buffer).await {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        pending.push_str(&String::from_utf8_lossy(&buffer[..read]));
+                        if let Some(position) = pending.rfind(['\r', '\n']) {
+                            let last = pending[..position].rsplit(['\r', '\n']).next().unwrap_or("");
+                            let text = last.trim();
+                            if !text.is_empty() {
+                                progress.set_detail(text.chars().take(120).collect::<String>());
+                                if let Ok(mut log) = tail.lock() {
+                                    log.push(text.chars().take(160).collect::<String>());
+                                    if log.len() > 8 {
+                                        log.remove(0);
+                                    }
+                                }
+                            }
+                            pending = pending[position + 1..].to_string();
+                        }
+                        if pending.len() > 4096 {
+                            pending.clear();
+                        }
+                    }
+                    Err(_) => break,
                 }
             }
         }
     };
 
-    let out_task = tokio::spawn(read_stream(stdout, progress.clone()));
-    let err_task = tokio::spawn(read_err(stderr, progress.clone()));
+    let out_task = tokio::spawn(read_stream(stdout, progress.clone(), tail.clone()));
+    let err_task = tokio::spawn(read_err(stderr, progress.clone(), tail.clone()));
 
-    let status = tokio::time::timeout(std::time::Duration::from_secs(900), child.wait())
-        .await
-        .map_err(|_| anyhow!("{loader} 安装器运行超时"))??;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if progress.is_cancelled() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let _ = out_task.await;
+            let _ = err_task.await;
+            bail!("已取消 {loader} 安装");
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            let _ = out_task.await;
+            let _ = err_task.await;
+            bail!("{loader} 安装器运行超过 15 分钟，已停止");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    };
     let _ = out_task.await;
     let _ = err_task.await;
     if !status.success() {
+        let detail = tail
+            .lock()
+            .map(|log| log.join("；"))
+            .unwrap_or_default();
         bail!(
-            "{} 安装器退出码：{}，请查看安装器输出或改用离线安装",
+            "{} 安装器退出码：{}{}",
             loader,
-            status.code().unwrap_or(-1)
+            status.code().unwrap_or(-1),
+            if detail.is_empty() {
+                String::new()
+            } else {
+                format!("。安装器输出：{detail}")
+            }
         );
     }
 
     progress.files_done.store(1, Ordering::Relaxed);
     progress.set_message(format!("{loader} 安装完成"));
+    download::emit_now(app, &progress);
 
     let target = installed_loaders(cfg, game_version)
         .into_iter()
@@ -1029,46 +1335,16 @@ async fn install_forge_like(
         .map(|(_, id)| id)
         .ok_or_else(|| anyhow!("安装器已结束，但没有找到 {loader} 版本，请检查游戏目录"))?;
 
-    if let Some(parent_natives) = {
-        let path = natives_dir(cfg, game_version);
-        path.exists().then_some(path)
-    } {
-        let dest = natives_dir(cfg, &target);
-        if !dest.exists() {
-            tokio::fs::create_dir_all(&dest).await?;
-            let source = parent_natives;
-            let dest_clone = dest.clone();
-            tokio::task::spawn_blocking(move || copy_dir_all(&source, &dest_clone)).await??;
+    // 安装器中途退出也会返回成功码，但清单不完整，启动时会直接崩。
+    // 校验失败时把安装器最后几行输出一并带回，方便定位它为什么没装完
+    if let Err(err) = verify_loader_manifest(cfg, &target, loader, game_version) {
+        let detail = tail.lock().map(|log| log.join("；")).unwrap_or_default();
+        if detail.is_empty() {
+            return Err(err);
         }
+        return Err(err.context(format!("安装器输出：{detail}")));
     }
-
-    let detail = resolve_detail(cfg, &target)?;
-    let jar_size = detail
-        .jar_id
-        .as_ref()
-        .and_then(|jar_id| {
-            std::fs::metadata(
-                cfg.game_root()
-                    .join("versions")
-                    .join(jar_id)
-                    .join(format!("{jar_id}.jar")),
-            )
-            .ok()
-        })
-        .map(|m| m.len())
-        .unwrap_or(0);
-    let _ = version;
-    Ok(InstalledVersion {
-        id: target,
-        kind: "modded".into(),
-        jar_size,
-        has_jar: true,
-        last_modified: std::time::SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-        java_major: detail.detail.required_java(),
-    })
+    finish_loader_install(cfg, game_version, &target)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1323,6 +1599,7 @@ pub async fn install_loader(
         .unwrap_or(0);
 
     Ok(InstalledVersion {
+        dependency: false,
         id: loader_id,
         kind: "modded".into(),
         jar_size,

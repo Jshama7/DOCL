@@ -85,7 +85,12 @@ const buckets = ref<Record<SourceKey, Bucket>>(emptyBuckets());
 const loading = ref(false);
 const error = ref("");
 const active = ref<CfProject | null>(null);
+const projectStack = ref<CfProject[]>([]);
 const files = ref<CfFileView[]>([]);
+const depFile = ref<CfFileView | null>(null);
+const depProjects = ref<CfProject[]>([]);
+const depLoading = ref(false);
+const depError = ref("");
 const filesLoading = ref(false);
 const filesError = ref("");
 
@@ -105,10 +110,14 @@ const importForm = reactive({
 
 const label = computed(() => CLASS_LABELS[props.kind] ?? "资源");
 const parentOptions = computed(() =>
-  store.installed.map((item) => ({ value: item.id, label: item.id }))
+  store.installed
+    .filter((item) => !item.dependency)
+    .map((item) => ({ value: item.id, label: item.id }))
 );
 const instanceOptions = computed(() =>
-  store.installed.map((v) => ({ value: v.id, label: v.id }))
+  store.installed
+    .filter((item) => !item.dependency)
+    .map((v) => ({ value: v.id, label: v.id }))
 );
 const versionOptions = computed(() => [
   {
@@ -304,14 +313,56 @@ async function loadMore() {
 }
 
 function openProject(project: CfProject) {
+  if (active.value && active.value.id !== project.id) {
+    projectStack.value.push(active.value);
+  }
   active.value = project;
   files.value = [];
   filesError.value = "";
+  depFile.value = null;
   loadFiles(project);
+}
+
+/// 返回上一级项目（从前置跳进来时），没有历史就回到搜索结果。
+function goBack() {
+  const previous = projectStack.value.pop();
+  if (!previous) {
+    active.value = null;
+    return;
+  }
+  active.value = previous;
+  files.value = [];
+  filesError.value = "";
+  depFile.value = null;
+  void loadFiles(previous);
+}
+
+/// 展开某个文件的前置列表；再次点击收起。
+async function toggleDeps(file: CfFileView) {
+  if (depFile.value?.id === file.id) {
+    depFile.value = null;
+    return;
+  }
+  depFile.value = file;
+  depProjects.value = [];
+  depError.value = "";
+  if (!file.dependencies.length) return;
+  depLoading.value = true;
+  try {
+    depProjects.value = await api.contentProjects(
+      active.value?.source ?? "modrinth",
+      file.dependencies
+    );
+  } catch (err) {
+    depError.value = String(err);
+  } finally {
+    depLoading.value = false;
+  }
 }
 
 async function loadFiles(project: CfProject) {
   filesLoading.value = true;
+  depFile.value = null;
   try {
     files.value =
       project.source === "modrinth"
@@ -554,9 +605,9 @@ async function confirmImport() {
       <div class="cf-detail-head">
         <IconButton
           icon="chevron-left"
-          label="返回搜索结果"
+          label="返回上一级"
           :size="34"
-          @click="active = null"
+          @click="goBack"
         />
         <img v-if="active.logo_url" class="cf-detail__logo" :src="active.logo_url" alt="" />
         <div class="cf-detail__text">
@@ -615,6 +666,15 @@ async function confirmImport() {
             <span v-if="releaseTag(file.release_type)" class="tag">
               {{ releaseTag(file.release_type) }}
             </span>
+            <button
+              v-if="file.dependencies.length"
+              class="cf-file__deps"
+              :class="{ 'cf-file__deps--open': depFile?.id === file.id }"
+              :title="`查看 ${file.dependencies.length} 项前置`"
+              @click="toggleDeps(file)"
+            >
+              前置 {{ file.dependencies.length }}
+            </button>
             <span class="cf-file__size mono">{{ formatBytes(file.size) }}</span>
             <span class="cf-file__date mono">{{ formatDate(file.file_date) }}</span>
             <IconButton
@@ -639,6 +699,38 @@ async function confirmImport() {
               无下载地址
             </span>
             <span v-else class="muted small cf-file__hint">先安装一个实例</span>
+
+            <div v-if="depFile?.id === file.id" class="cf-deps">
+              <span v-if="depLoading" class="cf-deps__state muted small">正在读取前置资源…</span>
+              <span v-else-if="depError" class="cf-deps__state muted small">{{ depError }}</span>
+              <span v-else-if="!depProjects.length" class="cf-deps__state muted small">
+                没有取到前置详情，安装时会自动尝试补齐。
+              </span>
+              <template v-else>
+                <span class="cf-deps__title">前置资源</span>
+                <div class="cf-deps__list">
+                  <button
+                    v-for="dep in depProjects"
+                    :key="dep.id"
+                    type="button"
+                    class="cf-dep"
+                    :title="`查看 ${dep.name}`"
+                    @click="openProject(dep)"
+                  >
+                    <img v-if="dep.logo_url" :src="dep.logo_url" alt="" class="cf-dep__logo" />
+                    <span v-else class="cf-dep__logo cf-dep__logo--empty" />
+                    <div class="cf-dep__text">
+                      <strong>{{ dep.name }}</strong>
+                      <span>{{ dep.summary }}</span>
+                    </div>
+                    <span class="tag">
+                      {{ dep.source === "modrinth" ? "Modrinth" : "CurseForge" }}
+                    </span>
+                    <AppIcon class="cf-dep__go" name="chevron-left" :size="12" />
+                  </button>
+                </div>
+              </template>
+            </div>
           </div>
         </div>
       </section>
@@ -1201,6 +1293,7 @@ async function confirmImport() {
 
 .cf-file {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   padding: 9px 11px;
@@ -1252,6 +1345,120 @@ async function confirmImport() {
 
 .cf-file__hint {
   font-size: 11px;
+}
+
+.cf-file__deps {
+  flex-shrink: 0;
+  height: 21px;
+  padding: 0 8px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 700;
+  transition: border-color var(--dur-1) ease, color var(--dur-1) ease,
+    background var(--dur-1) ease;
+}
+
+.cf-file__deps:hover,
+.cf-file__deps--open {
+  border-color: var(--moss);
+  color: var(--moss);
+  background: var(--moss-soft);
+}
+
+.cf-deps {
+  flex: 0 0 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 2px 0 4px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.cf-deps__title {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.cf-deps__state {
+  font-size: 11px;
+}
+
+.cf-deps__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cf-dep {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 6px;
+  margin: 0 -6px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-1) ease, border-color var(--dur-1) ease;
+}
+
+.cf-dep:hover {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+.cf-dep__go {
+  flex-shrink: 0;
+  color: var(--muted);
+  transform: scaleX(-1);
+}
+
+.cf-dep__logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  object-fit: cover;
+  background: var(--panel);
+  flex-shrink: 0;
+}
+
+.cf-dep__logo--empty {
+  display: block;
+}
+
+.cf-dep__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.cf-dep__text strong {
+  font-size: 12px;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cf-dep__text span {
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* 导入整合包弹层 */

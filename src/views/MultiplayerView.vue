@@ -130,6 +130,48 @@ const tcWaiting = computed(
 );
 const tcRoom = computed(() => tc.value?.state?.room ?? "");
 const tcUrl = computed(() => tc.value?.state?.url ?? "");
+
+/// 陶瓦会一直扫描直到发现局域网世界，这里给它加个上限，避免界面无限等待
+const SCAN_TIMEOUT = 45;
+const scanSeconds = ref(0);
+let scanTimer: number | undefined;
+
+function startScanClock() {
+  if (scanTimer) return;
+  scanSeconds.value = 0;
+  scanTimer = window.setInterval(() => {
+    scanSeconds.value += 1;
+    if (scanSeconds.value >= SCAN_TIMEOUT) void cancelScan(true);
+  }, 1000);
+}
+
+function stopScanClock() {
+  if (scanTimer) {
+    window.clearInterval(scanTimer);
+    scanTimer = undefined;
+  }
+  scanSeconds.value = 0;
+}
+
+async function cancelScan(timedOut: boolean) {
+  stopScanClock();
+  try {
+    await api.terracottaReset();
+  } catch {
+    // 重置失败也让界面回到可操作状态
+  }
+  await refreshTc();
+  if (timedOut) {
+    tcError.value =
+      "超过 45 秒没有发现局域网世界。请先在游戏里进入存档，按 Esc 点「对局域网开放」，再重新创建房间。";
+  }
+}
+
+watch(tcStateName, (state) => {
+  if (state === "host-scanning") startScanClock();
+  else stopScanClock();
+});
+
 const tcProfiles = computed(() => tc.value?.state?.profiles ?? []);
 const tcExceptionText = computed(() => {
   switch (tc.value?.state?.type ?? 0) {
@@ -461,6 +503,7 @@ function stopTcPolling() {
 async function hostTc() {
   if (tcBusy.value) return;
   tcBusy.value = true;
+  tcError.value = "";
   try {
     await api.terracottaHost(null, tcPlayer.value.trim() || null);
     await refreshTc();
@@ -541,6 +584,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer);
   if (serverTimer) window.clearInterval(serverTimer);
+  stopScanClock();
   stopTcPolling();
   stopPingPolling();
 });
@@ -849,9 +893,18 @@ onBeforeUnmount(() => {
           </p>
         </template>
 
-        <div v-else-if="tcStateName === 'host-scanning'" class="mp-empty">
+        <div v-else-if="tcStateName === 'host-scanning'" class="mp-empty mp-empty--card">
           <span class="mp-pulse" />
-          正在扫描本机局域网世界，请先在游戏里对局域网开放…
+          <div class="mp-empty__text">
+            <strong>正在扫描局域网世界</strong>
+            <span class="muted small">
+              请先在游戏里进入存档，按 Esc 点「对局域网开放」。
+              {{ SCAN_TIMEOUT - scanSeconds }} 秒后仍未发现会自动停止。
+            </span>
+          </div>
+          <WoodButton variant="ghost" size="sm" @click="cancelScan(false)">
+            停止扫描
+          </WoodButton>
         </div>
 
         <div v-else-if="tcStateName === 'host-starting'" class="mp-empty">

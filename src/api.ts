@@ -194,6 +194,8 @@ export interface InstalledVersion {
   has_jar: boolean;
   last_modified: number;
   java_major: number;
+  /// 仅作为整合包父版本存在
+  dependency: boolean;
 }
 
 export interface LoaderOption {
@@ -487,6 +489,35 @@ export interface CfFileView {
   download_url: string | null;
   game_versions: string[];
   release_type: number;
+  /// 必需前置的项目 ID
+  dependencies: string[];
+}
+
+/// 模组安装完成后，后端自动补齐前置的结果。
+export interface DependencyReport {
+  installed: string[];
+  failed: string[];
+  unresolved: string[];
+}
+
+export interface InstallOutcome {
+  path: string;
+  dependencies: DependencyReport;
+}
+
+export interface ModImportOutcome {
+  imported: number;
+  dependencies: DependencyReport;
+}
+
+/// 拖入窗口后由后端识别出的文件分类。
+export interface DroppedItem {
+  path: string;
+  file_name: string;
+  size: number;
+  kind: "mods" | "resourcepacks" | "shaderpacks" | "datapacks" | "saves" | "schematics" | "modpack" | "unknown";
+  label: string;
+  detail: string;
 }
 
 export interface AccountView {
@@ -512,9 +543,15 @@ export interface DeviceCode {
   interval: number;
 }
 
+export interface ProgressStep {
+  label: string;
+  done: boolean;
+}
+
 export interface ProgressSnapshot {
   stage: string;
   message: string;
+  steps: ProgressStep[];
   files_done: number;
   files_total: number;
   bytes_done: number;
@@ -560,6 +597,12 @@ export const api = {
   instanceMetas: () => invoke<Record<string, InstanceMeta>>("instance_metas"),
   instanceSaveMeta: (versionId: string, meta: InstanceMeta) =>
     invoke<InstanceInfo>("instance_save_meta", { versionId, meta }),
+  instanceSetIcon: (versionId: string, icon: string) =>
+    invoke<void>("instance_set_icon", { versionId, icon }),
+  instanceSetIconImage: (versionId: string, source: string) =>
+    invoke<string>("instance_set_icon_image", { versionId, source }),
+  instanceIconImage: (versionId: string) =>
+    invoke<string | null>("instance_icon_image", { versionId }),
   instanceFiles: (versionId: string, kind: string) =>
     invoke<InstanceFile[]>("instance_files", { versionId, kind }),
   instanceToggleFile: (versionId: string, kind: string, name: string) =>
@@ -572,6 +615,9 @@ export const api = {
     invoke<string | null>("instance_thumb", { versionId, kind, name }),
   instanceImportFiles: (versionId: string, kind: string, paths: string[]) =>
     invoke<number>("instance_import_files", { versionId, kind, paths }),
+  instanceImportMods: (versionId: string, paths: string[]) =>
+    invoke<ModImportOutcome>("instance_import_mods", { versionId, paths }),
+  dropInspect: (paths: string[]) => invoke<DroppedItem[]>("drop_inspect", { paths }),
   instancePaths: (versionId: string) =>
     invoke<InstancePaths>("instance_paths", { versionId }),
   instanceWorlds: (versionId: string) =>
@@ -663,8 +709,10 @@ export const api = {
       loader: loader ?? null,
     }),
   cfInstallFile: (versionId: string, kind: string, url: string, fileName: string) =>
-    invoke<string>("cf_install_file", { versionId, kind, url, fileName }),
-  deleteVersion: (versionId: string) => invoke<void>("delete_version", { versionId }),
+    invoke<InstallOutcome>("cf_install_file", { versionId, kind, url, fileName }),
+  contentProjects: (source: string, ids: string[]) =>
+    invoke<CfProject[]>("content_projects", { source, ids }),
+  deleteVersion: (versionId: string) => invoke<string[]>("delete_version", { versionId }),
   defaultSkin: () => invoke<string>("default_skin"),
   defaultSkins: () => invoke<DefaultSkin[]>("default_skins"),
   getAccounts: () => invoke<AccountView[]>("get_accounts"),

@@ -45,3 +45,24 @@ export function formatDuration(ms: number): string {
   const seconds = total % 60;
   return minutes > 0 ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
 }
+
+export interface IconPreset {
+  value: string;
+  label: string;
+  color: string;
+}
+
+/// 版本图标预设，版本列表与版本设置共用
+export const ICON_PRESETS: IconPreset[] = [
+  { value: "auto", label: "自动", color: "#8b9d6f" },
+  { value: "grass", label: "草方块", color: "#6f8f5a" },
+  { value: "diamond", label: "钻石", color: "#5fa7a0" },
+  { value: "gold", label: "黄金", color: "#cf9f45" },
+  { value: "redstone", label: "红石", color: "#b8543f" },
+  { value: "nether", label: "下界", color: "#7c4a3f" },
+  { value: "end", label: "末地", color: "#6f5f86" },
+];
+
+export function iconColor(value?: string): string {
+  return ICON_PRESETS.find((preset) => preset.value === value)?.color ?? "#8b9d6f";
+}

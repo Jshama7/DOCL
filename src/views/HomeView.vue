@@ -12,6 +12,7 @@ import {
   selectedAccount,
   selectedVersion,
   selectVersion,
+  stopGame,
   store,
 } from "../store";
 import { formatBytes, kindLabel } from "../utils";
@@ -152,7 +153,7 @@ onBeforeUnmount(() => document.removeEventListener("mousedown", onDocClick));
               sheen
               class="hero-cta"
               :disabled="isInstalling"
-              @click="launchVersion()"
+              @click="store.gameRunning ? stopGame() : launchVersion()"
             >
               <AppIcon :name="store.gameRunning ? 'stop' : 'play'" :size="16" />
               {{ store.gameRunning ? "停止游戏" : "启动游戏" }}

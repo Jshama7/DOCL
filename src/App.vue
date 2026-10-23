@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed, markRaw, onMounted, ref } from "vue";
+import { computed, markRaw, onBeforeUnmount, onMounted, ref } from "vue";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
 import TitleBar from "./components/TitleBar.vue";
 import DownloadCenter from "./components/DownloadCenter.vue";
 import LogDrawer from "./components/LogDrawer.vue";
 import CrashDialog from "./components/CrashDialog.vue";
+import DropImportDialog from "./components/DropImportDialog.vue";
+import AppIcon from "./components/AppIcon.vue";
 import HomeView from "./views/HomeView.vue";
 import VersionsView from "./views/VersionsView.vue";
 import DownloadView from "./views/DownloadView.vue";
@@ -12,7 +15,7 @@ import SkinsView from "./views/SkinsView.vue";
 import InstanceView from "./views/InstanceView.vue";
 import MultiplayerView from "./views/MultiplayerView.vue";
 import SettingsView from "./views/SettingsView.vue";
-import { api } from "./api";
+import { api, type DroppedItem } from "./api";
 import {
   initApp,
   notify,
@@ -24,6 +27,9 @@ import {
 } from "./store";
 
 const appVersion = ref("");
+const dropActive = ref(false);
+const dropItems = ref<DroppedItem[]>([]);
+let unlistenDrop: (() => void) | undefined;
 
 onMounted(async () => {
   window.addEventListener("docl-open-error", (event) => {
@@ -32,7 +38,47 @@ onMounted(async () => {
   await initApp();
   void loadVersion();
   void checkStartupUpdate();
+  void listenDrop();
 });
+
+onBeforeUnmount(() => {
+  unlistenDrop?.();
+});
+
+/// 拖入文件后交给后端识别分类，识别结果决定弹窗里怎么装。
+async function listenDrop() {
+  try {
+    unlistenDrop = await getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type === "enter" || payload.type === "over") {
+        dropActive.value = true;
+        return;
+      }
+      dropActive.value = false;
+      if (payload.type === "drop") void handleDrop(payload.paths);
+    });
+  } catch {
+    // 拖放不可用时不影响其他功能
+  }
+}
+
+async function handleDrop(paths: string[]) {
+  if (!paths.length) return;
+  if (store.installingId) {
+    notify("已有任务正在进行，请稍后再导入", "err");
+    return;
+  }
+  try {
+    const items = await api.dropInspect(paths);
+    if (!items.length) {
+      notify("没有找到可导入的文件", "err");
+      return;
+    }
+    dropItems.value = items;
+  } catch (err) {
+    notify(`识别文件失败：${String(err)}`, "err");
+  }
+}
 
 async function loadVersion() {
   try {
@@ -156,6 +202,23 @@ const statusText = computed(() => {
     <LogDrawer />
     <CrashDialog />
 
+    <Transition name="drop">
+      <div v-if="dropActive" class="drop-hint">
+        <div class="drop-hint__card">
+          <AppIcon name="package" :size="30" />
+          <strong>松开以导入</strong>
+          <span>自动识别模组、资源包、光影、数据包、存档与整合包</span>
+        </div>
+      </div>
+    </Transition>
+
+    <DropImportDialog
+      v-if="dropItems.length"
+      :items="dropItems"
+      @close="dropItems = []"
+      @done="dropItems = []"
+    />
+
     <Transition name="toast">
       <div v-if="store.toast" class="toast" :class="{ 'toast--err': store.toast.kind === 'err' }">
         {{ store.toast.text }}
@@ -165,6 +228,50 @@ const statusText = computed(() => {
 </template>
 
 <style scoped>
+.drop-hint {
+  position: fixed;
+  inset: 0;
+  z-index: 78;
+  display: grid;
+  place-items: center;
+  background: rgba(52, 38, 24, 0.26);
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+
+.drop-hint__card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 30px 46px;
+  border-radius: 18px;
+  border: 2px dashed var(--moss);
+  background: var(--panel);
+  box-shadow: 0 24px 60px rgba(50, 34, 18, 0.28);
+  color: var(--walnut-deep);
+}
+
+.drop-hint__card strong {
+  font-size: 17px;
+  letter-spacing: 0.04em;
+}
+
+.drop-hint__card span {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.drop-enter-active,
+.drop-leave-active {
+  transition: opacity 140ms ease;
+}
+
+.drop-enter-from,
+.drop-leave-to {
+  opacity: 0;
+}
+
 .toast-enter-active,
 .toast-leave-active {
   transition: opacity 160ms ease;

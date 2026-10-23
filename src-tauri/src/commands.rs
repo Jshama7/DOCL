@@ -387,15 +387,67 @@ pub fn cancel_install(state: State<'_, AppState>) {
     }
 }
 
-#[tauri::command]
-pub fn delete_version(state: State<'_, AppState>, version_id: String) -> CmdResult<()> {
-    let cfg = state.config.lock().unwrap().clone();
-    let dir = install::resolve_version_dir(&cfg, &version_id);
+fn remove_version_files(cfg: &Config, version_id: &str) {
+    let dir = install::resolve_version_dir(cfg, version_id);
     if dir.exists() {
-        std::fs::remove_dir_all(&dir).map_err(err)?;
+        let _ = std::fs::remove_dir_all(&dir);
     }
-    let _ = instance::remove(&cfg, &version_id);
-    Ok(())
+    let _ = instance::remove(cfg, version_id);
+}
+
+fn collect_version_ids(cfg: &Config) -> Vec<String> {
+    let dir = cfg.game_root().join("versions");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .filter(|id| dir.join(id).join(format!("{id}.json")).exists())
+        .collect()
+}
+
+/// 依赖版本只要还有别的版本在用就保留，避免误删共享的原版 / 加载器
+fn is_referenced(cfg: &Config, target: &str, excluded: &[String]) -> bool {
+    collect_version_ids(cfg).iter().any(|id| {
+        if excluded.contains(id) {
+            return false;
+        }
+        id == target
+            || install::resolve_detail(cfg, id)
+                .map(|merged| merged.chain.iter().any(|part| part == target))
+                .unwrap_or(false)
+    })
+}
+
+#[tauri::command]
+pub fn delete_version(state: State<'_, AppState>, version_id: String) -> CmdResult<Vec<String>> {
+    let cfg = state.config.lock().unwrap().clone();
+
+    let was_modpack = instance::get(&cfg, &version_id).category == "modpack";
+    let chain: Vec<String> = if was_modpack {
+        install::resolve_detail(&cfg, &version_id)
+            .map(|merged| merged.chain)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    remove_version_files(&cfg, &version_id);
+    let mut removed = vec![version_id.clone()];
+
+    // PCL 式体验：删整合包时把继承的原版 / 加载器一起带走，留一个孤儿都会占磁盘
+    for parent in &chain {
+        if parent == &version_id || removed.contains(parent) {
+            continue;
+        }
+        if !is_referenced(&cfg, parent, &removed) {
+            remove_version_files(&cfg, parent);
+            removed.push(parent.clone());
+        }
+    }
+    Ok(removed)
 }
 
 #[tauri::command]
@@ -424,6 +476,35 @@ pub fn instance_save_meta(
     let cfg = state.config.lock().unwrap().clone();
     instance::save(&cfg, &version_id, &meta).map_err(err)?;
     instance::info(&cfg, &version_id).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_set_icon(
+    state: State<'_, AppState>,
+    version_id: String,
+    icon: String,
+) -> CmdResult<()> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::set_icon(&cfg, &version_id, &icon).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_set_icon_image(
+    state: State<'_, AppState>,
+    version_id: String,
+    source: String,
+) -> CmdResult<String> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::set_icon_image(&cfg, &version_id, &source).map_err(err)
+}
+
+#[tauri::command]
+pub fn instance_icon_image(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> Option<String> {
+    let cfg = state.config.lock().unwrap().clone();
+    instance::icon_image(&cfg, &version_id)
 }
 
 #[tauri::command]
@@ -489,6 +570,66 @@ pub fn instance_import_files(
 ) -> CmdResult<u32> {
     let cfg = state.config.lock().unwrap().clone();
     instance::import_paths(&cfg, &version_id, &kind, &paths).map_err(err)
+}
+
+#[tauri::command]
+pub fn drop_inspect(paths: Vec<String>) -> Vec<crate::dropzone::DroppedItem> {
+    crate::dropzone::inspect(&paths)
+}
+
+#[tauri::command]
+pub async fn instance_import_mods(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    version_id: String,
+    paths: Vec<String>,
+) -> CmdResult<crate::moddeps::ModImportOutcome> {
+    let cfg = state.config.lock().unwrap().clone();
+    {
+        let guard = state.progress.lock().unwrap();
+        if let Some(p) = guard.as_ref() {
+            if p.active.load(Ordering::Relaxed) {
+                return Err("已有下载任务正在进行".into());
+            }
+        }
+    }
+    let progress = ProgressState::new("install");
+    progress.set_message("正在导入模组…");
+    *state.progress.lock().unwrap() = Some(progress.clone());
+
+    let result = async {
+        let imported = instance::import_paths(&cfg, &version_id, "mods", &paths)?;
+        let mut report = crate::moddeps::DependencyReport::default();
+        for path in &paths {
+            let jar = std::path::Path::new(path);
+            if !jar.is_file() || !path.to_lowercase().ends_with(".jar") {
+                continue;
+            }
+            let part = crate::moddeps::install_missing(
+                &app,
+                &state.client,
+                &cfg,
+                &version_id,
+                jar,
+                progress.clone(),
+            )
+            .await;
+            report.installed.extend(part.installed);
+            report.failed.extend(part.failed);
+            report.unresolved.extend(part.unresolved);
+        }
+        Ok::<_, anyhow::Error>(crate::moddeps::ModImportOutcome {
+            imported,
+            dependencies: report,
+        })
+    }
+    .await;
+
+    progress.active.store(false, Ordering::Relaxed);
+    download::emit_now(&app, &progress);
+    *state.progress.lock().unwrap() = None;
+
+    result.map_err(err)
 }
 
 #[tauri::command]
@@ -794,6 +935,25 @@ pub async fn modrinth_files(
 }
 
 #[tauri::command]
+pub async fn content_projects(
+    state: State<'_, AppState>,
+    source: String,
+    ids: Vec<String>,
+) -> CmdResult<Vec<curseforge::CfProject>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if source == "modrinth" {
+        crate::modrinth::projects(&state.client, &ids)
+            .await
+            .map_err(err)
+    } else {
+        let parsed: Vec<i64> = ids.iter().filter_map(|id| id.parse().ok()).collect();
+        Ok(curseforge::projects(&state.client, &parsed).await)
+    }
+}
+
+#[tauri::command]
 pub async fn cf_install_file(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -801,7 +961,7 @@ pub async fn cf_install_file(
     kind: String,
     url: String,
     file_name: String,
-) -> CmdResult<String> {
+) -> CmdResult<curseforge::InstallOutcome> {
     let cfg = state.config.lock().unwrap().clone();
     {
         let guard = state.progress.lock().unwrap();

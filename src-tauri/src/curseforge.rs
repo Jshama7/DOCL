@@ -41,6 +41,18 @@ struct CfFile {
     game_versions: Vec<String>,
     #[serde(default)]
     release_type: i32,
+    #[serde(default)]
+    dependencies: Vec<CfDependency>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CfDependency {
+    #[serde(default)]
+    mod_id: i64,
+    /// 3 = 必需前置，2 = 可选，1 = 内置
+    #[serde(default)]
+    relation_type: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,6 +136,8 @@ pub struct CfFileView {
     pub download_url: Option<String>,
     pub game_versions: Vec<String>,
     pub release_type: i32,
+    /// 必需前置的项目 ID，供界面显示「N 项前置」
+    pub dependencies: Vec<String>,
 }
 
 fn loader_id(loader: &str) -> Option<&'static str> {
@@ -171,41 +185,7 @@ pub async fn search(
 
     let response: CfSearchResponse =
         download::get_json(client, url.as_str(), false).await?;
-    let items = response
-        .data
-        .into_iter()
-        .map(|project| CfProject {
-            source: "curseforge".into(),
-            id: project.id.to_string(),
-            name: project.name,
-            slug: project.slug,
-            summary: project.summary,
-            download_count: project.download_count,
-            class_id: project.class_id,
-            logo_url: project
-                .logo
-                .map(|logo| {
-                    if logo.thumbnail_url.is_empty() {
-                        logo.url
-                    } else {
-                        logo.thumbnail_url
-                    }
-                })
-                .unwrap_or_default(),
-            author: project
-                .authors
-                .first()
-                .map(|author| author.name.clone())
-                .unwrap_or_default(),
-            updated: project.date_modified,
-            categories: project
-                .categories
-                .into_iter()
-                .map(|category| category.name)
-                .filter(|name| !name.is_empty())
-                .collect(),
-        })
-        .collect();
+    let items = response.data.into_iter().map(to_project).collect();
     Ok(CfSearchResult {
         items,
         total: response
@@ -213,6 +193,56 @@ pub async fn search(
             .map(|p| p.total_count)
             .unwrap_or(0),
     })
+}
+
+fn to_project(project: CfMod) -> CfProject {
+    CfProject {
+        source: "curseforge".into(),
+        id: project.id.to_string(),
+        name: project.name,
+        slug: project.slug,
+        summary: project.summary,
+        download_count: project.download_count,
+        class_id: project.class_id,
+        logo_url: project
+            .logo
+            .map(|logo| {
+                if logo.thumbnail_url.is_empty() {
+                    logo.url
+                } else {
+                    logo.thumbnail_url
+                }
+            })
+            .unwrap_or_default(),
+        author: project
+            .authors
+            .first()
+            .map(|author| author.name.clone())
+            .unwrap_or_default(),
+        updated: project.date_modified,
+        categories: project
+            .categories
+            .into_iter()
+            .map(|category| category.name)
+            .filter(|name| !name.is_empty())
+            .collect(),
+    }
+}
+
+/// 按项目 ID 取详情，用于下载页展示前置资源。
+pub async fn projects(client: &reqwest::Client, ids: &[i64]) -> Vec<CfProject> {
+    #[derive(Deserialize)]
+    struct CfModResponse {
+        data: CfMod,
+    }
+    let mut result = Vec::new();
+    for id in ids.iter().take(10) {
+        let url = format!("{BASE}/mods/{id}");
+        if let Ok(response) = download::get_json::<CfModResponse>(client, &url, false).await {
+            result.push(to_project(response.data));
+        }
+    }
+    result
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -293,6 +323,12 @@ pub async fn files(
             download_url: file.download_url,
             game_versions: file.game_versions,
             release_type: file.release_type,
+            dependencies: file
+                .dependencies
+                .into_iter()
+                .filter(|dep| dep.relation_type == 3 && dep.mod_id > 0)
+                .map(|dep| dep.mod_id.to_string())
+                .collect(),
         })
         .collect();
     files.sort_by(|a, b| b.file_date.cmp(&a.file_date));
@@ -324,6 +360,12 @@ pub async fn file_download(
     Ok((download_url, name))
 }
 
+#[derive(Debug, Serialize)]
+pub struct InstallOutcome {
+    pub path: String,
+    pub dependencies: crate::moddeps::DependencyReport,
+}
+
 pub async fn install_file(
     app: &AppHandle,
     client: &reqwest::Client,
@@ -333,7 +375,7 @@ pub async fn install_file(
     url: &str,
     file_name: &str,
     progress: Arc<ProgressState>,
-) -> Result<String> {
+) -> Result<InstallOutcome> {
     let name = Path::new(file_name)
         .file_name()
         .map(|value| value.to_string_lossy().to_string())
@@ -347,6 +389,36 @@ pub async fn install_file(
         size: 0,
         label: name,
     };
-    download::run_tasks(app, client, vec![task], 1, false, progress).await?;
-    Ok(dest.to_string_lossy().to_string())
+    download::run_tasks(app, client, vec![task], 1, false, progress.clone()).await?;
+
+    // 模组装好后顺手补齐它声明的必需前置，装不上的留给前端提示
+    let mut dependencies = crate::moddeps::DependencyReport::default();
+    if matches!(kind, "mods" | "mod") {
+        progress.set_message("检查模组前置…");
+        download::emit_now(app, &progress);
+        dependencies = crate::moddeps::install_missing(
+            app,
+            client,
+            cfg,
+            instance_id,
+            &dest,
+            progress.clone(),
+        )
+        .await;
+    }
+
+    // 前置检查结束后必须改写进度文案，否则面板会一直停在「检查模组前置…」
+    let done = if !dependencies.installed.is_empty() {
+        format!("安装完成，已补齐前置 {}", dependencies.installed.join("、"))
+    } else if !dependencies.unresolved.is_empty() {
+        format!("安装完成，缺少前置 {}", dependencies.unresolved.join("、"))
+    } else {
+        "安装完成".to_string()
+    };
+    progress.set_message(done);
+
+    Ok(InstallOutcome {
+        path: dest.to_string_lossy().to_string(),
+        dependencies,
+    })
 }

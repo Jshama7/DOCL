@@ -50,6 +50,14 @@ struct MrFile {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+struct MrDependency {
+    #[serde(default)]
+    project_id: Option<String>,
+    #[serde(default)]
+    dependency_type: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct MrVersion {
     #[serde(default)]
     id: String,
@@ -63,6 +71,8 @@ struct MrVersion {
     date_published: String,
     #[serde(default)]
     game_versions: Vec<String>,
+    #[serde(default)]
+    dependencies: Vec<MrDependency>,
     #[serde(default)]
     files: Vec<MrFile>,
 }
@@ -210,9 +220,67 @@ pub async fn files(
                 "alpha" => 3,
                 _ => 1,
             },
+            dependencies: version
+                .dependencies
+                .into_iter()
+                .filter(|dep| dep.dependency_type == "required")
+                .filter_map(|dep| dep.project_id)
+                .collect(),
         });
     }
     files.sort_by(|a, b| b.file_date.cmp(&a.file_date));
     files.truncate(25);
     Ok(files)
+}
+
+#[derive(Debug, Deserialize)]
+struct MrProjectDetail {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    slug: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    downloads: u64,
+    #[serde(default)]
+    date_modified: String,
+    #[serde(default)]
+    categories: Vec<String>,
+    #[serde(default)]
+    icon_url: Option<String>,
+}
+
+/// 按项目 ID 取详情，用于下载页展示前置资源。
+pub async fn projects(client: &reqwest::Client, ids: &[String]) -> Result<Vec<CfProject>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let list: Vec<&String> = ids.iter().take(10).collect();
+    let encoded = serde_json::to_string(&list)?;
+    let mut url = reqwest::Url::parse(&format!("{BASE}/projects"))?;
+    url.query_pairs_mut().append_pair("ids", &encoded);
+    let projects: Vec<MrProjectDetail> = download::get_json(client, url.as_str(), false).await?;
+    Ok(projects
+        .into_iter()
+        .map(|project| CfProject {
+            source: "modrinth".into(),
+            id: project.id,
+            name: project.title,
+            slug: project.slug,
+            summary: project.description,
+            download_count: project.downloads,
+            class_id: 0,
+            logo_url: project.icon_url.unwrap_or_default(),
+            author: String::new(),
+            updated: project.date_modified,
+            categories: project
+                .categories
+                .into_iter()
+                .filter(|name| loader_tag(name).is_none())
+                .collect(),
+        })
+        .collect())
 }

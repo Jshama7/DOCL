@@ -72,6 +72,11 @@ fn proxy_reachable(address: &str) -> bool {
     false
 }
 
+/// 给 Java 子进程用的系统代理地址，已确认端口可连接。
+pub fn usable_system_proxy() -> Option<String> {
+    system_proxy().filter(|address| proxy_reachable(address))
+}
+
 pub fn client() -> reqwest::Client {
     let mut builder = reqwest::Client::builder()
         .user_agent(concat!("DOCL/", env!("CARGO_PKG_VERSION"), " (Minecraft Launcher)"))

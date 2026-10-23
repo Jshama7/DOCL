@@ -33,6 +33,8 @@ export type Page =
 export const store = reactive({
   page: "home" as Page,
   instanceId: null as string | null,
+  /// 实例内容被外部改动（例如拖入导入）后自增，用于通知已打开的实例页刷新
+  contentRevision: 0,
   metas: {} as Record<string, InstanceMeta>,
   communityContext: null as {
     kind: string;
@@ -250,6 +252,7 @@ function primeProgress(stage: string, message: string) {
   store.progress = {
     stage,
     message,
+    steps: [{ label: message, done: false }],
     files_done: 0,
     files_total: 0,
     bytes_done: 0,
@@ -339,8 +342,15 @@ export async function installCfFile(
   store.downloadPanel = "open";
   primeProgress("install", `准备下载 ${title}…`);
   try {
-    await api.cfInstallFile(versionId, kind, url, fileName);
-    notify(`${title} 下载完成`);
+    const result = await api.cfInstallFile(versionId, kind, url, fileName);
+    const deps = result.dependencies;
+    const notes: string[] = [];
+    if (deps.installed.length) notes.push(`已自动补齐前置 ${deps.installed.join("、")}`);
+    if (deps.failed.length) notes.push(`前置下载失败：${deps.failed.join("、")}`);
+    notify(`${title} 下载完成${notes.length ? `，${notes.join("；")}` : ""}`);
+    if (deps.unresolved.length) {
+      store.lastJobError = `缺少前置：${deps.unresolved.join("、")}。当前实例的版本或加载器下没有找到对应文件，请手动安装。`;
+    }
   } catch (err) {
     store.lastJobError = String(err);
     notify(`下载失败：${String(err)}`, "err");
@@ -535,6 +545,18 @@ export async function beginMsLogin() {
   }
 }
 
+/// 单独暴露停止入口，启动按钮不再承担结束动作。
+export async function stopGame() {
+  if (!store.gameRunning) return;
+  store.stoppedByUser = true;
+  try {
+    await api.killGame();
+    notify("正在停止游戏");
+  } catch (err) {
+    notify(String(err), "err");
+  }
+}
+
 export async function launchVersion(id?: string) {
   const target = id ?? selectedVersion.value?.id;
   if (!target) {
@@ -543,12 +565,8 @@ export async function launchVersion(id?: string) {
     return;
   }
   if (store.gameRunning) {
-    store.stoppedByUser = true;
-    try {
-      await api.killGame();
-    } catch (err) {
-      notify(String(err), "err");
-    }
+    // 同一个按钮不能既启动又结束，避免误触把正在启动的游戏杀掉
+    notify("游戏已在运行，停止请点「停止游戏」");
     return;
   }
   store.runningVersionId = target;
@@ -619,15 +637,46 @@ export async function forgetServer(address: string) {
 
 export async function uninstallVersion(id: string) {
   try {
-    await api.deleteVersion(id);
+    const removed = await api.deleteVersion(id);
     await refreshInstalled();
-    if (store.config?.selected_version === id) {
+    if (store.config?.selected_version && removed.includes(store.config.selected_version)) {
       await saveConfig({ selected_version: store.installed[0]?.id ?? null });
     }
     await refreshInstanceMetas();
-    notify(`已删除 ${id}`);
+    notify(
+      removed.length > 1
+        ? `已删除 ${id} 及 ${removed.length - 1} 个依赖版本`
+        : `已删除 ${id}`
+    );
   } catch (err) {
     notify(`删除失败：${String(err)}`, "err");
+  }
+}
+
+export async function setInstanceIcon(id: string, icon: string) {
+  try {
+    await api.instanceSetIcon(id, icon);
+    await refreshInstanceMetas();
+  } catch (err) {
+    notify(`图标保存失败：${String(err)}`, "err");
+  }
+}
+
+export async function setInstanceIconImage(id: string, source: string) {
+  try {
+    await api.instanceSetIconImage(id, source);
+    await refreshInstanceMetas();
+    notify("已更新版本图标");
+  } catch (err) {
+    notify(`图标保存失败：${String(err)}`, "err");
+  }
+}
+
+export async function loadInstanceIconImage(id: string) {
+  try {
+    return await api.instanceIconImage(id);
+  } catch {
+    return null;
   }
 }
 

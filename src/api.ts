@@ -577,6 +577,7 @@ export const api = {
   newsArticle: (path: string) => invoke<string>("news_article", { path }),
   saveConfig: (config: Config) => invoke<Config>("save_config", { config }),
   gameDirs: () => invoke<GameDirsView>("game_dirs"),
+  gameDirVersionCounts: () => invoke<Record<string, number>>("game_dir_version_counts"),
   addGameDir: (path: string) => invoke<Config>("add_game_dir", { path }),
   switchGameDir: (path: string) => invoke<Config>("switch_game_dir", { path }),
   removeGameDir: (path: string) => invoke<Config>("remove_game_dir", { path }),

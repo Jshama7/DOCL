@@ -19,6 +19,7 @@ import { api, type DroppedItem } from "./api";
 import {
   initApp,
   notify,
+  sameDir,
   selectedAccount,
   selectedVersion,
   startupUpdate,
@@ -138,6 +139,14 @@ const javaLabel = computed(() => {
   return java ? `Java ${java.major}` : `缺少 Java ${version.java_major}`;
 });
 
+/// 多目录时在状态栏标出当前目录，避免分不清版本属于哪里
+const activeDirLabel = computed(() => {
+  const config = store.config;
+  const dirs = config?.game_dirs ?? [];
+  if (!config || dirs.length <= 1) return "";
+  return dirs.find((dir) => sameDir(dir.path, config.game_dir))?.name ?? "";
+});
+
 const statusText = computed(() => {
   if (store.gameRunning) return "游戏运行中";
   if (store.installingId) return `正在安装 ${store.installingId}`;
@@ -188,13 +197,14 @@ const statusText = computed(() => {
         :class="{ 'statusbar__dot--run': store.gameRunning || !!store.installingId }"
       />
       <span>{{ statusText }}</span>
+      <span v-if="activeDirLabel">目录 {{ activeDirLabel }}</span>
       <span v-if="selectedVersion">版本 {{ selectedVersion.id }}</span>
       <span>{{ javaLabel }}</span>
       <span>账号 {{ selectedAccount?.name ?? "未登录" }}</span>
       <div class="statusbar__right">
         <span>{{ store.installed.length }} VERSIONS</span>
         <span>{{ store.javaList.length }} JAVA</span>
-        <span>DOCL {{ appVersion || "1.1.0" }}</span>
+        <span>DOCL {{ appVersion || "1.2.1" }}</span>
       </div>
     </footer>
 

@@ -2,15 +2,17 @@ use crate::config;
 use crate::download;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use sha1::{Digest, Sha1};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 const PKG_URL: &str =
     "https://github.com/burningtnt/Terracotta/releases/download/v0.4.2/terracotta-0.4.2-windows-x86_64-pkg.tar.gz";
+const PKG_SHA1: &str = "4d634eff075da6cf86514ec88f34168620b60991";
 const PKG_EXE: &str = "terracotta-0.4.2-windows-x86_64.exe";
 const BIN_NAME: &str = "terracotta.exe";
 
@@ -27,12 +29,23 @@ struct TcRuntime {
     port: u16,
     version: String,
     client: reqwest::Client,
+    /// 进程由本实例启动；复用了其他启动器已在跑的实例时为 false，
+    /// 退出时不能发 /panic，否则会把别人的房间一起关掉
+    owned: bool,
+    /// 引导进程句柄，仅用于超时兜底与回收
+    child: Option<Child>,
 }
 
 static SLOT: OnceLock<Mutex<Option<TcRuntime>>> = OnceLock::new();
 
 fn slot() -> &'static Mutex<Option<TcRuntime>> {
     SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// 串行化启动流程，避免并发调用重复下载/启动两个进程
+fn prepare_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
 fn terracotta_dir() -> PathBuf {
@@ -69,6 +82,10 @@ async fn ensure_binary(client: &reqwest::Client) -> Result<PathBuf> {
     let bytes = download::get_bytes(client, PKG_URL, false)
         .await
         .context("下载陶瓦联机组件失败，请检查网络后重试")?;
+    let actual = format!("{:x}", Sha1::digest(&bytes));
+    if !actual.eq_ignore_ascii_case(PKG_SHA1) {
+        bail!("陶瓦联机组件校验失败，文件可能已损坏，请稍后重试");
+    }
     let pkg = dir.join("terracotta-pkg.tar.gz");
     std::fs::write(&pkg, &bytes)?;
 
@@ -95,7 +112,7 @@ async fn ensure_binary(client: &reqwest::Client) -> Result<PathBuf> {
     Ok(target)
 }
 
-fn start_process(exe: &Path) -> Result<u16> {
+fn start_process(exe: &Path) -> Result<(u16, Child)> {
     let dir = terracotta_dir();
     let port_file = dir.join("port.json");
     let _ = std::fs::remove_file(&port_file);
@@ -116,7 +133,7 @@ fn start_process(exe: &Path) -> Result<u16> {
             if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
                 if let Some(port) = value.get("port").and_then(|port| port.as_u64()) {
                     if port > 0 && port < 65536 {
-                        return Ok(port as u16);
+                        return Ok((port as u16, child));
                     }
                 }
             }
@@ -124,6 +141,7 @@ fn start_process(exe: &Path) -> Result<u16> {
         std::thread::sleep(Duration::from_millis(100));
     }
     let _ = child.kill();
+    let _ = child.wait();
     bail!("陶瓦联机组件启动超时")
 }
 
@@ -154,14 +172,58 @@ fn current() -> Result<(u16, reqwest::Client)> {
     Ok((runtime.port, runtime.client.clone()))
 }
 
+/// 陶瓦自身在系统临时目录写锁文件，内容为 2 字节大端端口号。
+/// 用来判断启动前是否已有别的启动器实例在跑。
+fn lock_port() -> Option<u16> {
+    let path = std::env::temp_dir()
+        .join("terracotta")
+        .join("terracotta.lock");
+    let bytes = std::fs::read(path).ok()?;
+    if bytes.len() < 2 {
+        return None;
+    }
+    let port = u16::from_be_bytes([bytes[0], bytes[1]]);
+    (port > 0).then_some(port)
+}
+
+/// 探测组件是否真的活着；本地回环请求很快，连续三次失败才判定为不可用，
+/// 避免系统瞬时卡顿被误判成进程死亡而重启房间
+async fn reachable(port: u16) -> bool {
+    let probe = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(Duration::from_millis(1500))
+        .build()
+        .unwrap_or_else(|_| local_client());
+    for _ in 0..3 {
+        if fetch_state(port, &probe).await.is_some() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+    false
+}
+
 /// 首次使用时下载并启动陶瓦联机组件，随后返回当前状态。
 pub async fn prepare(client: &reqwest::Client) -> Result<TcStatus> {
-    if current().is_ok() {
-        return Ok(status().await);
+    let _guard = prepare_lock().lock().await;
+
+    if let Ok((port, _http)) = current() {
+        if reachable(port).await {
+            return Ok(status().await);
+        }
+        // 组件已退出或卡死：清掉死槽位，走一次真正的重启
+        *slot().lock().unwrap() = None;
     }
 
+    // 启动前已有别的启动器在跑陶瓦时，本实例只是附属进程，
+    // 退出时不能发 /panic，否则会把别人的房间一起关掉
+    let shared = match lock_port() {
+        Some(port) => reachable(port).await,
+        None => false,
+    };
+
     let exe = ensure_binary(client).await?;
-    let port = start_process(&exe)?;
+    let (port, child) = start_process(&exe)?;
     let http = local_client();
     let version = match http
         .get(format!("http://127.0.0.1:{port}/meta"))
@@ -182,6 +244,8 @@ pub async fn prepare(client: &reqwest::Client) -> Result<TcStatus> {
             port,
             version,
             client: http,
+            owned: !shared,
+            child: Some(child),
         });
     }
     Ok(status().await)
@@ -212,7 +276,7 @@ pub async fn status() -> TcStatus {
     }
 }
 
-async fn call(path: &str, query: &[(&str, String)]) -> Result<()> {
+async fn call(path: &str, query: &[(&str, String)]) -> Result<reqwest::StatusCode> {
     let (port, client) = current()?;
     let mut url = reqwest::Url::parse(&format!("http://127.0.0.1:{port}{path}"))?;
     if !query.is_empty() {
@@ -224,10 +288,7 @@ async fn call(path: &str, query: &[(&str, String)]) -> Result<()> {
         }
     }
     let response = client.get(url).send().await.context("请求陶瓦联机失败")?;
-    if !response.status().is_success() {
-        bail!("陶瓦联机返回 {}", response.status());
-    }
-    Ok(())
+    Ok(response.status())
 }
 
 pub async fn host(room: Option<String>, player: Option<String>) -> Result<()> {
@@ -238,7 +299,11 @@ pub async fn host(room: Option<String>, player: Option<String>) -> Result<()> {
     if let Some(player) = player.filter(|value| !value.trim().is_empty()) {
         query.push(("player", player));
     }
-    call("/state/scanning", &query).await
+    let status = call("/state/scanning", &query).await?;
+    if !status.is_success() {
+        bail!("陶瓦联机返回 {status}");
+    }
+    Ok(())
 }
 
 pub async fn join(room: String, player: Option<String>) -> Result<()> {
@@ -250,32 +315,60 @@ pub async fn join(room: String, player: Option<String>) -> Result<()> {
     if let Some(player) = player.filter(|value| !value.trim().is_empty()) {
         query.push(("player", player));
     }
-    call("/state/guesting", &query).await
+    let status = call("/state/guesting", &query).await?;
+    if status == reqwest::StatusCode::BAD_REQUEST {
+        bail!("邀请码无效，或当前状态无法加入房间");
+    }
+    if !status.is_success() {
+        bail!("陶瓦联机返回 {status}");
+    }
+    Ok(())
 }
 
 pub async fn reset() -> Result<()> {
-    call("/state/ide", &[]).await
+    let status = call("/state/ide", &[]).await?;
+    if !status.is_success() {
+        bail!("陶瓦联机返回 {status}");
+    }
+    Ok(())
 }
 
 pub async fn shutdown() -> Result<()> {
-    let current = { current() };
-    if let Ok((port, client)) = current {
-        let _ = client
-            .get(format!("http://127.0.0.1:{port}/panic?peaceful=true"))
-            .send()
-            .await;
+    let runtime = { slot().lock().unwrap().take() };
+    if let Some(runtime) = runtime {
+        if runtime.owned {
+            let _ = runtime
+                .client
+                .get(format!("http://127.0.0.1:{}/panic?peaceful=true", runtime.port))
+                .send()
+                .await;
+        }
+        // 引导进程通常已经自行退出，这里只是回收句柄
+        if let Some(mut child) = runtime.child {
+            for _ in 0..10 {
+                if child.try_wait().ok().flatten().is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            if child.try_wait().ok().flatten().is_none() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
     }
-    *slot().lock().unwrap() = None;
     Ok(())
 }
 
 /// 应用退出时同步通知陶瓦组件关闭，避免房间残留在后台。
+/// 复用了其他启动器实例时不动它，避免误关别人的房间。
 pub fn shutdown_blocking() {
-    let port = slot().lock().unwrap().as_ref().map(|runtime| runtime.port);
-    if let Some(port) = port {
-        let _ = raw_get(port, "/panic?peaceful=true");
+    let runtime = { slot().lock().unwrap().take() };
+    if let Some(runtime) = runtime {
+        if runtime.owned {
+            let _ = raw_get(runtime.port, "/panic?peaceful=true");
+        }
     }
-    *slot().lock().unwrap() = None;
 }
 
 fn raw_get(port: u16, path: &str) -> std::io::Result<()> {

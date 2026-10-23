@@ -49,6 +49,8 @@ export const store = reactive({
   config: null as Config | null,
   versions: [] as VersionSummary[],
   installed: [] as InstalledVersion[],
+  /// 各游戏目录的版本数量，键为目录绝对路径
+  dirCounts: {} as Record<string, number>,
   accounts: [] as AccountView[],
   javaList: [] as JavaInfo[],
   systemMemory: { total_mb: 0, available_mb: 0 } as SystemMemory,
@@ -117,6 +119,43 @@ export async function refreshInstanceMetas() {
     store.metas = await api.instanceMetas();
   } catch {
     store.metas = {};
+  }
+}
+
+export async function refreshDirCounts() {
+  try {
+    store.dirCounts = await api.gameDirVersionCounts();
+  } catch {
+    store.dirCounts = {};
+  }
+}
+
+function normalizeDir(path: string) {
+  return path.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+}
+
+export function sameDir(a: string, b: string) {
+  return normalizeDir(a) === normalizeDir(b);
+}
+
+/// 切换活跃游戏目录；当前版本不在新目录时自动选中该目录第一个版本，
+/// 避免首页和状态栏出现「无当前版本」。
+export async function switchGameDir(path: string) {
+  const dirs = store.config?.game_dirs ?? [];
+  const target = dirs.find((entry) => sameDir(entry.path, path));
+  const label = target?.name ?? path;
+  if (store.config && sameDir(store.config.game_dir, path)) return;
+  try {
+    store.config = await api.switchGameDir(path);
+    store.instanceId = null;
+    await Promise.all([refreshInstalled(), refreshInstanceMetas(), refreshDirCounts()]);
+    const current = store.config?.selected_version;
+    if (!store.installed.some((item) => item.id === current)) {
+      await saveConfig({ selected_version: store.installed[0]?.id ?? null });
+    }
+    notify(`已切换到 ${label}`);
+  } catch (err) {
+    notify(`切换目录失败：${String(err)}`, "err");
   }
 }
 
@@ -699,6 +738,7 @@ export async function initApp() {
     refreshAccounts(),
     refreshJava(),
     refreshInstanceMetas(),
+    refreshDirCounts(),
     api.systemMemory().then((value) => {
       store.systemMemory = value;
     }),

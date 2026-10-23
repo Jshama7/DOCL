@@ -69,6 +69,7 @@ pub fn run() {
             commands::open_folder,
             commands::reveal_file,
             commands::game_dirs,
+            commands::game_dir_version_counts,
             commands::add_game_dir,
             commands::switch_game_dir,
             commands::remove_game_dir,

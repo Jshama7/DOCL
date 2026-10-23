@@ -10,11 +10,14 @@ import {
   launchVersion,
   loadInstanceIconImage,
   openInstance,
+  refreshDirCounts,
+  sameDir,
   selectVersion,
   selectedVersion,
   setInstanceIcon,
   setInstanceIconImage,
   store,
+  switchGameDir,
   uninstallVersion,
 } from "../store";
 import { ICON_PRESETS, formatBytes, formatDate, iconColor, kindLabel } from "../utils";
@@ -24,6 +27,8 @@ let confirmTimer: number | undefined;
 
 /// 正在展开图标选择器的版本
 const pickerFor = ref<string | null>(null);
+/// 目录切换面板是否展开
+const dirOpen = ref(false);
 /// 自定义图标的 data URL 缓存，避免每次渲染都读盘
 const customIcons = reactive<Record<string, string>>({});
 
@@ -73,6 +78,42 @@ function iconOf(id: string) {
   return store.metas[id]?.icon || "auto";
 }
 
+/* ---------- 游戏目录切换 ---------- */
+
+const gameDirs = computed(() => store.config?.game_dirs ?? []);
+const activeDir = computed(() => store.config?.game_dir ?? "");
+
+async function toggleDirs() {
+  if (dirOpen.value) {
+    dirOpen.value = false;
+    return;
+  }
+  pickerFor.value = null;
+  dirOpen.value = true;
+  await refreshDirCounts();
+}
+
+async function pickDir(path: string) {
+  if (sameDir(path, activeDir.value)) {
+    dirOpen.value = false;
+    return;
+  }
+  pickerFor.value = null;
+  confirmId.value = null;
+  await switchGameDir(path);
+  dirOpen.value = false;
+  await syncIcons();
+}
+
+function manageDirs() {
+  dirOpen.value = false;
+  store.page = "settings";
+}
+
+function dirCount(path: string) {
+  return store.dirCounts[path] ?? 0;
+}
+
 /// 元数据变化后补齐自定义图标缓存
 async function syncIcons() {
   for (const item of visibleVersions.value) {
@@ -119,6 +160,34 @@ async function chooseImage(id: string) {
         <span class="eyebrow">DOCL / LIBRARY</span>
       </div>
       <div class="row">
+        <div class="dir-switch">
+          <IconButton icon="layers" label="切换游戏目录" :size="32" @click="toggleDirs" />
+          <template v-if="dirOpen">
+            <div class="dir-backdrop" @click="dirOpen = false" />
+            <div class="dir-panel">
+              <span class="dir-panel__title">游戏目录</span>
+              <button
+                v-for="dir in gameDirs"
+                :key="dir.path"
+                class="dir-item"
+                :class="{ 'dir-item--active': sameDir(dir.path, activeDir) }"
+                @click="pickDir(dir.path)"
+              >
+                <span class="dir-item__body">
+                  <strong>{{ dir.name }}</strong>
+                  <span class="dir-item__path mono">{{ dir.path }}</span>
+                </span>
+                <span class="dir-item__count mono">{{ dirCount(dir.path) }}</span>
+                <AppIcon
+                  v-if="sameDir(dir.path, activeDir)"
+                  name="check"
+                  :size="14"
+                />
+              </button>
+              <button class="dir-manage" @click="manageDirs">管理目录…</button>
+            </div>
+          </template>
+        </div>
         <IconButton icon="folder" label="打开游戏目录" :size="32" @click="openDir" />
         <WoodButton variant="primary" size="sm" sheen @click="store.page = 'download'">
           <AppIcon name="plus" :size="14" />
@@ -249,6 +318,114 @@ async function chooseImage(id: string) {
   margin-top: 18vh;
   text-align: center;
   user-select: none;
+}
+
+.dir-switch {
+  position: relative;
+  display: flex;
+}
+
+.dir-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+}
+
+.dir-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 10px);
+  z-index: 21;
+  width: 320px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 14px 34px rgba(52, 38, 24, 0.22);
+}
+
+.dir-panel__title {
+  display: block;
+  padding: 6px 8px 8px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dir-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background var(--dur-2) ease,
+    border-color var(--dur-2) ease;
+}
+
+.dir-item:hover {
+  background: rgba(var(--accent-rgb), 0.06);
+}
+
+.dir-item--active {
+  border-color: var(--moss);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.dir-item__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.dir-item__body strong {
+  font-size: 13px;
+  color: var(--walnut-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-item__path {
+  font-size: 9.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dir-item__count {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.dir-manage {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px 0;
+  border: none;
+  border-top: 1px dashed var(--line);
+  border-radius: 0 0 8px 8px;
+  background: transparent;
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: color var(--dur-2) ease;
+}
+
+.dir-manage:hover {
+  color: var(--moss);
 }
 
 .blank__title {

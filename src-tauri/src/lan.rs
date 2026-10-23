@@ -153,15 +153,7 @@ fn prune(state: &mut LanState) {
         .retain(|_, room| now.saturating_sub(room.last_seen) <= ROOM_TTL);
 }
 
-fn listen() {
-    let socket = match UdpSocket::bind(("0.0.0.0", PORT)) {
-        Ok(socket) => socket,
-        Err(err) => {
-            state().lock().unwrap().error =
-                Some(format!("无法监听局域网端口 {PORT}：{err}"));
-            return;
-        }
-    };
+fn receive(socket: UdpSocket) {
     if let Err(err) = socket.join_multicast_v4(&GROUP, &Ipv4Addr::UNSPECIFIED) {
         state().lock().unwrap().error = Some(format!("加入局域网组播失败：{err}"));
     }
@@ -182,6 +174,26 @@ fn listen() {
         }
         let mut guard = state().lock().unwrap();
         prune(&mut guard);
+    }
+}
+
+/// 4445 会被 Minecraft 本体或其他启动器短暂占用，绑定失败不能一走了之，
+/// 否则端口释放后界面还会一直挂着旧的错误。
+fn listen() {
+    loop {
+        match UdpSocket::bind(("0.0.0.0", PORT)) {
+            Ok(socket) => {
+                state().lock().unwrap().error = None;
+                receive(socket);
+                return;
+            }
+            Err(err) => {
+                state().lock().unwrap().error = Some(format!(
+                    "局域网端口 {PORT} 暂时被占用（{err}），正在等待释放…"
+                ));
+                std::thread::sleep(Duration::from_secs(3));
+            }
+        }
     }
 }
 

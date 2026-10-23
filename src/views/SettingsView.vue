@@ -120,6 +120,16 @@ const autoSaveKeys: (keyof Config)[] = [
 let autoTimer: number | undefined;
 let autoSeq = 0;
 let autoPending = false;
+/// 设置页打开期间定时刷新内存占用
+let memoryTimer: number | undefined;
+
+async function refreshMemory() {
+  try {
+    store.systemMemory = await api.systemMemory();
+  } catch {
+    // 读取失败保留上一次数值，不打扰用户
+  }
+}
 
 function autoPatch(): Partial<Config> {
   const patch: Partial<Config> = {};
@@ -427,10 +437,13 @@ async function initUpdateSection() {
 
 onMounted(() => {
   void initUpdateSection();
+  void refreshMemory();
+  memoryTimer = window.setInterval(refreshMemory, 2000);
 });
 
 onBeforeUnmount(() => {
   window.clearTimeout(autoTimer);
+  if (memoryTimer) window.clearInterval(memoryTimer);
   if (autoPending) void runAutoSave();
   stopUpdateProgress?.();
 });

@@ -77,6 +77,10 @@ const tcBusy = ref(false);
 const tcPlayer = ref(selectedAccount.value?.name ?? "");
 const tcRoomInput = ref("");
 let tcTimer: number | undefined;
+/// 连续读取失败次数，达到阈值才把界面切成错误页，避免瞬时抖动打断房间
+let tcFailures = 0;
+/// 正在进行中的准备任务，重复调用直接复用
+let tcPrepareTask: Promise<void> | null = null;
 
 const versionOptions = computed(() => [
   ...store.installed.map((item) => {
@@ -168,6 +172,8 @@ async function cancelScan(timedOut: boolean) {
 }
 
 watch(tcStateName, (state) => {
+  // 倒计时只跟房间页绑定，离开页面时不继续在后台取消扫描
+  if (tab.value !== "room") return;
   if (state === "host-scanning") startScanClock();
   else stopScanClock();
 });
@@ -259,10 +265,8 @@ async function refreshHall() {
 async function joinHallRoom(room: HallRoom) {
   tcRoomInput.value = room.room;
   tab.value = "room";
+  // 首次使用需要下载组件，这里等准备流程真正结束再判断
   if (!tc.value?.running && !tcError.value) await prepareTc();
-  for (let index = 0; index < 40 && !tc.value?.running && !tcError.value; index += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
   if (!tc.value?.running) return;
   await joinTc();
 }
@@ -466,25 +470,40 @@ async function copyAddress(text: string) {
   }
 }
 
-async function prepareTc() {
-  if (tcPreparing.value) return;
+function prepareTc(): Promise<void> {
+  if (tcPrepareTask) return tcPrepareTask;
   tcPreparing.value = true;
   tcError.value = "";
-  try {
-    tc.value = await api.terracottaPrepare();
-  } catch (err) {
-    tcError.value = String(err);
-  } finally {
-    tcPreparing.value = false;
-  }
+  tcFailures = 0;
+  tcPrepareTask = (async () => {
+    try {
+      tc.value = await api.terracottaPrepare();
+    } catch (err) {
+      tcError.value = String(err);
+    } finally {
+      tcPreparing.value = false;
+      tcPrepareTask = null;
+    }
+  })();
+  return tcPrepareTask;
 }
 
 async function refreshTc() {
   if (!tc.value?.running) return;
   try {
-    tc.value = await api.terracottaStatus();
+    const next = await api.terracottaStatus();
+    if (next.error) {
+      tcFailures += 1;
+      if (tcFailures >= 3) tc.value = next;
+      return;
+    }
+    tcFailures = 0;
+    tc.value = next;
   } catch {
-    // 保留上一次状态，等待下一轮轮询
+    tcFailures += 1;
+    if (tcFailures >= 3 && tc.value) {
+      tc.value = { ...tc.value, error: "无法读取陶瓦联机状态" };
+    }
   }
 }
 
@@ -562,8 +581,11 @@ watch(tab, (value) => {
   if (value === "room") {
     void prepareTc();
     startTcPolling();
+    // 回到房间页时如果还在扫描，重新开始倒计时（离开期间暂停）
+    if (tcStateName.value === "host-scanning") startScanClock();
   } else {
     stopTcPolling();
+    stopScanClock();
   }
   if (value === "recent") {
     void pingAll();

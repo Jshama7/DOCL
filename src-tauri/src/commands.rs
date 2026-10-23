@@ -180,6 +180,32 @@ pub fn game_dirs(state: State<'_, AppState>) -> GameDirsView {
     }
 }
 
+/// 每个游戏目录下的版本数量；只数文件存在与否，不解析清单。
+#[tauri::command]
+pub fn game_dir_version_counts(
+    state: State<'_, AppState>,
+) -> std::collections::HashMap<String, u32> {
+    let cfg = state.config.lock().unwrap().clone();
+    let mut result = std::collections::HashMap::new();
+    for entry in &cfg.game_dirs {
+        let versions = std::path::Path::new(&entry.path).join("versions");
+        let mut count = 0u32;
+        if let Ok(items) = std::fs::read_dir(&versions) {
+            for item in items.flatten() {
+                if !item.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                let id = item.file_name().to_string_lossy().to_string();
+                if item.path().join(format!("{id}.json")).exists() {
+                    count += 1;
+                }
+            }
+        }
+        result.insert(entry.path.clone(), count);
+    }
+    result
+}
+
 /// 添加或切换目录；path 会先创建再写入配置。
 #[tauri::command]
 pub fn add_game_dir(state: State<'_, AppState>, path: String) -> CmdResult<Config> {

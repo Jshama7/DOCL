@@ -98,6 +98,32 @@ pub fn list_installed(cfg: &Config) -> Vec<InstalledVersion> {
     result
 }
 
+/// 依赖版本只要还有别的版本在用就保留，避免误删共享的原版 / 加载器。
+/// chain 含实例自身（chain[0] 就是 id），必须排除，否则"自己引用自己"恒真。
+pub fn is_referenced(cfg: &Config, target: &str, excluded: &[String]) -> bool {
+    let dir = cfg.game_root().join("versions");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            return false;
+        }
+        let id = entry.file_name().to_string_lossy().to_string();
+        if !dir.join(&id).join(format!("{id}.json")).exists() || excluded.contains(&id) {
+            return false;
+        }
+        resolve_detail(cfg, &id)
+            .map(|merged| {
+                merged
+                    .chain
+                    .iter()
+                    .any(|part| part == target && part != &id)
+            })
+            .unwrap_or(false)
+    })
+}
+
 fn rule_matches(rule: &Rule) -> bool {
     if let Some(os) = &rule.os {
         if let Some(name) = &os.name {
@@ -533,19 +559,27 @@ fn merge_child(base: &mut VersionDetail, child: &VersionDetail) {
         }
     }
 
+    // 新式参数：子版本（ModLoader）的参数排在父版本之前，与官方 launch 语义一致
     let mut args = base.arguments.take().unwrap_or(Arguments {
         game: Vec::new(),
         jvm: Vec::new(),
     });
     if let Some(child_args) = &child.arguments {
-        args.game.extend(child_args.game.clone());
-        args.jvm.extend(child_args.jvm.clone());
+        let mut game = child_args.game.clone();
+        game.extend(args.game);
+        let mut jvm = child_args.jvm.clone();
+        jvm.extend(args.jvm);
+        args.game = game;
+        args.jvm = jvm;
     }
     if !args.game.is_empty() || !args.jvm.is_empty() {
         base.arguments = Some(args);
     }
-    if base.minecraft_arguments.is_none() {
-        base.minecraft_arguments = child.minecraft_arguments.clone();
+    // 旧式参数：Forge 等清单给出的是完整超集（含自己的 tweakClass），
+    // 必须整体覆盖父版本；保留父版本会丢 FML tweak class，
+    // 游戏会以 VanillaTweaker 启动并报 ClassNotFoundException
+    if let Some(args) = &child.minecraft_arguments {
+        base.minecraft_arguments = Some(args.clone());
     }
 }
 

@@ -202,15 +202,13 @@ async function chooseImage(id: string) {
       <article
         v-for="(item, index) in visibleVersions"
         :key="item.id"
-        class="version-row card card--hover reveal"
+        class="version-row reveal"
         :class="{
           'version-row--active': item.id === selectedVersion?.id,
           'version-row--picking': pickerFor === item.id,
         }"
         :style="{ '--i': index }"
       >
-        <span class="version-row__no mono">{{ String(index + 1).padStart(2, "0") }}</span>
-
         <div class="version-row__icon-wrap">
           <button
             class="version-row__icon"
@@ -274,13 +272,13 @@ async function chooseImage(id: string) {
             icon="play"
             :label="`启动 ${item.id}`"
             variant="primary"
-            :size="34"
+            :size="30"
             @click="selectVersion(item.id); launchVersion(item.id)"
           />
           <IconButton
             icon="check"
             label="设为当前版本"
-            :size="34"
+            :size="30"
             :disabled="item.id === selectedVersion?.id"
             @click="selectVersion(item.id)"
           />
@@ -288,7 +286,7 @@ async function chooseImage(id: string) {
             icon="settings"
             label="版本设置"
             variant="soft"
-            :size="34"
+            :size="30"
             @click="openInstance(item.id)"
           />
           <IconButton
@@ -301,7 +299,7 @@ async function chooseImage(id: string) {
                   : '删除版本'
             "
             variant="danger"
-            :size="34"
+            :size="30"
             @click="requestDelete(item.id)"
           />
         </div>
@@ -441,15 +439,34 @@ async function chooseImage(id: string) {
 .version-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  /* 整块浅色面板兜底，毛玻璃/无底图下行内容也能看清 */
+  background: rgba(var(--glass-rgb), 0.88);
 }
 
+/* PCL 式紧凑行：默认无框透明，悬停/选中才铺浅色 */
 .version-row {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 12px 16px 12px 14px;
+  gap: 12px;
+  padding: 8px 12px 8px 16px;
   overflow: visible;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  transition: background var(--dur-2) ease;
+}
+
+.version-row:hover {
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+.version-row--active {
+  background: rgba(var(--accent-rgb), 0.08);
 }
 
 .version-row::after {
@@ -459,7 +476,7 @@ async function chooseImage(id: string) {
   top: 0;
   bottom: 0;
   width: 3px;
-  background: var(--line);
+  background: transparent;
   transition: background var(--dur-2) ease;
 }
 
@@ -471,16 +488,6 @@ async function chooseImage(id: string) {
   z-index: 6;
 }
 
-.version-row__no {
-  width: 34px;
-  flex-shrink: 0;
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  text-align: right;
-  user-select: none;
-}
-
 .version-row__icon-wrap {
   position: relative;
   flex-shrink: 0;
@@ -490,8 +497,8 @@ async function chooseImage(id: string) {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 46px;
-  height: 46px;
+  width: 40px;
+  height: 40px;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 6px;
@@ -532,7 +539,7 @@ async function chooseImage(id: string) {
 }
 
 .version-row__title strong {
-  font-size: 18px;
+  font-size: 15.5px;
   line-height: 1.25;
   color: var(--walnut-deep);
   overflow: hidden;
@@ -571,7 +578,47 @@ async function chooseImage(id: string) {
 .version-row__actions {
   display: flex;
   flex-shrink: 0;
-  gap: 6px;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity var(--dur-2) ease;
+}
+
+.version-row:hover .version-row__actions,
+.version-row:focus-within .version-row__actions,
+.version-row--picking .version-row__actions {
+  opacity: 1;
+}
+
+/* PCL 式浅显图标：去边框去底色，只留线条图案 */
+.version-row__actions :deep(.icon-btn--primary),
+.version-row__actions :deep(.icon-btn--soft),
+.version-row__actions :deep(.icon-btn--danger) {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+
+.version-row__actions :deep(.icon-btn--primary) {
+  color: var(--moss);
+}
+
+.version-row__actions :deep(.icon-btn--danger) {
+  color: var(--danger);
+}
+
+.version-row__actions :deep(.icon-btn--primary:hover:not(:disabled)),
+.version-row__actions :deep(.icon-btn--soft:hover:not(:disabled)) {
+  border-color: transparent;
+  background: rgba(var(--accent-rgb), 0.08);
+  box-shadow: none;
+  color: var(--walnut-deep);
+}
+
+.version-row__actions :deep(.icon-btn--danger:hover:not(:disabled)) {
+  border-color: transparent;
+  background: rgba(190, 92, 70, 0.1);
+  box-shadow: none;
+  color: var(--danger);
 }
 
 .picker-backdrop {
@@ -582,8 +629,8 @@ async function chooseImage(id: string) {
 
 .icon-picker {
   position: absolute;
-  left: 52px;
-  top: 50px;
+  left: 46px;
+  top: 46px;
   z-index: 21;
   width: 268px;
   padding: 12px;

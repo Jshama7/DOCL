@@ -117,6 +117,9 @@ select {
 }
 
 button {
+  /* 关掉 WebView2 的系统默认按压高亮（强调色方框印子） */
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
   background: none;
   border: none;
   cursor: pointer;
@@ -150,7 +153,7 @@ a {
 }
 
 *:hover {
-  scrollbar-color: rgba(111, 66, 36, 0.26) transparent;
+  scrollbar-color: rgba(122, 112, 100, 0.12) transparent;
 }
 
 ::-webkit-scrollbar {
@@ -169,11 +172,11 @@ a {
 }
 
 *:hover::-webkit-scrollbar-thumb {
-  background: rgba(111, 66, 36, 0.2);
+  background: rgba(122, 112, 100, 0.1);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(111, 66, 36, 0.38);
+  background: rgba(122, 112, 100, 0.22);
 }
 
 /* 布局 */

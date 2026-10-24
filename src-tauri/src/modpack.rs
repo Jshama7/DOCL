@@ -593,6 +593,43 @@ fn write_instance_json(cfg: &Config, id: &str, parent: &str) -> Result<PathBuf> 
     Ok(dir)
 }
 
+/// PCL 式自包含实例：把继承链的合并结果直接写成实例 json（不带 inheritsFrom），
+/// client jar 落进实例目录，最后清掉不再被其他实例引用的父版本目录。
+/// generic 导入的父版本可能是用户手动选的常用实例，remove_parents 传 false 不清理。
+fn finalize_self_contained(cfg: &Config, instance_id: &str, remove_parents: bool) -> Result<()> {
+    let merged = crate::install::resolve_detail(cfg, instance_id)?;
+    let dir = cfg.game_root().join("versions").join(instance_id);
+    std::fs::write(
+        dir.join(format!("{instance_id}.json")),
+        serde_json::to_vec_pretty(&merged.detail)?,
+    )?;
+    if let Some(jar_id) = &merged.jar_id {
+        if jar_id != instance_id {
+            let src = cfg
+                .game_root()
+                .join("versions")
+                .join(jar_id)
+                .join(format!("{jar_id}.jar"));
+            let dst = dir.join(format!("{instance_id}.jar"));
+            if src.exists() && !dst.exists() {
+                std::fs::copy(&src, &dst)?;
+            }
+        }
+    }
+    if remove_parents {
+        for part in &merged.chain {
+            if part == instance_id {
+                continue;
+            }
+            if !crate::install::is_referenced(cfg, part, std::slice::from_ref(&instance_id.to_string())) {
+                let pdir = cfg.game_root().join("versions").join(part);
+                let _ = std::fs::remove_dir_all(&pdir);
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn ensure_vanilla(
     app: &AppHandle,
     client: &reqwest::Client,
@@ -1430,6 +1467,13 @@ pub async fn import(
     };
 
     let _ = (parent, game_version, loader);
+
+    // 导入完成后做 PCL 式自包含：合并 json + jar 进实例，清掉独占的父版本目录。
+    // generic 的父版本可能是用户自己的实例，不清理。失败时保留 inheritsFrom 架构兜底。
+    let remove_parents = !matches!(parsed.source, SourceData::Generic { .. });
+    if let Err(error) = finalize_self_contained(cfg, &instance_id, remove_parents) {
+        progress.set_message(format!("自包含合并失败（实例仍可用）：{error}"));
+    }
 
     Ok(ImportResult {
         instance_id,

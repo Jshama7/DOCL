@@ -475,19 +475,6 @@ fn collect_version_ids(cfg: &Config) -> Vec<String> {
         .collect()
 }
 
-/// 依赖版本只要还有别的版本在用就保留，避免误删共享的原版 / 加载器
-fn is_referenced(cfg: &Config, target: &str, excluded: &[String]) -> bool {
-    collect_version_ids(cfg).iter().any(|id| {
-        if excluded.contains(id) {
-            return false;
-        }
-        id == target
-            || install::resolve_detail(cfg, id)
-                .map(|merged| merged.chain.iter().any(|part| part == target))
-                .unwrap_or(false)
-    })
-}
-
 #[tauri::command]
 pub fn delete_version(state: State<'_, AppState>, version_id: String) -> CmdResult<Vec<String>> {
     let cfg = state.config.lock().unwrap().clone();
@@ -509,7 +496,7 @@ pub fn delete_version(state: State<'_, AppState>, version_id: String) -> CmdResu
         if parent == &version_id || removed.contains(parent) {
             continue;
         }
-        if !is_referenced(&cfg, parent, &removed) {
+        if !install::is_referenced(&cfg, parent, &removed) {
             remove_version_files(&cfg, parent);
             removed.push(parent.clone());
         }

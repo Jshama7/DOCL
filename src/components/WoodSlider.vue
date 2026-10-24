@@ -31,7 +31,7 @@ function onInput(event: Event) {
     :step="step"
     :value="modelValue"
     :style="{
-      background: `linear-gradient(90deg, var(--moss) 0 ${percent}%, #e2d4bb ${percent}% 100%)`,
+      background: `linear-gradient(90deg, var(--moss) 0 ${percent}%, rgba(122, 112, 100, 0.14) ${percent}% 100%)`,
     }"
     @input="onInput"
   />
@@ -46,7 +46,6 @@ function onInput(event: Event) {
   border-radius: 99px;
   outline: none;
   cursor: pointer;
-  box-shadow: 0 1px 2px rgba(80, 58, 34, 0.12) inset;
 }
 
 .slider::-webkit-slider-thumb {

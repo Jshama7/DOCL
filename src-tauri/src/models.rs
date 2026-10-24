@@ -32,7 +32,7 @@ pub struct VersionSummary {
     pub installed: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct VersionDetail {
     pub id: String,
     #[serde(rename = "type", default)]
@@ -64,7 +64,7 @@ impl VersionDetail {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AssetIndexRef {
     pub id: String,
     pub sha1: String,
@@ -74,14 +74,14 @@ pub struct AssetIndexRef {
     pub total_size: u64,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VersionDownloads {
     pub client: Option<DownloadRef>,
     #[serde(default)]
     pub server: Option<DownloadRef>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DownloadRef {
     pub sha1: String,
     pub size: u64,
@@ -90,7 +90,7 @@ pub struct DownloadRef {
     pub path: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Library {
     pub name: String,
     pub downloads: Option<LibraryDownloads>,
@@ -106,32 +106,32 @@ pub struct Library {
     pub size: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LibraryDownloads {
     pub artifact: Option<DownloadRef>,
     pub classifiers: Option<HashMap<String, DownloadRef>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Rule {
     pub action: String,
     pub os: Option<OsRule>,
     pub features: Option<HashMap<String, bool>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct OsRule {
     pub name: Option<String>,
     pub arch: Option<String>,
     pub version: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Extract {
     pub exclude: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Arguments {
     #[serde(default)]
     pub game: Vec<ArgValue>,
@@ -139,7 +139,7 @@ pub struct Arguments {
     pub jvm: Vec<ArgValue>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ArgValue {
     Plain(String),
@@ -149,26 +149,26 @@ pub enum ArgValue {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum RawArgValue {
     One(String),
     Many(Vec<String>),
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct JavaVersion {
     pub component: String,
     #[serde(rename = "majorVersion")]
     pub major_version: u32,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Logging {
     pub client: Option<LoggingClient>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LoggingClient {
     pub argument: String,
     pub file: DownloadRef,

@@ -219,23 +219,52 @@ function close() {
 }
 
 .window-btn {
+  /* 按钮占位保持全宽，按压/悬停的圆形印子由 ::before 画在中心 */
+  position: relative;
+  isolation: isolate;
   width: 46px;
   height: 100%;
-  border-radius: 0;
   display: grid;
   place-items: center;
   color: var(--ink-soft);
-  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+  transition: color var(--dur-1) ease;
+}
+
+.window-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: transparent;
+  transition: background var(--dur-1) ease;
+  z-index: -1;
 }
 
 .window-btn:hover {
-  background: rgba(var(--accent-rgb), 0.09);
   color: var(--walnut-deep);
 }
 
+.window-btn:hover::before {
+  background: rgba(var(--accent-rgb), 0.09);
+}
+
+.window-btn:active::before {
+  background: rgba(var(--accent-rgb), 0.16);
+}
+
 .window-btn--close:hover {
-  background: #b4523a;
   color: #fffdf6;
+}
+
+.window-btn--close:hover::before {
+  background: #b4523a;
+}
+
+.window-btn--close:active::before {
+  background: #96432f;
 }
 
 @media (max-width: 1040px) {

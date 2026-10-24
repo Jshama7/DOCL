@@ -272,10 +272,8 @@ const filesError = ref("");
 
 const showImport = ref(false);
 const packPath = ref("");
-const packFromTemp = ref(false);
 const packPreview = ref<PackPreview | null>(null);
 const inspecting = ref(false);
-const importing = ref(false);
 const importForm = reactive({
   name: "",
   id: "",
@@ -688,7 +686,6 @@ async function openPreview(path: string, fromTemp: boolean) {
   try {
     const preview = await api.modpackInspect(path);
     packPath.value = path;
-    packFromTemp.value = fromTemp;
     packPreview.value = preview;
     importForm.name = preview.name;
     importForm.id = preview.suggested_id;
@@ -724,45 +721,133 @@ async function pickPack() {
   await openPreview(path, false);
 }
 
+/// 表单前置模式：还没下载的整合包（清单未知，确认后才开始下载）
+interface PendingPack {
+  url: string;
+  fileName: string;
+  title: string;
+  name: string;
+  suggestedId: string;
+  sourceLabel: string;
+}
+
+const pendingPack = ref<PendingPack | null>(null);
+
+// 表单关闭时清掉未下载的挂起状态，避免残留影响下一次打开
+watch(showImport, (open) => {
+  if (!open) {
+    pendingPack.value = null;
+    packPreview.value = null;
+  }
+});
+
+/// 后台导入任务：表单确认后立即关闭，下载、解析、安装全部在后台执行，
+/// 进度走下载中心，取消也在下载中心操作
+interface PackImportJob {
+  path: string | null;
+  pending: PendingPack | null;
+  options: {
+    instance_name: string | null;
+    instance_id: string | null;
+    loader_version: string | null;
+    parent_version: string | null;
+    install_optional: boolean;
+  };
+}
+
+async function runPackImport(job: PackImportJob) {
+  let path = job.path;
+  const fromTemp = job.pending != null;
+  if (!path && job.pending) {
+    path = await downloadModpack(job.pending.url, job.pending.fileName, job.pending.title);
+    if (!path) return;
+  }
+  let preview: PackPreview;
+  try {
+    preview = await api.modpackInspect(path!);
+  } catch (err) {
+    notify(`读取整合包失败：${String(err)}`, "err");
+    if (fromTemp) api.modpackTempRemove(path!).catch(() => {});
+    return;
+  }
+  // 用户留空的字段用清单解析值补齐
+  const options = { ...job.options };
+  if (!options.loader_version) options.loader_version = preview.loader_version ?? null;
+  if (preview.format === "generic") {
+    const installedIds = store.installed.map((item) => item.id);
+    const current = options.parent_version;
+    options.parent_version =
+      current && installedIds.includes(current)
+        ? current
+        : preview.detected_parent && installedIds.includes(preview.detected_parent)
+          ? preview.detected_parent
+          : installedIds[0] ?? null;
+    if (!options.parent_version) {
+      notify("该压缩包需要父版本，请先安装一个基础版本再导入", "err");
+      if (fromTemp) api.modpackTempRemove(path!).catch(() => {});
+      return;
+    }
+  }
+  const result = await importModpack(path!, options, preview.name);
+  if (result) {
+    if (fromTemp) api.modpackTempRemove(path!).catch(() => {});
+    notify(`${preview.name} 导入完成，已加入版本列表`);
+  }
+}
+
 async function installPack(project: CfProject, file: CfFileView) {
   if (!file.download_url || inspecting.value) return;
-  const path = await downloadModpack(
-    file.download_url,
-    file.file_name,
-    `${project.name} ${file.name}`
-  );
-  if (!path) return;
-  await openPreview(path, true);
+  const slug =
+    project.slug ||
+    project.name
+      .toLowerCase()
+      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
+      .replace(/^-+|-+$/g, "") ||
+    project.name;
+  pendingPack.value = {
+    url: file.download_url,
+    fileName: file.file_name,
+    title: `${project.name} ${file.name}`,
+    name: project.name,
+    suggestedId: slug,
+    sourceLabel: project.source === "curseforge" ? "CurseForge 整合包" : "Modrinth 整合包",
+  };
+  importForm.name = project.name;
+  importForm.id = slug;
+  importForm.loaderVersion = "";
+  importForm.parentVersion = "";
+  importForm.optional = false;
+  showImport.value = true;
 }
 
 async function confirmImport() {
-  if (!packPreview.value || importing.value) return;
-  if (packPreview.value.format === "generic" && !importForm.parentVersion) {
+  if (showImport.value === false) return;
+  const pending = pendingPack.value;
+  const preview = packPreview.value;
+  if (!pending && !preview) return;
+  // 本地文件路径：已有清单，保持原校验
+  if (!pending && preview?.format === "generic" && !importForm.parentVersion) {
     notify("请选择一个已安装的父版本", "err");
     return;
   }
-  importing.value = true;
-  const result = await importModpack(
-    packPath.value,
-    {
+  if (store.installingId) {
+    notify("已有下载任务正在进行，请等待其完成", "err");
+    return;
+  }
+  // 快照参数后立即关表单，任务转后台执行
+  const job: PackImportJob = {
+    path: pending ? null : packPath.value,
+    pending,
+    options: {
       instance_name: importForm.name.trim() || null,
       instance_id: importForm.id.trim() || null,
       loader_version: importForm.loaderVersion.trim() || null,
       parent_version: importForm.parentVersion || null,
       install_optional: importForm.optional,
     },
-    packPreview.value.name
-  );
-  importing.value = false;
-  if (result) {
-    showImport.value = false;
-    packPreview.value = null;
-    if (packFromTemp.value) {
-      api.modpackTempRemove(packPath.value).catch(() => {});
-      packFromTemp.value = false;
-    }
-    openInstance(result.instance_id);
-  }
+  };
+  showImport.value = false;
+  void runPackImport(job);
 }
 </script>
 
@@ -1082,53 +1167,59 @@ async function confirmImport() {
 
     <Teleport to="body">
       <Transition name="pack-modal">
-        <div v-if="showImport && packPreview" class="pack-modal">
-          <div class="pack-modal__mask" @click="!importing && (showImport = false)" />
+        <div v-if="showImport && (packPreview || pendingPack)" class="pack-modal">
+          <div class="pack-modal__mask" @click="showImport = false" />
           <div class="pack-modal__card">
             <header class="pack-modal__head">
               <div>
                 <span class="section-title">整合包</span>
-                <h2 class="pack-modal__title">{{ packPreview.name }}</h2>
+                <h2 class="pack-modal__title">{{ pendingPack?.name ?? packPreview?.name }}</h2>
                 <p class="muted small">
-                  {{
-                    packPreview.format === "curseforge"
-                      ? "CurseForge 整合包"
-                      : packPreview.format === "mrpack"
-                        ? "Modrinth 整合包"
-                        : "通用压缩包"
-                  }}
-                  <template v-if="packPreview.version"> · {{ packPreview.version }}</template>
-                  <template v-if="packPreview.game_version"> · {{ packPreview.game_version }}</template>
+                  <template v-if="pendingPack">
+                    {{ pendingPack.sourceLabel }}
+                    <template v-if="packPreview"> · {{ packPreview.version }}</template>
+                  </template>
+                  <template v-else-if="packPreview">
+                    {{
+                      packPreview.format === "curseforge"
+                        ? "CurseForge 整合包"
+                        : packPreview.format === "mrpack"
+                          ? "Modrinth 整合包"
+                          : "通用压缩包"
+                    }}
+                    <template v-if="packPreview.version"> · {{ packPreview.version }}</template>
+                    <template v-if="packPreview.game_version"> · {{ packPreview.game_version }}</template>
+                  </template>
                 </p>
               </div>
-              <IconButton
-                icon="close"
-                label="关闭"
-                :size="32"
-                :disabled="importing"
-                @click="showImport = false"
-              />
+              <IconButton icon="close" label="关闭" :size="32" @click="showImport = false" />
             </header>
 
             <div class="pack-modal__body">
               <div class="pack-summary">
-                <span class="tag">{{ packPreview.file_count }} 个文件</span>
-                <span v-if="packPreview.download_bytes" class="tag">
-                  下载 {{ formatBytes(packPreview.download_bytes) }}
-                </span>
-                <span v-if="packPreview.override_bytes" class="tag">
-                  覆盖文件 {{ formatBytes(packPreview.override_bytes) }}
-                </span>
-                <span class="tag">
-                  {{
-                    packPreview.loader === "vanilla"
-                      ? "原版"
-                      : packPreview.loader.charAt(0).toUpperCase() + packPreview.loader.slice(1)
-                  }}
-                  <template v-if="packPreview.loader_version">
-                    {{ packPreview.loader_version }}
-                  </template>
-                </span>
+                <template v-if="pendingPack">
+                  <span class="tag">清单将在下载后解析</span>
+                  <span class="tag">{{ pendingPack.fileName }}</span>
+                </template>
+                <template v-else-if="packPreview">
+                  <span class="tag">{{ packPreview.file_count }} 个文件</span>
+                  <span v-if="packPreview.download_bytes" class="tag">
+                    下载 {{ formatBytes(packPreview.download_bytes) }}
+                  </span>
+                  <span v-if="packPreview.override_bytes" class="tag">
+                    覆盖文件 {{ formatBytes(packPreview.override_bytes) }}
+                  </span>
+                  <span class="tag">
+                    {{
+                      packPreview.loader === "vanilla"
+                        ? "原版"
+                        : packPreview.loader.charAt(0).toUpperCase() + packPreview.loader.slice(1)
+                    }}
+                    <template v-if="packPreview.loader_version">
+                      {{ packPreview.loader_version }}
+                    </template>
+                  </span>
+                </template>
               </div>
 
               <label class="pack-field">
@@ -1141,12 +1232,15 @@ async function confirmImport() {
                 <WoodInput v-model="importForm.id" mono placeholder="用于版本目录名" />
               </label>
 
-              <label v-if="packPreview.loader !== 'vanilla'" class="pack-field">
+              <label
+                v-if="pendingPack || (packPreview && packPreview.loader !== 'vanilla')"
+                class="pack-field"
+              >
                 <span class="pack-field__label">加载器版本</span>
                 <WoodInput v-model="importForm.loaderVersion" mono placeholder="留空自动选择" />
               </label>
 
-              <label v-if="packPreview.format === 'generic'" class="pack-field">
+              <label v-if="packPreview?.format === 'generic'" class="pack-field">
                 <span class="pack-field__label">父版本</span>
                 <WoodSelect
                   v-if="parentOptions.length"
@@ -1158,7 +1252,7 @@ async function confirmImport() {
                 </span>
               </label>
 
-              <div v-if="packPreview.format !== 'generic'" class="pack-toggle">
+              <div v-if="pendingPack || packPreview?.format !== 'generic'" class="pack-toggle">
                 <div>
                   <strong>安装可选文件</strong>
                   <span>清单中标记为可选的 Mod，体积可能较大</span>
@@ -1166,27 +1260,29 @@ async function confirmImport() {
                 <WoodToggle v-model="importForm.optional" />
               </div>
 
-              <ul v-if="packPreview.warnings.length" class="pack-warnings">
+              <ul v-if="packPreview?.warnings.length" class="pack-warnings">
                 <li v-for="warning in packPreview.warnings" :key="warning">{{ warning }}</li>
               </ul>
             </div>
 
             <footer class="pack-modal__foot">
               <span class="muted small">
-                导入会自动安装基础版本与加载器，并写入独立的实例目录。
+                {{
+                  pendingPack
+                    ? "确认后表单即关闭，下载与安装在后台进行，进度见右上角下载中心。"
+                    : "导入在后台进行，进度见下载中心，完成后会通知你。"
+                }}
               </span>
               <div class="row">
-                <WoodButton variant="ghost" :disabled="importing" @click="showImport = false">
-                  取消
-                </WoodButton>
+                <WoodButton variant="ghost" @click="showImport = false">取消</WoodButton>
                 <WoodButton
                   variant="primary"
                   sheen
-                  :disabled="importing || (packPreview.format === 'generic' && !importForm.parentVersion)"
+                  :disabled="packPreview?.format === 'generic' && !importForm.parentVersion"
                   @click="confirmImport"
                 >
                   <AppIcon name="download" :size="15" />
-                  {{ importing ? "导入中…" : "开始导入" }}
+                  {{ pendingPack ? "下载并导入" : "开始导入" }}
                 </WoodButton>
               </div>
             </footer>

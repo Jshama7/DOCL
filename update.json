@@ -1,6 +1,6 @@
 {
-  "version": "1.4.1",
-  "url": "https://github.com/dawo4/DOCL/releases/download/v1.4.1/DOCL_1.4.1_x64-setup.exe",
-  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.4.1/DOCL_1.4.1_portable.zip",
-  "notes": "便携版支持一键原地更新：下载后自动替换并重启，不再需要手动解压。"
+  "version": "1.5.0",
+  "url": "https://github.com/dawo4/DOCL/releases/download/v1.5.0/DOCL_1.5.0_x64-setup.exe",
+  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.5.0/DOCL_1.5.0_portable.zip",
+  "notes": "整合包全面改为自包含实例：一个整合包就是一个完整目录，删除即彻底卸载；导入全程后台进行，不再打断操作。"
 }

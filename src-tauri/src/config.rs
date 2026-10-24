@@ -72,6 +72,8 @@ pub struct Config {
     pub ui_radius: String,
     /// compact / normal / comfy
     pub ui_density: String,
+    /// Windows Acrylic：窗口毛玻璃化，透出桌面实时画面
+    pub window_vibrancy: bool,
 }
 
 impl Default for Config {
@@ -111,6 +113,8 @@ impl Default for Config {
             background_dim: 0,
             ui_radius: "default".into(),
             ui_density: "normal".into(),
+            // 便携版默认透出桌面：配合外带场景的玻璃质感；安装版保持实心
+            window_vibrancy: is_portable(),
         }
     }
 }

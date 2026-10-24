@@ -126,6 +126,27 @@ pub struct CfSearchResult {
     pub total: u64,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct CfCategoryListResponse {
+    #[serde(default)]
+    data: Vec<CfCategoryRaw>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CfCategoryRaw {
+    #[serde(default)]
+    id: i64,
+    #[serde(default)]
+    name: String,
+}
+
+/// CurseForge 分类（类型筛选下拉用）。
+#[derive(Debug, Clone, Serialize)]
+pub struct CfCategoryView {
+    pub id: i64,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct CfFileView {
     pub id: String,
@@ -156,6 +177,7 @@ pub async fn search(
     query: &str,
     game_version: Option<&str>,
     loader: Option<&str>,
+    category_id: Option<i64>,
     index: u32,
     page_size: u32,
     sort_field: u32,
@@ -180,6 +202,9 @@ pub async fn search(
         }
         if let Some(loader) = loader.and_then(loader_id) {
             pairs.append_pair("modLoaderType", loader);
+        }
+        if let Some(category_id) = category_id {
+            pairs.append_pair("categoryId", &category_id.to_string());
         }
     }
 
@@ -258,6 +283,28 @@ struct CfGameVersion {
 struct CfGameVersionsResponse {
     #[serde(default)]
     data: Vec<CfGameVersion>,
+}
+
+/// 拉取某资源大类下的分类列表，供类型筛选下拉使用。
+pub async fn categories(client: &reqwest::Client, class_id: i64) -> Result<Vec<CfCategoryView>> {
+    let mut url = reqwest::Url::parse(&format!("{BASE}/categories"))?;
+    {
+        let mut pairs = url.query_pairs_mut();
+        pairs
+            .append_pair("gameId", "432")
+            .append_pair("classId", &class_id.to_string());
+    }
+    let response: CfCategoryListResponse = download::get_json(client, url.as_str(), false).await?;
+    let mut list: Vec<CfCategoryView> = response
+        .data
+        .into_iter()
+        .map(|raw| CfCategoryView {
+            id: raw.id,
+            name: raw.name,
+        })
+        .collect();
+    list.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(list)
 }
 
 /// 供版本下拉框使用的正式版列表，按发布时间倒序。

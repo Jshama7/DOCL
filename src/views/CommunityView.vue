@@ -61,6 +61,179 @@ const LOADER_LABELS: Record<string, string> = {
   neoforge: "NeoForge",
 };
 
+/// CurseForge / Modrinth 分类英文名到中文的映射，未命中的显示原文。
+const CATEGORY_ZH: Record<string, string> = {
+  // 两个来源通用的整合包分类
+  adventure: "冒险",
+  "adventure and rpg": "冒险与 RPG",
+  technology: "科技",
+  tech: "科技",
+  magic: "魔法",
+  quests: "任务",
+  quest: "任务",
+  hardcore: "硬核",
+  multiplayer: "多人",
+  "sci-fi": "科幻",
+  skyblock: "空岛",
+  exploration: "探索",
+  combat: "战斗",
+  horror: "恐怖",
+  cursed: "诅咒",
+  food: "食物",
+  "vanilla+": "原版增强",
+  vanilla: "原版",
+  ftb: "FTB 官方",
+  "ftb official pack": "FTB 官方",
+  "small / light": "小游戏/轻量",
+  small: "小型",
+  light: "轻量",
+  medium: "中型",
+  large: "大型",
+  "extra large": "超大型",
+  "extra-large": "超大型",
+  "map based": "地图",
+  budget: "低配",
+
+  // Modrinth 通用功能分类
+  utility: "实用",
+  optimization: "性能优化",
+  equipment: "装备",
+  "game-mechanics": "游戏机制",
+  "game mechanic": "游戏机制",
+  logistics: "物流",
+  economy: "经济",
+  decoration: "装饰",
+  education: "教育",
+  social: "社交",
+  storage: "存储",
+  transportation: "运输",
+  library: "支持库",
+  worldgen: "世界生成",
+  "world gen": "世界生成",
+  mobs: "生物",
+  "quality of life": "实用与优化",
+
+  // CurseForge Mod 分类
+  addons: "附属",
+  automation: "自动化",
+  "blood magic": "血魔法",
+  buildcraft: "建筑",
+  cosmetic: "装饰",
+  energy: "能源",
+  farming: "农业",
+  inventory: "物品栏",
+  "map and information": "地图与信息",
+  performance: "性能优化",
+  processing: "加工",
+  teleportation: "传送",
+  thaumcraft: "神秘时代",
+  "tinkers construct": "匠魂",
+  tutorials: "教程",
+  "utility & qol": "实用与优化",
+
+  // 资源包 / 光影风格（分辨率保留原样）
+  traditional: "传统风",
+  simplistic: "简约风",
+  realistic: "写实",
+  "photo realistic": "照片级写实",
+  "semi-realistic": "半写实",
+  "semi realistic": "半写实",
+  modern: "现代风",
+  themed: "主题",
+  medieval: "中世纪",
+  steampunk: "蒸汽朋克",
+  animated: "动画",
+  "mod support": "模组支持",
+  "font packs": "字体",
+  gui: "界面",
+  misc: "杂项",
+  "misc.": "杂项",
+  fantasy: "奇幻",
+  cartoony: "卡通风",
+  cartoon: "卡通风",
+  "vanilla-like": "原版风",
+  vibrant: "鲜艳",
+
+  // 以下按 CurseForge / Modrinth 真实分类全量补译
+  "admin tools": "管理工具",
+  "anti-griefing tools": "防破坏工具",
+  "applied energistics 2": "应用能源 2",
+  "armor, tools, and weapons": "护甲与武器",
+  biomes: "生物群系",
+  "bug fixes": "错误修复",
+  "building gadgets": "建筑装置",
+  "bukkit plugins": "Bukkit 插件",
+  challenging: "高难度",
+  "chat related": "聊天相关",
+  "combat / pvp": "战斗 / PvP",
+  configuration: "配置",
+  create: "机械动力",
+  creation: "创作",
+  creativemode: "创造模式",
+  customization: "自定义",
+  "data packs": "数据包",
+  "developer tools": "开发者工具",
+  dimensions: "维度",
+  "energy, fluid, and item transport": "能源、流体与物品运输",
+  expert: "专家级",
+  "farmer's delight": "农夫乐事",
+  fixes: "修复",
+  forestry: "林业",
+  fun: "娱乐",
+  galacticraft: "星际探险",
+  "game map": "游戏地图",
+  general: "通用",
+  genetics: "基因",
+  guidebook: "指南书",
+  "hardcore questing mode": "硬核任务模式",
+  "industrial craft": "工业",
+  informational: "信息展示",
+  "integrated dynamics": "集成动力",
+  "kitchen-sink": "大杂烩",
+  lightweight: "轻量",
+  "lucky blocks": "幸运方块",
+  management: "管理",
+  mechanics: "机制",
+  "mini game": "小游戏",
+  minigame: "小游戏",
+  modded: "模组化",
+  "modded world": "模组世界",
+  modpacks: "整合包",
+  mods: "模组",
+  "ores and resources": "矿物与资源",
+  parkour: "跑酷",
+  "player transport": "玩家运输",
+  progression: "进阶",
+  puzzle: "解谜",
+  recipes: "配方",
+  redstone: "红石",
+  "refined storage": "精妙存储",
+  "resource packs": "资源包",
+  "role playing": "角色扮演",
+  scenarios: "剧情",
+  scripts: "脚本",
+  "server utility": "服务器实用",
+  shaders: "光影",
+  structures: "建筑结构",
+  survival: "生存",
+  "tinker's construct": "匠魂",
+  tweaks: "微调",
+  "thermal expansion": "热力膨胀",
+  "twilight forest": "暮色森林",
+  "twitch integration": "Twitch 集成",
+  "website administration": "网站管理",
+  "world editing and management": "世界编辑与管理",
+  "world generators": "世界生成器",
+  worlds: "世界",
+  "api and library": "API 与支持库",
+  miscellaneous: "杂项",
+  "512x and higher": "512x 及以上",
+};
+
+function zhCategory(name: string) {
+  return CATEGORY_ZH[name.toLowerCase()] ?? name;
+}
+
 const sourceOptions = [
   { value: "all", label: "全部来源" },
   { value: "curseforge", label: "CurseForge" },
@@ -80,7 +253,10 @@ const query = ref("");
 const source = ref<"all" | SourceKey>("all");
 const versionMode = ref("all");
 const sortField = ref("2");
+const category = ref("");
 const versions = ref<string[]>([]);
+const cfCategories = ref<{ id: number; name: string }[]>([]);
+const mrCategories = ref<string[]>([]);
 const buckets = ref<Record<SourceKey, Bucket>>(emptyBuckets());
 const loading = ref(false);
 const error = ref("");
@@ -132,6 +308,29 @@ const sortOptions = [
   { value: "3", label: "最近更新" },
   { value: "6", label: "总下载量" },
 ];
+const typeOptions = computed(() => {
+  if (source.value === "curseforge") {
+    return cfCategories.value.map((item) => ({
+      value: String(item.id),
+      label: zhCategory(item.name),
+    }));
+  }
+  if (source.value === "modrinth") {
+    return mrCategories.value.map((name) => ({
+      value: name,
+      label: zhCategory(name),
+    }));
+  }
+  return [];
+});
+/// 两个来源的分类体系不同，聚合浏览时不提供类型筛选
+const typeDisabled = computed(
+  () => source.value === "all" || typeOptions.value.length === 0
+);
+const typeSelectOptions = computed(() => [
+  { value: "", label: typeDisabled.value ? "选择来源后可筛选" : "全部类型" },
+  ...typeOptions.value,
+]);
 const queryGameVersion = computed(() => {
   if (versionMode.value === "all") return null;
   if (versionMode.value === "instance") return context.value?.game_version ?? null;
@@ -188,6 +387,7 @@ onMounted(async () => {
   }
   if (preset?.query) query.value = preset.query;
   loadVersions();
+  void loadCategories();
   await loadContext();
   await search(true);
   if (preset?.projectId) {
@@ -210,9 +410,16 @@ watch(
   () => props.kind,
   async () => {
     active.value = null;
+    category.value = "";
+    void loadCategories();
     await search(true);
   }
 );
+
+watch(category, () => {
+  if (typeDisabled.value) return;
+  void search(true);
+});
 
 async function loadVersions() {
   try {
@@ -220,6 +427,37 @@ async function loadVersions() {
   } catch {
     versions.value = [];
   }
+}
+
+/// 类型下拉数据：CurseForge 按 classId 拉分类，Modrinth 拉官方标签
+async function loadCategories() {
+  const tasks: Promise<void>[] = [];
+  if (source.value !== "modrinth") {
+    const classId = CLASS_IDS[props.kind] ?? 6;
+    tasks.push(
+      api
+        .cfCategories(classId)
+        .then((list) => {
+          cfCategories.value = list;
+        })
+        .catch(() => {
+          cfCategories.value = [];
+        })
+    );
+  }
+  if (source.value !== "curseforge") {
+    tasks.push(
+      api
+        .modrinthCategories(props.kind)
+        .then((list) => {
+          mrCategories.value = list;
+        })
+        .catch(() => {
+          mrCategories.value = [];
+        })
+    );
+  }
+  await Promise.allSettled(tasks);
 }
 
 async function loadContext() {
@@ -253,6 +491,11 @@ async function search(reset = true) {
 
 async function fetchBucket(key: SourceKey, offset: number) {
   const version = queryGameVersion.value;
+  const selected = category.value;
+  const cfCategory =
+    source.value === "curseforge" && selected ? Number(selected) : null;
+  const mrCategory =
+    source.value === "modrinth" && selected ? selected : null;
   const result =
     key === "curseforge"
       ? await api.cfSearch(
@@ -261,7 +504,8 @@ async function fetchBucket(key: SourceKey, offset: number) {
           version,
           loader.value,
           offset,
-          Number(sortField.value)
+          Number(sortField.value),
+          cfCategory
         )
       : await api.modrinthSearch(
           props.kind,
@@ -269,7 +513,8 @@ async function fetchBucket(key: SourceKey, offset: number) {
           version,
           loader.value,
           offset,
-          Number(sortField.value)
+          Number(sortField.value),
+          mrCategory
         );
   const bucket = buckets.value[key];
   const items = [...bucket.items, ...result.items];
@@ -289,6 +534,7 @@ function resetSearch() {
   source.value = "all";
   versionMode.value = instanceId.value ? "instance" : "all";
   sortField.value = "2";
+  category.value = "";
   search(true);
 }
 
@@ -296,6 +542,9 @@ function switchSource(value: string) {
   const next = value as "all" | SourceKey;
   if (source.value === next) return;
   source.value = next;
+  // 分类 id 在两个来源之间互不通用，切来源时重置
+  category.value = "";
+  void loadCategories();
   search(true);
 }
 
@@ -573,6 +822,15 @@ async function confirmImport() {
             :options="instanceOptions"
           />
           <span v-else class="cf-field__fallback muted small">暂未安装版本</span>
+        </label>
+
+        <label class="cf-field cf-field--type">
+          <span class="cf-field__label">类型</span>
+          <WoodSelect
+            v-model="category"
+            :options="typeSelectOptions"
+            :disabled="typeDisabled"
+          />
         </label>
       </div>
 
@@ -971,6 +1229,11 @@ async function confirmImport() {
   display: grid;
   grid-template-columns: minmax(230px, 1fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
+}
+
+/* 类型筛选独占第三行，宽度与单个下拉对齐 */
+.cf-field--type {
+  max-width: 320px;
 }
 
 .cf-field {

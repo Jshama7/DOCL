@@ -433,6 +433,7 @@ async fn curseforge_updates(
             &query,
             Some(game_version),
             Some(loader),
+            None,
             0,
             5,
             2,

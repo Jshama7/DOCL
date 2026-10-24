@@ -70,6 +70,7 @@ const form = reactive<Config>({
   background_dim: 0,
   ui_radius: "default",
   ui_density: "normal",
+  window_vibrancy: false,
 });
 
 /// 从 store 同步到表单期间要抑制自动保存，避免刚打开页面就写盘。
@@ -118,6 +119,7 @@ const autoSaveKeys: (keyof Config)[] = [
   "download_source",
   "concurrency",
   "version_isolation",
+  "window_vibrancy",
 ];
 
 let autoTimer: number | undefined;
@@ -155,6 +157,11 @@ async function runAutoSave() {
     if (seq === autoSeq) {
       syncing = true;
       store.config = saved;
+      // 后端在系统不支持时会回滚毛玻璃开关，这里把表单同步回去并提示
+      if (!saved.window_vibrancy && form.window_vibrancy) {
+        form.window_vibrancy = false;
+        notify("当前系统不支持毛玻璃透出，已自动关闭");
+      }
       await nextTick();
       syncing = false;
       if (saved.game_dir !== previousDir) {
@@ -1067,6 +1074,16 @@ function useAutoJava() {
         </div>
         <div class="setting__control">
           <WoodSelect v-model="form.ui_density" :options="densityOptions" />
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>毛玻璃透出桌面</strong>
+          <span>窗口整体变为系统级毛玻璃，可看到后面的实时画面；Win10 上拖动窗口时系统会临时降级</span>
+        </div>
+        <div class="setting__control">
+          <WoodToggle v-model="form.window_vibrancy" />
         </div>
       </div>
 

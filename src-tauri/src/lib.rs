@@ -27,8 +27,10 @@ mod skins;
 mod system;
 mod terracotta;
 mod update;
+mod vibrancy;
 
 use std::sync::Mutex;
+use tauri::Manager;
 
 pub struct AppState {
     pub config: Mutex<config::Config>,
@@ -47,6 +49,17 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(move |app| {
+            // 按配置恢复毛玻璃；失败静默跳过，设置页开关可以重试
+            if cfg.window_vibrancy {
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Err(e) = vibrancy::enable(&window) {
+                        eprintln!("vibrancy: {e}");
+                    }
+                }
+            }
+            Ok(())
+        })
         .manage(AppState {
             config: Mutex::new(cfg),
             client: http::client(),
@@ -71,6 +84,8 @@ pub fn run() {
             commands::update_download,
             commands::update_install,
             commands::open_folder,
+            commands::cf_categories,
+            commands::modrinth_categories,
             commands::reveal_file,
             commands::game_dirs,
             commands::game_dir_version_counts,

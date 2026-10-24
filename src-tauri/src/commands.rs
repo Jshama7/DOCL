@@ -22,6 +22,7 @@ use crate::skins;
 use crate::system;
 use crate::terracotta;
 use crate::update;
+use crate::vibrancy;
 use crate::AppState;
 use std::sync::atomic::Ordering;
 use tauri::{AppHandle, Emitter, State};
@@ -107,9 +108,20 @@ pub async fn news_article(state: State<'_, AppState>, path: String) -> CmdResult
 }
 
 #[tauri::command]
-pub fn save_config(state: State<'_, AppState>, config: Config) -> CmdResult<Config> {
+pub fn save_config(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+    config: Config,
+) -> CmdResult<Config> {
     let mut config = config;
     config.sync_game_dirs();
+    // 毛玻璃开关变化时实时应用；系统不支持则回滚为关闭并照常保存，
+    // 返回回滚后的配置让前端把开关弹回去
+    if config.window_vibrancy != state.config.lock().unwrap().window_vibrancy {
+        if vibrancy::apply(&window, config.window_vibrancy).is_err() {
+            config.window_vibrancy = false;
+        }
+    }
     config::save(&config).map_err(err)?;
     std::fs::create_dir_all(&config.game_dir).map_err(err)?;
     *state.config.lock().unwrap() = config.clone();
@@ -898,6 +910,7 @@ pub async fn cf_search(
     query: String,
     game_version: Option<String>,
     loader: Option<String>,
+    category_id: Option<i64>,
     index: u32,
     sort_field: Option<u32>,
 ) -> CmdResult<curseforge::CfSearchResult> {
@@ -907,12 +920,22 @@ pub async fn cf_search(
         &query,
         game_version.as_deref(),
         loader.as_deref(),
+        category_id,
         index,
         20,
         sort_field.unwrap_or(2),
     )
     .await
     .map_err(err)
+}
+
+/// 类型筛选下拉：CurseForge 分类列表。
+#[tauri::command]
+pub async fn cf_categories(
+    state: State<'_, AppState>,
+    class_id: i64,
+) -> CmdResult<Vec<curseforge::CfCategoryView>> {
+    curseforge::categories(&state.client, class_id).await.map_err(err)
 }
 
 #[tauri::command]
@@ -949,6 +972,7 @@ pub async fn modrinth_search(
     query: String,
     game_version: Option<String>,
     loader: Option<String>,
+    category: Option<String>,
     index: u32,
     sort_field: Option<u32>,
 ) -> CmdResult<curseforge::CfSearchResult> {
@@ -958,12 +982,22 @@ pub async fn modrinth_search(
         &query,
         game_version.as_deref(),
         loader.as_deref(),
+        category.as_deref(),
         index,
         20,
         sort_field.unwrap_or(2),
     )
     .await
     .map_err(err)
+}
+
+/// 类型筛选下拉：Modrinth 分类标签。
+#[tauri::command]
+pub async fn modrinth_categories(
+    state: State<'_, AppState>,
+    kind: String,
+) -> CmdResult<Vec<String>> {
+    crate::modrinth::categories(&state.client, &kind).await.map_err(err)
 }
 
 #[tauri::command]

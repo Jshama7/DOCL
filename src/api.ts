@@ -146,6 +146,7 @@ export interface Config {
   background_dim: number;
   ui_radius: string;
   ui_density: string;
+  window_vibrancy: boolean;
 }
 
 export interface BackgroundInfo {
@@ -685,17 +686,21 @@ export const api = {
     gameVersion?: string | null,
     loader?: string | null,
     index = 0,
-    sortField = 2
+    sortField = 2,
+    categoryId?: number | null
   ) =>
     invoke<CfSearchResult>("cf_search", {
       classId,
       query,
       gameVersion: gameVersion ?? null,
       loader: loader ?? null,
+      categoryId: categoryId ?? null,
       index,
       sortField,
     }),
   cfGameVersions: () => invoke<string[]>("cf_game_versions"),
+  cfCategories: (classId: number) =>
+    invoke<{ id: number; name: string }[]>("cf_categories", { classId }),
   cfFiles: (modId: string, gameVersion?: string | null, loader?: string | null) =>
     invoke<CfFileView[]>("cf_files", {
       modId,
@@ -708,16 +713,20 @@ export const api = {
     gameVersion?: string | null,
     loader?: string | null,
     index = 0,
-    sortField = 2
+    sortField = 2,
+    category?: string | null
   ) =>
     invoke<CfSearchResult>("modrinth_search", {
       kind,
       query,
       gameVersion: gameVersion ?? null,
       loader: loader ?? null,
+      category: category ?? null,
       index,
       sortField,
     }),
+  modrinthCategories: (kind: string) =>
+    invoke<string[]>("modrinth_categories", { kind }),
   modrinthFiles: (
     projectId: string,
     gameVersion?: string | null,

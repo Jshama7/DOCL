@@ -106,12 +106,37 @@ fn clean(value: &str) -> String {
         .collect()
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct MrTag {
+    #[serde(default)]
+    name: String,
+    #[serde(default)]
+    project_type: String,
+    #[serde(default)]
+    header: String,
+}
+
+/// 拉取 Modrinth 某资源类型下的分类标签，供类型筛选下拉使用。
+pub async fn categories(client: &reqwest::Client, kind: &str) -> Result<Vec<String>> {
+    let url = reqwest::Url::parse(&format!("{BASE}/tag/category"))?;
+    let tags: Vec<MrTag> = download::get_json(client, url.as_str(), false).await?;
+    let target = project_type(kind)?;
+    let mut names: Vec<String> = tags
+        .into_iter()
+        .filter(|tag| tag.header == "categories" && tag.project_type == target)
+        .map(|tag| tag.name)
+        .collect();
+    names.sort();
+    Ok(names)
+}
+
 pub async fn search(
     client: &reqwest::Client,
     kind: &str,
     query: &str,
     game_version: Option<&str>,
     loader: Option<&str>,
+    category: Option<&str>,
     index: u32,
     page_size: u32,
     sort_field: u32,
@@ -125,6 +150,9 @@ pub async fn search(
     }
     if let Some(loader) = loader.and_then(loader_tag) {
         facets.push(format!("[\"categories:{loader}\"]"));
+    }
+    if let Some(category) = category.filter(|c| !c.is_empty()) {
+        facets.push(format!("[\"categories:{}\"]", clean(category)));
     }
 
     let mut url = reqwest::Url::parse(&format!("{BASE}/search"))?;

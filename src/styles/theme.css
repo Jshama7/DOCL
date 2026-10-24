@@ -92,6 +92,22 @@ body {
   user-select: none;
 }
 
+/* Windows Acrylic 毛玻璃：窗口背景让位给系统，桌面实时透出并自带模糊 */
+html.vibrancy,
+html.vibrancy body {
+  background: transparent;
+}
+
+/* 底图保留品牌氛围，但降到半透明，不再遮挡桌面 */
+html.vibrancy .wallpaper img,
+html.vibrancy .wallpaper__builtin {
+  opacity: 0.3;
+}
+
+html.vibrancy .ambient__orb {
+  opacity: 0.55;
+}
+
 button,
 input,
 textarea,

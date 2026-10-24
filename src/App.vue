@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, markRaw, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import TitleBar from "./components/TitleBar.vue";
 import DownloadCenter from "./components/DownloadCenter.vue";
@@ -219,6 +219,13 @@ const appStyle = computed(
     }) as Record<string, string>
 );
 
+/// 毛玻璃模式下让页面背景透出，配合系统 Acrylic 看到桌面
+watch(
+  () => store.config?.window_vibrancy,
+  (value) => document.documentElement.classList.toggle("vibrancy", !!value),
+  { immediate: true }
+);
+
 const views = {
   home: markRaw(HomeView),
   versions: markRaw(VersionsView),
@@ -235,11 +242,8 @@ const currentView = computed(() => views[store.page as Page]);
 
 <template>
   <div
-    class="app"
-    :class="{
-      'no-anim': store.config && !store.config.animations,
-      glass: !!store.backgroundUrl || !!store.backgroundPreset,
-    }"
+    class="app glass"
+    :class="{ 'no-anim': store.config && !store.config.animations }"
     :data-radius="store.config?.ui_radius ?? 'default'"
     :data-density="store.config?.ui_density ?? 'normal'"
     :style="appStyle"

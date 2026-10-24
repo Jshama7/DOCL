@@ -1,5 +1,6 @@
 {
-  "version": "1.2.1",
-  "url": "https://github.com/dawo4/DOCL/releases/download/v1.2.1/DOCL_1.2.1_x64-setup.exe",
-  "notes": "更新清单地址可选：国内加速（jsDelivr）、GitHub 原地址、自定义；默认国内加速。"
+  "version": "1.3.0",
+  "url": "https://github.com/dawo4/DOCL/releases/download/v1.3.0/DOCL_1.3.0_x64-setup.exe",
+  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.3.0/DOCL_1.3.0_portable.zip",
+  "notes": "新增便携版与从 PCL 迁移设置；界面全面翻新，设置改为实时保存。"
 }

@@ -42,6 +42,12 @@ pub struct AppState {
 }
 
 pub fn run() {
+    // 清理上次便携更新的备份；旧进程退出后才能删掉，失败留给下次
+    if config::is_portable() {
+        if let Ok(current) = std::env::current_exe() {
+            let _ = std::fs::remove_file(current.with_extension("exe.old"));
+        }
+    }
     let cfg = config::load();
     let accounts = auth::load_accounts();
     lan::start();
@@ -83,6 +89,7 @@ pub fn run() {
             commands::update_check,
             commands::update_download,
             commands::update_install,
+            commands::portable_update_install,
             commands::open_folder,
             commands::cf_categories,
             commands::modrinth_categories,

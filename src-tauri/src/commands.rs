@@ -198,6 +198,12 @@ pub fn update_install(app: AppHandle, path: String) -> CmdResult<()> {
     appupdate::install(&app, &path).map_err(err)
 }
 
+/// 便携版原地更新：解压、替换自身、重启。
+#[tauri::command]
+pub fn portable_update_install(app: AppHandle, path: String) -> CmdResult<()> {
+    appupdate::portable_install(&app, &path).map_err(err)
+}
+
 #[derive(serde::Serialize)]
 pub struct GameDirsView {
     pub dirs: Vec<config::GameDirEntry>,

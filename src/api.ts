@@ -650,6 +650,8 @@ export const api = {
   updateDownload: (url: string, version: string) =>
     invoke<string>("update_download", { url, version }),
   updateInstall: (path: string) => invoke<void>("update_install", { path }),
+  portableUpdateInstall: (path: string) =>
+    invoke<void>("portable_update_install", { path }),
   exportSettings: (path: string) => invoke<void>("export_settings", { path }),
   importSettings: (path: string) => invoke<Config>("import_settings", { path }),
   crashAnalyze: (versionId: string) =>

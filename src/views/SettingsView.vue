@@ -524,10 +524,23 @@ async function downloadUpdate() {
   }
 }
 
-/// 便携包不做自动安装，下载后直接带用户到所在目录
-function revealDownload() {
-  const dir = updatePath.value.replace(/[\\/][^\\/]+$/, "");
-  if (dir) openFolder(dir);
+/// 便携版原地更新：解压、替换自身并重启，数据在程序目录内不受影响
+const applyingUpdate = ref(false);
+
+async function applyPortableUpdate() {
+  if (!updatePath.value || applyingUpdate.value) return;
+  const ok = await confirm(
+    "将关闭启动器、替换程序文件后自动重启。\n配置、账号与游戏数据都在程序目录内，不受影响。",
+    { title: "安装便携更新", kind: "info" }
+  );
+  if (!ok) return;
+  applyingUpdate.value = true;
+  try {
+    await api.portableUpdateInstall(updatePath.value);
+  } catch (err) {
+    notify(`便携更新失败：${String(err)}`, "err");
+    applyingUpdate.value = false;
+  }
 }
 
 async function installUpdate() {
@@ -1361,7 +1374,7 @@ function useAutoJava() {
         清单格式：
         <span class="mono">{ "version": "0.2.0", "url": "https://…/DOCL_0.2.0-setup.exe", "portable_url": "https://…/DOCL_0.2.0_portable.zip", "notes": "更新说明" }</span>。
         <template v-if="portable">
-          便携版下载的是完整压缩包，解压覆盖旧文件即可，不会弹出安装向导。
+          便携版下载后点「更新并重启」，自动完成替换，全程不弹安装向导。
         </template>
         <template v-else>
           发现新版本后下载的是完整安装包，点击安装时启动器会自动退出。
@@ -1403,10 +1416,11 @@ function useAutoJava() {
             v-else-if="isPortablePack"
             variant="primary"
             size="sm"
-            @click="revealDownload"
+            :disabled="applyingUpdate"
+            @click="applyPortableUpdate"
           >
-            <AppIcon name="folder" :size="14" />
-            打开所在文件夹
+            <AppIcon name="refresh" :size="14" />
+            {{ applyingUpdate ? "正在更新…" : "更新并重启" }}
           </WoodButton>
           <WoodButton v-else variant="primary" size="sm" @click="installUpdate">
             <AppIcon name="check" :size="14" />

@@ -219,7 +219,7 @@ async function importPacks() {
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel-2);
 }
@@ -234,7 +234,7 @@ async function importPacks() {
   place-items: center;
   width: 30px;
   height: 30px;
-  border-radius: 8px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel);
   color: var(--moss);

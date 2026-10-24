@@ -138,7 +138,6 @@ onBeforeUnmount(() => {
         <section class="dl-panel">
           <header class="dl-panel__head">
             <div>
-              <span class="eyebrow">DOCL / DOWNLOAD</span>
               <h3 class="dl-panel__title">{{ title }}</h3>
             </div>
             <div class="row">
@@ -302,7 +301,7 @@ onBeforeUnmount(() => {
   width: min(680px, 92vw);
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-radius: 16px;
+  border-radius: 6px;
   box-shadow: 0 30px 70px rgba(40, 28, 16, 0.32);
   padding: 20px 22px 16px;
   display: flex;
@@ -317,8 +316,8 @@ onBeforeUnmount(() => {
   content: "";
   position: absolute;
   inset: 0 0 auto;
-  height: 4px;
-  background: linear-gradient(90deg, var(--moss), var(--moss-bright), var(--amber));
+  height: 2px;
+  background: var(--moss);
 }
 
 .dl-panel__head {
@@ -348,7 +347,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
   padding: 16px 16px 14px;
-  border-radius: 12px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel-2);
 }
@@ -398,7 +397,7 @@ onBeforeUnmount(() => {
   gap: 10px;
   min-width: 0;
   padding: 14px 16px;
-  border-radius: 12px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel-2);
 }
@@ -551,7 +550,7 @@ onBeforeUnmount(() => {
 
 .dl-error {
   padding: 9px 11px;
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 12px;
@@ -633,7 +632,7 @@ onBeforeUnmount(() => {
 .dl-tip {
   width: 260px;
   padding: 12px 13px;
-  border-radius: 11px;
+  border-radius: 4px;
   background: #3c2b1c;
   color: #fbf4e6;
   box-shadow: 0 14px 34px rgba(40, 28, 16, 0.32);
@@ -653,7 +652,7 @@ onBeforeUnmount(() => {
 
 .dl-tip__bar {
   height: 5px;
-  border-radius: 99px;
+  border-radius: 3px;
   background: rgba(255, 253, 246, 0.18);
   overflow: hidden;
 }
@@ -661,7 +660,7 @@ onBeforeUnmount(() => {
 .dl-tip__bar span {
   display: block;
   height: 100%;
-  border-radius: 99px;
+  border-radius: 3px;
   background: linear-gradient(90deg, #88a867, #c08a55);
   transition: width 240ms var(--ease-out-quart);
 }
@@ -681,7 +680,7 @@ onBeforeUnmount(() => {
 
 .dl-tip__open {
   height: 28px;
-  border-radius: 7px;
+  border-radius: 3px;
   background: rgba(255, 253, 246, 0.1);
   color: #fbf4e6;
   font-size: 11.5px;

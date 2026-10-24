@@ -206,11 +206,9 @@ onMounted(() => {
   <section class="news card reveal" :style="{ '--i': 1 }">
     <header class="news__head">
       <div class="news__heading">
-        <span class="eyebrow">DOCL / NEWS</span>
         <div class="news__heading-row">
           <span class="section-title">动态</span>
           <span v-if="stale" class="tag news-tag--stale">离线缓存</span>
-          <span class="news__count mono">{{ filtered.length }} 条</span>
         </div>
       </div>
 
@@ -273,9 +271,10 @@ onMounted(() => {
             @click="openItem(item)"
           >
             <span class="news-row__date mono">{{ shortDate(item.date) }}</span>
-            <span class="tag" :class="tagClass(item)">{{ item.tag }}</span>
+            <span v-if="item.source !== 'community'" class="tag" :class="tagClass(item)">
+              {{ item.tag }}
+            </span>
             <span class="news-row__title">{{ item.title }}</span>
-            <AppIcon name="chevron-down" :size="12" class="news-row__chev" />
           </button>
           <button class="news__more" @click="toggle">
             展开全部 {{ filtered.length }} 条
@@ -323,12 +322,13 @@ onMounted(() => {
               />
             </span>
             <span class="news-row__date mono">{{ shortDate(item.date) }}</span>
-            <span class="tag" :class="tagClass(item)">{{ item.tag }}</span>
+            <span v-if="item.source !== 'community'" class="tag" :class="tagClass(item)">
+              {{ item.tag }}
+            </span>
             <span class="news-row__text">
               <span class="news-row__title">{{ item.title }}</span>
               <span class="news-row__summary">{{ item.summary }}</span>
             </span>
-            <AppIcon name="chevron-down" :size="12" class="news-row__chev" />
           </button>
         </div>
 
@@ -402,11 +402,6 @@ onMounted(() => {
   gap: 8px;
 }
 
-.news__count {
-  font-size: 10.5px;
-  color: var(--muted);
-}
-
 .news-tag--stale {
   background: var(--panel-2);
   color: var(--muted);
@@ -423,7 +418,7 @@ onMounted(() => {
   display: flex;
   gap: 2px;
   padding: 3px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel-2);
   margin-left: auto;
@@ -432,7 +427,7 @@ onMounted(() => {
 .news__tab {
   height: 27px;
   padding: 0 12px;
-  border-radius: 7px;
+  border-radius: 3px;
   color: var(--ink-soft);
   font-size: 12px;
   font-weight: 600;
@@ -464,7 +459,7 @@ onMounted(() => {
 .news__skeleton-row {
   display: block;
   height: 38px;
-  border-radius: 9px;
+  border-radius: 4px;
 }
 
 .news__empty {
@@ -505,7 +500,7 @@ onMounted(() => {
   gap: 10px;
   height: 38px;
   padding: 0 8px;
-  border-radius: 8px;
+  border-radius: 4px;
   text-align: left;
   color: var(--ink);
   transition: background var(--dur-1) ease;
@@ -532,12 +527,6 @@ onMounted(() => {
   white-space: nowrap;
 }
 
-.news-row__chev {
-  color: var(--muted);
-  transform: rotate(-90deg);
-  flex-shrink: 0;
-}
-
 .news__more {
   display: inline-flex;
   align-items: center;
@@ -545,7 +534,7 @@ onMounted(() => {
   align-self: flex-start;
   height: 28px;
   padding: 0 8px;
-  border-radius: 7px;
+  border-radius: 3px;
   color: var(--moss);
   font-size: 12px;
   font-weight: 600;
@@ -576,7 +565,7 @@ onMounted(() => {
 .news-row__thumb {
   width: 40px;
   height: 40px;
-  border-radius: 8px;
+  border-radius: 4px;
   overflow: hidden;
   flex-shrink: 0;
   background: var(--paper-2);
@@ -622,7 +611,7 @@ onMounted(() => {
   gap: 6px;
   padding: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 4px;
   background: var(--panel-2);
   text-align: left;
   overflow: hidden;
@@ -640,7 +629,7 @@ onMounted(() => {
   display: block;
   width: 100%;
   aspect-ratio: 16 / 9;
-  border-radius: 7px;
+  border-radius: 3px;
   overflow: hidden;
   background: var(--paper-2);
 }

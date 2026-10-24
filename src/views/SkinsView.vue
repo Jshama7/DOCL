@@ -286,22 +286,13 @@ onMounted(async () => {
 
 <template>
   <div class="page skins">
-    <header class="page-head">
-      <div>
-        <span class="eyebrow">DOCL / SKINS</span>
-      </div>
-      <div class="skins-head__tags">
-        <span class="tag">{{ items.length }} 件收藏</span>
-      </div>
-    </header>
-
-    <section class="card skins-lib">
-      <header class="skins-lib__head">
-        <div>
-          <span class="eyebrow">LIBRARY</span>
-          <div class="section-title">皮肤收藏</div>
+    <section class="lib card">
+      <header class="lib__head">
+        <div class="lib__title">
+          皮肤收藏
+          <span class="lib__count mono">{{ items.length }}</span>
         </div>
-        <div class="skins-lib__actions">
+        <div class="lib__actions">
           <WoodButton variant="ghost" size="sm" @click="openHarvest">
             <AppIcon name="user" :size="14" />
             从账号收录
@@ -310,53 +301,55 @@ onMounted(async () => {
             <AppIcon name="globe" :size="14" />
             按玩家名抓取
           </WoodButton>
-          <WoodButton variant="primary" size="sm" sheen @click="importOpen = true">
+          <WoodButton variant="primary" size="sm" @click="importOpen = true">
             <AppIcon name="plus" :size="14" />
             导入 PNG
           </WoodButton>
         </div>
       </header>
 
-      <div v-if="loading" class="skins-empty">
+      <div v-if="loading" class="lib__empty">
         <span class="muted small">正在读取皮肤库…</span>
       </div>
-      <div v-else-if="error" class="skins-empty">
+      <div v-else-if="error" class="lib__empty">
         <span class="muted small">{{ error }}</span>
         <WoodButton variant="ghost" size="sm" @click="loadLibrary">重试</WoodButton>
       </div>
-      <div v-else-if="!items.length" class="skins-empty">
+      <div v-else-if="!items.length" class="lib__empty">
         <span class="muted small">皮肤库还是空的，导入 PNG 或从账号收录一件吧</span>
       </div>
 
-      <div v-else class="skins-grid">
-        <article v-for="item in items" :key="item.id" class="skin-card">
-          <div class="skin-card__preview">
+      <div v-else class="skin-grid">
+        <article v-for="item in items" :key="item.id" class="skin">
+          <div class="skin__preview">
             <SkinModel :skin="item.data_url" :seed="item.id" :model="item.model" :height="200" />
           </div>
-          <div class="skin-card__body">
-            <strong class="skin-card__name">{{ item.name }}</strong>
-            <div class="skin-card__tags">
-              <span class="tag">{{ item.model === "slim" ? "纤细" : "经典" }}</span>
-              <span class="tag skin-card__tag--src">{{ sourceLabel(item.source) }}</span>
-            </div>
+          <div class="skin__meta">
+            <strong class="skin__name">{{ item.name }}</strong>
+            <span class="skin__tags">
+              {{ item.model === "slim" ? "纤细" : "经典" }} · {{ sourceLabel(item.source) }}
+            </span>
           </div>
-          <footer class="skin-card__foot">
+          <footer class="skin__foot">
             <WoodButton variant="primary" size="sm" @click="openApply(item)">
               应用
             </WoodButton>
-            <IconButton icon="settings" label="重命名" :size="28" @click="openRename(item)" />
-            <IconButton icon="trash" label="删除" :size="28" variant="danger" @click="deleteTarget = item" />
+            <IconButton icon="settings" label="重命名" :size="26" @click="openRename(item)" />
+            <IconButton
+              icon="trash"
+              label="删除"
+              :size="26"
+              variant="danger"
+              @click="deleteTarget = item"
+            />
           </footer>
         </article>
       </div>
     </section>
 
-    <section class="card skins-capes">
-      <header class="skins-lib__head">
-        <div>
-          <span class="eyebrow">CAPES</span>
-          <div class="section-title">披风管理</div>
-        </div>
+    <section class="lib card">
+      <header class="lib__head">
+        <div class="lib__title">披风管理</div>
         <WoodSelect
           v-if="msAccountOptions.length"
           v-model="capeAccount"
@@ -364,42 +357,44 @@ onMounted(async () => {
         />
       </header>
 
-      <div v-if="!msAccountOptions.length" class="skins-empty">
+      <div v-if="!msAccountOptions.length" class="lib__empty">
         <span class="muted small">只有微软账号支持披风，请先到账号页登录</span>
       </div>
-      <div v-else-if="capesLoading" class="skins-empty">
+      <div v-else-if="capesLoading" class="lib__empty">
         <span class="muted small">正在读取披风…</span>
       </div>
-      <div v-else-if="capesError" class="skins-empty">
+      <div v-else-if="capesError" class="lib__empty">
         <span class="muted small">{{ capesError }}</span>
         <WoodButton variant="ghost" size="sm" @click="loadCapes">重试</WoodButton>
       </div>
-      <div v-else-if="!capes.length" class="skins-empty">
+      <div v-else-if="!capes.length" class="lib__empty">
         <span class="muted small">这个账号没有可用的披风</span>
       </div>
 
-      <div v-else class="capes-grid">
+      <div v-else class="cape-grid">
         <article
           v-for="cape in capes"
           :key="cape.id"
-          class="cape-card"
-          :class="{ 'cape-card--active': cape.active }"
+          class="cape"
+          :class="{ 'cape--active': cape.active }"
         >
-          <div class="cape-card__preview">
+          <div class="cape__preview">
             <img :src="cape.url" :alt="cape.alias" loading="lazy" />
           </div>
-          <div class="cape-card__body">
-            <strong class="cape-card__name">{{ cape.alias }}</strong>
-            <span v-if="cape.active" class="tag tag--grass">使用中</span>
+          <div class="cape__meta">
+            <strong class="cape__name">{{ cape.alias }}</strong>
+            <span class="cape__state">{{ cape.active ? "使用中" : "未使用" }}</span>
           </div>
-          <WoodButton
-            :variant="cape.active ? 'ghost' : 'primary'"
-            size="sm"
-            :disabled="capeBusy === cape.id"
-            @click="toggleCape(cape)"
-          >
-            {{ capeBusy === cape.id ? "处理中…" : cape.active ? "卸下" : "启用" }}
-          </WoodButton>
+          <footer class="cape__foot">
+            <WoodButton
+              :variant="cape.active ? 'ghost' : 'primary'"
+              size="sm"
+              :disabled="capeBusy === cape.id"
+              @click="toggleCape(cape)"
+            >
+              {{ capeBusy === cape.id ? "处理中…" : cape.active ? "卸下" : "启用" }}
+            </WoodButton>
+          </footer>
         </article>
       </div>
     </section>
@@ -561,158 +556,181 @@ onMounted(async () => {
   gap: 16px;
 }
 
-.skins-head__tags {
-  display: flex;
-  gap: 8px;
-}
-
-.skins-lib,
-.skins-capes {
-  padding: 16px 18px;
+.lib {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  border-radius: 3px;
+  overflow: hidden;
 }
 
-.skins-lib__head {
+.lib__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line);
 }
 
-.skins-lib__actions {
+.lib__title {
   display: flex;
+  align-items: baseline;
   gap: 8px;
-}
-
-.skins-empty {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 32px 12px;
-}
-
-.skins-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: 12px;
-}
-
-.skin-card {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel-2);
-  overflow: hidden;
-  transition: border-color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo),
-    box-shadow var(--dur-2) ease;
-}
-
-.skin-card:hover {
-  border-color: var(--line-strong);
-  transform: translateY(-2px);
-  box-shadow: var(--shadow-1);
-}
-
-.skin-card__preview {
-  display: flex;
-  justify-content: center;
-  padding-top: 6px;
-}
-
-.skin-card__body {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px 6px;
-}
-
-.skin-card__name {
-  font-size: 13.5px;
-  font-weight: 700;
-  color: var(--walnut-deep);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.skin-card__tags {
-  display: flex;
-  gap: 6px;
-}
-
-.skin-card__tag--src {
-  background: var(--panel);
-  color: var(--muted);
-}
-
-.skin-card__foot {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 8px 10px 10px;
-}
-
-.skin-card__foot .btn,
-.skin-card__foot button:first-child {
-  flex: 1;
-}
-
-.capes-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 12px;
-}
-
-.cape-card {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--panel-2);
-}
-
-.cape-card--active {
-  border-color: rgba(var(--accent-rgb), 0.45);
-}
-
-.cape-card__preview {
-  width: 56px;
-  height: 56px;
-  border-radius: 8px;
-  background: var(--paper-2);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-}
-
-.cape-card__preview img {
-  height: 48px;
-  image-rendering: pixelated;
-}
-
-.cape-card__body {
-  flex: 1;
   min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.cape-card__name {
   font-size: 13px;
   font-weight: 700;
   color: var(--walnut-deep);
+}
+
+.lib__count {
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.lib__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.lib__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 36px 12px;
+}
+
+.skin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.skin {
+  display: flex;
+  flex-direction: column;
+  background: rgba(var(--glass-rgb), 0.72);
+  transition: background var(--dur-2) ease;
+}
+
+.skin:hover {
+  background: rgba(var(--glass-rgb), 0.86);
+}
+
+.skin__preview {
+  display: grid;
+  place-items: center;
+  height: 214px;
+  background: rgba(var(--glass-rgb), 0.42);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.skin__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+}
+
+.skin__name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--walnut-deep);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.skin__tags {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.skin__foot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--line);
+}
+
+.skin__foot .btn {
+  flex: 1;
+}
+
+.cape-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
+  gap: 1px;
+  background: var(--line);
+}
+
+.cape {
+  display: flex;
+  flex-direction: column;
+  background: rgba(var(--glass-rgb), 0.72);
+  transition: background var(--dur-2) ease;
+}
+
+.cape:hover {
+  background: rgba(var(--glass-rgb), 0.86);
+}
+
+.cape--active {
+  box-shadow: inset 2px 0 0 var(--moss);
+}
+
+.cape__preview {
+  display: grid;
+  place-items: center;
+  height: 150px;
+  background: rgba(var(--glass-rgb), 0.42);
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+}
+
+.cape__preview img {
+  height: 96px;
+  image-rendering: pixelated;
+}
+
+.cape__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 8px 10px;
+}
+
+.cape__name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--walnut-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cape__state {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.cape__foot {
+  display: flex;
+  align-items: center;
+  margin-top: auto;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--line);
+}
+
+.cape__foot .btn {
+  flex: 1;
 }
 
 .form {
@@ -737,7 +755,7 @@ onMounted(async () => {
   display: flex;
   gap: 2px;
   padding: 3px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel-2);
   align-self: flex-start;
@@ -746,7 +764,7 @@ onMounted(async () => {
 .seg__btn {
   height: 28px;
   padding: 0 14px;
-  border-radius: 7px;
+  border-radius: 3px;
   font-size: 12px;
   font-weight: 600;
   color: var(--ink-soft);

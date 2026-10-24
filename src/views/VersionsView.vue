@@ -156,10 +156,7 @@ async function chooseImage(id: string) {
 <template>
   <div class="page">
     <header class="page-head">
-      <div>
-        <span class="eyebrow">DOCL / LIBRARY</span>
-      </div>
-      <div class="row">
+      <div class="page-head__actions">
         <div class="dir-switch">
           <IconButton icon="layers" label="切换游戏目录" :size="32" @click="toggleDirs" />
           <template v-if="dirOpen">
@@ -339,7 +336,7 @@ async function chooseImage(id: string) {
   width: 320px;
   padding: 8px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--panel);
   box-shadow: 0 14px 34px rgba(52, 38, 24, 0.22);
 }
@@ -361,7 +358,7 @@ async function chooseImage(id: string) {
   width: 100%;
   padding: 9px 10px;
   border: 1px solid transparent;
-  border-radius: 9px;
+  border-radius: 4px;
   background: transparent;
   text-align: left;
   cursor: pointer;
@@ -451,7 +448,7 @@ async function chooseImage(id: string) {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 12px 18px 12px 14px;
+  padding: 12px 16px 12px 14px;
   overflow: visible;
 }
 
@@ -475,12 +472,12 @@ async function chooseImage(id: string) {
 }
 
 .version-row__no {
-  width: 18px;
+  width: 34px;
   flex-shrink: 0;
   font-size: 11px;
   letter-spacing: 0.06em;
   color: var(--muted);
-  text-align: center;
+  text-align: right;
   user-select: none;
 }
 
@@ -497,7 +494,7 @@ async function chooseImage(id: string) {
   height: 46px;
   padding: 0;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--tile) 16%, rgba(255, 255, 255, 0.55));
   cursor: pointer;
   overflow: hidden;
@@ -591,7 +588,7 @@ async function chooseImage(id: string) {
   width: 268px;
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--panel);
   box-shadow: 0 14px 34px rgba(52, 38, 24, 0.22);
 }
@@ -619,7 +616,7 @@ async function chooseImage(id: string) {
   gap: 4px;
   padding: 6px 2px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 4px;
   background: transparent;
   font-size: 10.5px;
   color: var(--ink-soft);
@@ -644,7 +641,7 @@ async function chooseImage(id: string) {
   justify-content: center;
   width: 30px;
   height: 30px;
-  border-radius: 8px;
+  border-radius: 4px;
   background: color-mix(in srgb, var(--tile) 18%, rgba(255, 255, 255, 0.6));
 }
 
@@ -657,7 +654,7 @@ async function chooseImage(id: string) {
   margin-top: 10px;
   padding: 7px 0;
   border: 1px dashed var(--line);
-  border-radius: 8px;
+  border-radius: 4px;
   background: transparent;
   font-size: 11.5px;
   color: var(--ink-soft);

@@ -562,10 +562,13 @@ async function confirmImport() {
           <WoodSelect v-model="sortField" :options="sortOptions" />
         </label>
 
-        <label v-if="kind !== 'modpacks'" class="cf-field">
+        <label class="cf-field">
           <span class="cf-field__label">目标实例</span>
+          <span v-if="kind === 'modpacks'" class="cf-field__fallback muted small">
+            导入时自动创建
+          </span>
           <WoodSelect
-            v-if="instanceOptions.length"
+            v-else-if="instanceOptions.length"
             v-model="instanceId"
             :options="instanceOptions"
           />
@@ -742,14 +745,13 @@ async function confirmImport() {
         <WoodButton variant="ghost" size="sm" @click="search(true)">重试</WoodButton>
       </div>
 
-      <div v-else-if="loading && !items.length" class="cf-grid">
-        <div v-for="n in 8" :key="n" class="cf-card cf-card--skeleton">
-          <div class="cf-card__head">
-            <span class="skeleton cf-card__logo" />
+      <div v-else-if="loading && !items.length" class="cf-list">
+        <div v-for="n in 8" :key="n" class="cf-row cf-row--skeleton">
+          <span class="skeleton cf-row__logo" />
+          <div class="cf-row__body">
+            <span class="skeleton cf-skeleton__title" />
+            <span class="skeleton cf-skeleton__line" />
           </div>
-          <span class="skeleton cf-skeleton__title" />
-          <span class="skeleton cf-skeleton__line" />
-          <span class="skeleton cf-skeleton__line cf-skeleton__line--short" />
         </div>
       </div>
 
@@ -761,54 +763,52 @@ async function confirmImport() {
         </div>
       </div>
 
-      <div v-else class="cf-grid">
+      <div v-else class="cf-list">
         <button
           v-for="(project, i) in items"
           :key="`${project.source}-${project.id}`"
-          class="cf-card"
+          class="cf-row"
           :style="{ '--i': i }"
           @click="openProject(project)"
         >
-          <div class="cf-card__head">
-            <img
-              v-if="project.logo_url"
-              class="cf-card__logo"
-              :src="project.logo_url"
-              alt=""
-              loading="lazy"
-            />
-            <span v-else class="cf-card__logo cf-card__logo--empty">
-              {{ project.name.slice(0, 1) }}
-            </span>
-            <span class="cf-card__source">{{ sourceLabel(project.source) }}</span>
+          <img
+            v-if="project.logo_url"
+            class="cf-row__logo"
+            :src="project.logo_url"
+            alt=""
+            loading="lazy"
+          />
+          <span v-else class="cf-row__logo cf-row__logo--empty">
+            {{ project.name.slice(0, 1) }}
+          </span>
+
+          <div class="cf-row__body">
+            <div class="cf-row__title">
+              <strong class="cf-row__name">{{ project.name }}</strong>
+              <span class="cf-row__source">{{ sourceLabel(project.source) }}</span>
+              <span
+                v-for="category in project.categories.slice(0, 2)"
+                :key="category"
+                class="chip"
+              >
+                {{ category }}
+              </span>
+            </div>
+            <p class="cf-row__summary">{{ project.summary }}</p>
           </div>
 
-          <strong class="cf-card__name">{{ project.name }}</strong>
-
-          <div class="cf-card__chips">
-            <span
-              v-for="category in project.categories.slice(0, 3)"
-              :key="category"
-              class="chip"
-            >
-              {{ category }}
-            </span>
-          </div>
-
-          <p class="cf-card__summary">{{ project.summary }}</p>
-
-          <div class="cf-card__meta">
-            <span class="cf-card__meta-item">
+          <div class="cf-row__meta">
+            <span class="cf-row__stat cf-row__stat--author">
               <AppIcon name="user" :size="12" />
-              {{ project.author || "未知作者" }}
+              <span>{{ project.author || "未知作者" }}</span>
             </span>
-            <span class="cf-card__meta-item">
+            <span class="cf-row__stat cf-row__stat--count">
               <AppIcon name="download" :size="12" />
-              {{ compactNumber(project.download_count) }}
+              <span>{{ compactNumber(project.download_count) }}</span>
             </span>
-            <span v-if="project.updated" class="cf-card__meta-item">
+            <span v-if="project.updated" class="cf-row__stat cf-row__stat--date">
               <AppIcon name="refresh" :size="12" />
-              {{ updatedLabel(project.updated) }}
+              <span>{{ updatedLabel(project.updated) }}</span>
             </span>
           </div>
         </button>
@@ -829,7 +829,7 @@ async function confirmImport() {
           <div class="pack-modal__card">
             <header class="pack-modal__head">
               <div>
-                <span class="eyebrow">DOCL / MODPACK</span>
+                <span class="section-title">整合包</span>
                 <h2 class="pack-modal__title">{{ packPreview.name }}</h2>
                 <p class="muted small">
                   {{
@@ -944,6 +944,7 @@ async function confirmImport() {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  container-type: inline-size;
 }
 
 /* 搜索面板 */
@@ -968,7 +969,7 @@ async function confirmImport() {
 
 .cf-fields {
   display: grid;
-  grid-template-columns: 1.25fr 1.45fr 0.9fr 0.8fr 1fr;
+  grid-template-columns: minmax(230px, 1fr) minmax(0, 1fr) minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -977,6 +978,10 @@ async function confirmImport() {
   flex-direction: column;
   gap: 6px;
   min-width: 0;
+}
+
+.cf-field--wide {
+  grid-column: span 2;
 }
 
 .cf-field__label {
@@ -1010,7 +1015,7 @@ async function confirmImport() {
   height: 38px;
   padding: 3px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 4px;
   background: var(--paper-2);
 }
 
@@ -1018,7 +1023,7 @@ async function confirmImport() {
   flex: 1;
   height: 30px;
   padding: 0 8px;
-  border-radius: 7px;
+  border-radius: 3px;
   font-size: 11.5px;
   font-weight: 700;
   color: var(--ink-soft);
@@ -1037,78 +1042,45 @@ async function confirmImport() {
   box-shadow: var(--shadow-1);
 }
 
-/* 结果卡片 */
-.cf-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(312px, 1fr));
-  gap: 12px;
-}
-
-.cf-card {
-  position: relative;
+/* 结果列表 */
+.cf-list {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 15px 16px 13px;
+  gap: 1px;
   border: 1px solid var(--line);
-  border-radius: 13px;
-  text-align: left;
-  color: var(--ink);
-  background: linear-gradient(
-    150deg,
-    rgba(var(--glass-rgb), 0.6),
-    rgba(var(--glass-rgb), 0.28)
-  );
-  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.5) inset;
-  transition: transform var(--dur-3) var(--ease-out-expo),
-    border-color var(--dur-2) ease, box-shadow var(--dur-3) ease;
-  animation: rise-in 440ms var(--ease-out-expo) both;
-  animation-delay: calc(var(--i, 0) * 18ms);
+  border-radius: 6px;
+  background: var(--line);
   overflow: hidden;
 }
 
-.cf-card::before {
-  content: "";
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 2px;
-  background: linear-gradient(
-    90deg,
-    rgba(var(--accent-rgb), 0.5),
-    transparent 62%
-  );
-  opacity: 0;
-  transition: opacity var(--dur-2) ease;
+.cf-row {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) 296px;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 11px 16px;
+  text-align: left;
+  color: var(--ink);
+  background: var(--panel);
+  transition: background var(--dur-1) ease;
+  animation: rise-in 380ms var(--ease-out-expo) both;
+  animation-delay: calc(var(--i, 0) * 14ms);
 }
 
-.cf-card:hover {
-  transform: translateY(-3px);
-  border-color: rgba(var(--accent-rgb), 0.32);
-  box-shadow: var(--shadow-2);
+.cf-row:hover {
+  background: rgba(var(--accent-rgb), 0.05);
 }
 
-.cf-card:hover::before {
-  opacity: 1;
-}
-
-.cf-card__head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.cf-card__logo {
+.cf-row__logo {
   width: 48px;
   height: 48px;
-  border-radius: 11px;
+  border-radius: 5px;
   object-fit: cover;
-  flex-shrink: 0;
   background: var(--paper-2);
-  box-shadow: 0 2px 8px rgba(60, 40, 20, 0.08);
 }
 
-.cf-card__logo--empty {
+.cf-row__logo--empty {
   display: grid;
   place-items: center;
   font-family: var(--font-display);
@@ -1117,88 +1089,107 @@ async function confirmImport() {
   background: var(--moss-soft);
 }
 
-.cf-card__source {
-  font-family: var(--font-mono);
-  font-size: 9.5px;
-  letter-spacing: 0.06em;
-  color: var(--muted);
-  padding: 3px 6px;
-  border-radius: 5px;
-  border: 1px solid var(--line);
-  background: rgba(var(--glass-rgb), 0.4);
+.cf-row__body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
-.cf-card__name {
-  font-size: 15px;
+.cf-row__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.cf-row__name {
+  min-width: 0;
+  font-size: 14px;
   color: var(--walnut-deep);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.cf-card__chips {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
-  min-height: 18px;
+.cf-row__source {
+  flex-shrink: 0;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  padding: 2px 5px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+
+.cf-row__summary {
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chip {
+  flex-shrink: 0;
   font-size: 10px;
   line-height: 1;
-  padding: 4px 6px;
-  border-radius: 5px;
+  padding: 3px 5px;
+  border-radius: 4px;
   color: var(--moss);
   background: var(--moss-soft);
   white-space: nowrap;
 }
 
-.cf-card__summary {
-  font-size: 12px;
-  color: var(--ink-soft);
-  line-height: 1.5;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  min-height: 36px;
-}
-
-.cf-card__meta {
-  display: flex;
+.cf-row__meta {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 86px;
   align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  padding-top: 8px;
-  border-top: 1px dashed var(--line);
+  gap: 10px;
   font-size: 10.5px;
   color: var(--muted);
 }
 
-.cf-card__meta-item {
+.cf-row__stat {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
+  white-space: nowrap;
 }
 
-.cf-card--skeleton {
+.cf-row__stat--author {
+  overflow: hidden;
+}
+
+.cf-row__stat--author > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cf-row__stat--count,
+.cf-row__stat--date {
+  justify-content: flex-end;
+  font-family: var(--font-mono);
+}
+
+.cf-row--skeleton {
   pointer-events: none;
-  min-height: 178px;
+  animation: none;
 }
 
 .cf-skeleton__title {
-  width: 130px;
-  height: 14px;
+  width: 150px;
+  height: 13px;
 }
 
 .cf-skeleton__line {
-  width: 90%;
+  width: 62%;
   height: 10px;
-}
-
-.cf-skeleton__line--short {
-  width: 56%;
 }
 
 /* 空态 / 错误 */
@@ -1232,7 +1223,7 @@ async function confirmImport() {
 .cf-detail__logo {
   width: 54px;
   height: 54px;
-  border-radius: 12px;
+  border-radius: 6px;
   object-fit: cover;
   flex-shrink: 0;
   background: var(--paper-2);
@@ -1297,7 +1288,7 @@ async function confirmImport() {
   align-items: center;
   gap: 10px;
   padding: 9px 11px;
-  border-radius: 8px;
+  border-radius: 4px;
   transition: background var(--dur-1) ease;
 }
 
@@ -1351,7 +1342,7 @@ async function confirmImport() {
   flex-shrink: 0;
   height: 21px;
   padding: 0 8px;
-  border-radius: 99px;
+  border-radius: 3px;
   border: 1px solid var(--line);
   background: var(--panel-2);
   color: var(--muted);
@@ -1375,7 +1366,7 @@ async function confirmImport() {
   gap: 6px;
   margin: 2px 0 4px;
   padding: 10px 12px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel-2);
 }
@@ -1404,7 +1395,7 @@ async function confirmImport() {
   gap: 9px;
   padding: 5px 6px;
   margin: 0 -6px;
-  border-radius: 7px;
+  border-radius: 3px;
   border: 1px solid transparent;
   background: transparent;
   text-align: left;
@@ -1426,7 +1417,7 @@ async function confirmImport() {
 .cf-dep__logo {
   width: 30px;
   height: 30px;
-  border-radius: 7px;
+  border-radius: 3px;
   border: 1px solid var(--line);
   object-fit: cover;
   background: var(--panel);
@@ -1483,7 +1474,7 @@ async function confirmImport() {
   max-height: calc(100vh - 72px);
   overflow-y: auto;
   padding: 20px 22px;
-  border-radius: 16px;
+  border-radius: 6px;
   border: 1px solid var(--line-strong);
   background: rgba(var(--glass-rgb), 0.97);
   box-shadow: var(--shadow-2);
@@ -1561,7 +1552,7 @@ async function confirmImport() {
 .pack-warnings {
   margin: 0;
   padding: 8px 12px 8px 26px;
-  border-radius: 8px;
+  border-radius: 4px;
   background: rgba(var(--accent-rgb), 0.06);
   color: var(--ink-soft);
   font-size: 11.5px;
@@ -1602,7 +1593,25 @@ async function confirmImport() {
   transform: translateY(10px) scale(0.98);
 }
 
-@media (max-width: 1220px) {
+@container (max-width: 800px) {
+  .cf-row {
+    grid-template-columns: 44px minmax(0, 1fr) 196px;
+  }
+
+  .cf-row__meta {
+    grid-template-columns: minmax(0, 1fr) 68px;
+  }
+
+  .cf-row__stat--date {
+    display: none;
+  }
+
+  .cf-file__date {
+    display: none;
+  }
+}
+
+@container (max-width: 720px) {
   .cf-fields {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
@@ -1611,9 +1620,28 @@ async function confirmImport() {
   .cf-field--wide {
     grid-column: span 2;
   }
+}
 
-  .cf-file__date {
-    display: none;
+@container (max-width: 560px) {
+  .cf-row {
+    grid-template-columns: 44px minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  .cf-row__logo {
+    width: 44px;
+    height: 44px;
+  }
+
+  .cf-row__meta {
+    grid-column: 2;
+    grid-template-columns: auto auto auto;
+    justify-content: flex-start;
+    gap: 14px;
+  }
+
+  .cf-row__stat--date {
+    display: inline-flex;
   }
 }
 </style>

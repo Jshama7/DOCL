@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { api, type LoaderOption, type LoaderVersion } from "../api";
 import AppIcon from "../components/AppIcon.vue";
 import IconButton from "../components/IconButton.vue";
@@ -54,7 +54,17 @@ onMounted(() => {
     category.value = context.kind as Category;
   }
   if (!store.versions.length) refreshVersions();
+  if (import.meta.env.DEV) window.addEventListener("docl-dev-dl-category", onDevCategory);
 });
+
+onBeforeUnmount(() => {
+  window.removeEventListener("docl-dev-dl-category", onDevCategory);
+});
+
+/// 截图脚本用：直接切到指定分类
+function onDevCategory(event: Event) {
+  switchCategory((event as CustomEvent<Category>).detail);
+}
 
 watch(detailId, async (id) => {
   loaders.value = [];
@@ -177,17 +187,16 @@ function launchLoader(id: string | null) {
 <template>
   <div class="page">
     <header class="page-head">
-      <div>
-        <span class="eyebrow">DOCL / CATALOG</span>
+      <div class="page-head__actions">
+        <IconButton
+          v-if="category === 'vanilla' && !detailId"
+          icon="refresh"
+          label="刷新版本列表"
+          variant="soft"
+          :size="32"
+          @click="refreshVersions(true)"
+        />
       </div>
-      <IconButton
-        v-if="category === 'vanilla' && !detailId"
-        icon="refresh"
-        label="刷新版本列表"
-        variant="soft"
-        :size="32"
-        @click="refreshVersions(true)"
-      />
     </header>
 
     <div class="download-layout">
@@ -230,7 +239,7 @@ function launchLoader(id: string | null) {
               @click="backToList"
             />
             <div class="detail-head__text">
-              <span class="eyebrow">VANILLA / INSTANCE</span>
+              <span class="section-title">原版版本</span>
               <h2 class="detail-title display">{{ detailId }}</h2>
             </div>
             <div class="row detail-head__tags">
@@ -441,27 +450,28 @@ function launchLoader(id: string | null) {
 <style scoped>
 .download-layout {
   display: grid;
-  grid-template-columns: 186px minmax(0, 1fr);
+  grid-template-columns: 192px minmax(0, 1fr);
   gap: 16px;
   align-items: start;
 }
 
 .dl-side {
-  padding: 12px 10px;
+  padding: 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   position: sticky;
   top: 0;
 }
 
 .dl-side__item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 9px;
-  height: 38px;
-  padding: 0 11px;
-  border-radius: 8px;
+  height: 40px;
+  padding: 0 10px;
+  border-radius: 4px;
   color: var(--ink-soft);
   font-size: 13px;
   font-weight: 600;
@@ -475,9 +485,18 @@ function launchLoader(id: string | null) {
 }
 
 .dl-side__item--active {
-  background: var(--panel);
+  background: rgba(var(--accent-rgb), 0.07);
   color: var(--walnut-deep);
-  box-shadow: var(--shadow-1);
+}
+
+.dl-side__item--active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--moss);
 }
 
 .dl-side__item--active .icon {
@@ -489,7 +508,7 @@ function launchLoader(id: string | null) {
   font-size: 10px;
   letter-spacing: 0.18em;
   color: var(--muted);
-  padding: 14px 11px 6px;
+  padding: 12px 10px 4px;
   text-transform: uppercase;
 }
 
@@ -548,8 +567,8 @@ function launchLoader(id: string | null) {
   gap: 12px;
   padding: 11px 13px;
   border: 1px solid var(--line);
-  border-radius: 10px;
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  border-radius: 4px;
+  background: var(--panel);
   transition: border-color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo);
   cursor: pointer;
 }
@@ -604,7 +623,7 @@ function launchLoader(id: string | null) {
   align-items: center;
   gap: 8px;
   padding: 6px 9px;
-  border-radius: 7px;
+  border-radius: 3px;
   transition: background var(--dur-1) ease;
 }
 
@@ -639,7 +658,7 @@ function launchLoader(id: string | null) {
 .loader-row__badge {
   width: 34px;
   height: 34px;
-  border-radius: 9px;
+  border-radius: 4px;
   display: grid;
   place-items: center;
   background: var(--moss-soft);
@@ -690,7 +709,7 @@ function launchLoader(id: string | null) {
 .loader-skeleton__badge {
   width: 34px;
   height: 34px;
-  border-radius: 9px;
+  border-radius: 4px;
 }
 
 .loader-skeleton__text {
@@ -701,7 +720,7 @@ function launchLoader(id: string | null) {
 .loader-skeleton__btn {
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: 4px;
 }
 
 /* 列表（沿用原有样式） */
@@ -716,7 +735,7 @@ function launchLoader(id: string | null) {
   gap: 16px;
   padding: 14px 18px;
   border-bottom: 1px solid var(--line);
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel);
 }
 
 .tabs {
@@ -725,13 +744,13 @@ function launchLoader(id: string | null) {
   padding: 3px;
   background: var(--paper-2);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 4px;
 }
 
 .tab {
   height: 29px;
   padding: 0 16px;
-  border-radius: 7px;
+  border-radius: 3px;
   color: var(--ink-soft);
   font-size: 12.5px;
   font-weight: 700;
@@ -767,7 +786,7 @@ function launchLoader(id: string | null) {
   justify-content: space-between;
   gap: 16px;
   padding: 11px 14px 11px 18px;
-  border-radius: 9px;
+  border-radius: 4px;
   text-align: left;
   color: var(--ink);
   transition: background var(--dur-2) ease;

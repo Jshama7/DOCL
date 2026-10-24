@@ -182,7 +182,7 @@ onMounted(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line-strong);
   background: var(--danger-soft);
   color: var(--danger);
@@ -194,7 +194,7 @@ onMounted(() => {
   align-items: center;
   gap: 12px;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: 6px;
   border: 1px solid var(--line-strong);
   background: var(--danger-soft);
 }
@@ -209,7 +209,7 @@ onMounted(() => {
   place-items: center;
   width: 36px;
   height: 36px;
-  border-radius: 10px;
+  border-radius: 4px;
   background: rgba(255, 255, 255, 0.55);
   color: var(--danger);
   flex-shrink: 0;
@@ -237,7 +237,7 @@ onMounted(() => {
 .crash-note {
   margin: 14px 0 0;
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px dashed var(--line-strong);
   background: var(--panel-2);
   color: var(--muted);
@@ -254,9 +254,9 @@ onMounted(() => {
 
 .crash-match {
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: 6px;
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel);
 }
 
 .crash-match__head {
@@ -297,7 +297,7 @@ onMounted(() => {
 .crash-evidence {
   margin-top: 9px;
   padding: 8px 10px;
-  border-radius: 8px;
+  border-radius: 4px;
   border: 1px dashed var(--line-strong);
   background: var(--paper-2);
   font-size: 10.5px;
@@ -348,7 +348,7 @@ onMounted(() => {
   padding: 10px 12px;
   max-height: 240px;
   overflow: auto;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--paper-2);
   font-size: 10.5px;

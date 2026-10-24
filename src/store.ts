@@ -58,7 +58,10 @@ export const store = reactive({
   progress: null as ProgressSnapshot | null,
   installingId: null as string | null,
   log: [] as LogLine[],
-  logOpen: false,
+  /// 运行日志弹窗是否打开
+  logPanel: false,
+  /// 截图/录屏时遮挡账号 UUID 等标识（仅开发模式生效）
+  maskIds: false,
   gameRunning: false,
   runningVersionId: null as string | null,
   stoppedByUser: false,
@@ -763,7 +766,6 @@ export async function initApp() {
     const versionId = store.runningVersionId;
     store.stoppedByUser = false;
     store.runningVersionId = null;
-    store.logOpen = true;
     if (exit.code !== 0 && !stopped && versionId) {
       notify(`游戏异常退出（代码 ${exit.code ?? "未知"}），正在分析日志`, "err");
       store.crashVersionId = versionId;

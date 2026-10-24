@@ -60,17 +60,15 @@ function onClick(event: MouseEvent) {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid transparent;
   font-weight: 700;
   line-height: 1;
   letter-spacing: 0.01em;
   overflow: hidden;
   isolation: isolate;
-  backdrop-filter: blur(12px) saturate(1.18);
-  transition: background var(--dur-2) var(--ease-out-quart),
-    border-color var(--dur-2) ease, transform var(--dur-1) var(--ease-out-quart),
-    box-shadow var(--dur-2) var(--ease-out-quart), color var(--dur-2) ease;
+  transition: background var(--dur-2) ease, border-color var(--dur-2) ease,
+    transform var(--dur-1) ease, color var(--dur-2) ease;
 }
 
 .btn__label {
@@ -116,30 +114,11 @@ function onClick(event: MouseEvent) {
   }
 }
 
-.btn--sheen::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  transform: translateX(-120%) skewX(-18deg);
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(255, 253, 246, 0.28),
-    transparent
-  );
-  transition: transform 700ms var(--ease-out-expo);
-  z-index: 1;
-}
-
-.btn--sheen:hover::after {
-  transform: translateX(120%) skewX(-18deg);
-}
-
 .btn--sm {
-  height: 31px;
-  padding: 0 13px;
+  height: 30px;
+  padding: 0 12px;
   font-size: 12.5px;
-  border-radius: 8px;
+  border-radius: 4px;
 }
 
 .btn--md {
@@ -152,7 +131,7 @@ function onClick(event: MouseEvent) {
   height: 52px;
   padding: 0 30px;
   font-size: 16px;
-  border-radius: 12px;
+  border-radius: 6px;
 }
 
 .btn--block {
@@ -160,63 +139,38 @@ function onClick(event: MouseEvent) {
 }
 
 .btn--primary {
-  color: var(--walnut-deep);
-  background: linear-gradient(
-    180deg,
-    rgba(var(--accent-rgb), 0.14),
-    rgba(var(--accent-rgb), 0.26)
-  );
-  border-color: rgba(var(--accent-rgb), 0.3);
-  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.7) inset,
-    0 8px 20px rgba(70, 40, 18, 0.08);
+  color: var(--btn-fg);
+  background: var(--btn-b);
+  border-color: var(--btn-border);
 }
 
 .btn--primary:hover:not(:disabled) {
-  background: linear-gradient(
-    180deg,
-    rgba(var(--accent-rgb), 0.2),
-    rgba(var(--accent-rgb), 0.34)
-  );
-  border-color: rgba(var(--accent-rgb), 0.42);
-  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.8) inset,
-    0 12px 26px rgba(70, 40, 18, 0.12);
-  transform: translateY(-1px);
+  background: var(--btn-a);
+  border-color: var(--btn-border);
 }
 
 .btn--ghost {
-  background: rgba(var(--glass-rgb), 0.18);
-  border-color: rgba(var(--accent-rgb), 0.18);
+  background: transparent;
+  border-color: var(--line);
   color: var(--ink-soft);
 }
 
 .btn--ghost:hover:not(:disabled) {
-  border-color: rgba(var(--accent-rgb), 0.34);
+  border-color: var(--line-strong);
   color: var(--walnut-deep);
-  background: rgba(var(--glass-rgb), 0.34);
+  background: rgba(var(--accent-rgb), 0.05);
 }
 
 .btn--soft {
-  background: linear-gradient(
-    180deg,
-    rgba(var(--glass-rgb), 0.55),
-    rgba(var(--glass-rgb), 0.34)
-  );
-  border-color: rgba(var(--glass-rgb), 0.62);
+  background: var(--panel-2);
+  border-color: var(--line);
   color: var(--walnut);
-  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.72) inset,
-    0 6px 16px rgba(70, 40, 18, 0.06);
 }
 
 .btn--soft:hover:not(:disabled) {
-  border-color: rgba(var(--accent-rgb), 0.32);
+  border-color: var(--line-strong);
   color: var(--walnut-deep);
-  background: linear-gradient(
-    180deg,
-    rgba(var(--glass-rgb), 0.7),
-    rgba(var(--glass-rgb), 0.48)
-  );
-  box-shadow: 0 1px 0 rgba(var(--glass-rgb), 0.85) inset,
-    0 10px 22px rgba(70, 40, 18, 0.1);
+  background: var(--hover);
 }
 
 .btn--danger {

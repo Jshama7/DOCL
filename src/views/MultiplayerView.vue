@@ -595,7 +595,13 @@ watch(tab, (value) => {
   }
 });
 
+/// 截图脚本用：开发模式下可直接切到陶瓦房间
+function onDevMpTab(event: Event) {
+  tab.value = (event as CustomEvent<string>).detail as typeof tab.value;
+}
+
 onMounted(() => {
+  if (import.meta.env.DEV) window.addEventListener("docl-dev-mp-tab", onDevMpTab);
   void refreshLan();
   void loadServerVersions();
   void refreshServer();
@@ -604,6 +610,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener("docl-dev-mp-tab", onDevMpTab);
   if (timer) window.clearInterval(timer);
   if (serverTimer) window.clearInterval(serverTimer);
   stopScanClock();
@@ -615,10 +622,7 @@ onBeforeUnmount(() => {
 <template>
   <div class="page multi">
     <header class="page-head">
-      <div>
-        <span class="eyebrow">DOCL / MULTIPLAYER</span>
-      </div>
-      <div class="mp-head-tags">
+      <div class="page-head__actions">
         <span class="tag" :class="{ 'tag--grass': !!selectedAccount }">
           {{ selectedAccount ? `账号 ${selectedAccount.name}` : "未登录（离线）" }}
         </span>
@@ -703,7 +707,6 @@ onBeforeUnmount(() => {
       <div class="mp-content">
         <section v-if="tab !== 'server'" class="mp-context card reveal">
           <div class="mp-context__text">
-            <span class="eyebrow">JOIN WITH</span>
             <strong>加入时使用的版本</strong>
           </div>
           <div class="mp-bar__right">
@@ -727,7 +730,6 @@ onBeforeUnmount(() => {
     <section v-if="tab === 'hall'" class="card card-pad mp-panel reveal">
       <div class="mp-panel__head">
         <div>
-          <span class="eyebrow">ROOM HALL</span>
           <div class="section-title">房间大厅</div>
         </div>
         <IconButton
@@ -804,7 +806,6 @@ onBeforeUnmount(() => {
     <section v-else-if="tab === 'lan'" class="card card-pad mp-panel reveal">
       <div class="mp-panel__head">
         <div>
-          <span class="eyebrow">LOCAL NETWORK</span>
           <div class="section-title">局域网世界</div>
         </div>
         <IconButton icon="refresh" label="刷新房间" :size="32" @click="refreshLan" />
@@ -858,133 +859,112 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
-    <section v-else-if="tab === 'room'" class="card card-pad mp-panel reveal">
-      <div class="mp-panel__head">
-        <div>
-          <span class="eyebrow">TERRACOTTA</span>
-          <div class="section-title">陶瓦房间</div>
+    <section v-else-if="tab === 'room'" class="tc-panel card reveal">
+      <header class="tc-head">
+        <span class="tc-head__title">陶瓦房间</span>
+        <div class="tc-head__state">
+          <span class="tc-dot" :class="{ 'tc-dot--on': tc?.running }" />
+          <span class="mono">{{ tc?.running ? "RUNNING" : "IDLE" }}</span>
+          <span v-if="tc?.running" class="tc-version mono">{{ tc.version || "联机" }}</span>
         </div>
-        <span v-if="tc?.running" class="tag">陶瓦 {{ tc.version || "联机" }}</span>
-      </div>
+      </header>
 
-      <p class="muted small mp-hint">
-        基于 EasyTier 的 P2P 联机，与 HMCL / PCL-CE 等启动器互通。房主先进入存档「对局域网开放」，
-        房客加入后会在多人游戏列表里直接看到这个世界。
+      <p class="tc-desc">
+        基于 EasyTier 的 P2P 联机，与 HMCL / PCL-CE 等启动器互通。房主先在存档里「对局域网开放」，房客输入邀请码即可。
       </p>
 
-      <div v-if="tcPreparing" class="mp-empty">
+      <div v-if="tcPreparing" class="tc-state">
         <span class="mp-pulse" />
         正在准备陶瓦联机组件，首次使用会下载约 10 MB…
       </div>
 
-      <div v-else-if="tcError" class="mp-alert">
-        <AppIcon name="log" :size="14" />
-        {{ tcError }}
+      <div v-else-if="tcError" class="tc-alert">
+        <span class="tc-alert__text">{{ tcError }}</span>
         <WoodButton variant="ghost" size="sm" @click="prepareTc">重试</WoodButton>
       </div>
 
-      <div v-else-if="tc?.error" class="mp-alert">
-        <AppIcon name="log" :size="14" />
-        {{ tc.error }}
+      <div v-else-if="tc?.error" class="tc-alert">
+        <span class="tc-alert__text">{{ tc.error }}</span>
         <WoodButton variant="ghost" size="sm" @click="prepareTc">重试</WoodButton>
       </div>
 
       <template v-else-if="tc?.running">
         <template v-if="tcWaiting">
-          <div class="mp-form">
-            <div class="mp-field">
-              <span class="mp-field__label">玩家显示名</span>
+          <div class="tc-form">
+            <label class="tc-field">
+              <span class="tc-field__label">玩家显示名</span>
               <WoodInput v-model="tcPlayer" />
-            </div>
-            <div class="mp-field mp-field--wide">
-              <span class="mp-field__label">房间邀请码（加入时填写）</span>
+            </label>
+            <label class="tc-field">
+              <span class="tc-field__label">房间邀请码（加入时填写）</span>
               <WoodInput v-model="tcRoomInput" mono placeholder="U/XXXX-XXXX-XXXX-XXXX" />
-            </div>
+            </label>
           </div>
-          <div class="mp-tc-actions">
+          <div class="tc-actions">
             <WoodButton variant="primary" size="md" :disabled="tcBusy" @click="hostTc">
-              <AppIcon name="globe" :size="14" />
               创建房间
             </WoodButton>
-            <WoodButton variant="soft" size="md" :disabled="tcBusy" @click="joinTc">
+            <WoodButton variant="ghost" size="md" :disabled="tcBusy" @click="joinTc">
               加入房间
             </WoodButton>
           </div>
-          <p class="muted small mp-hint">
-            创建房间前，请先在游戏里进入存档并点「对局域网开放」；加入房间只需邀请码。
-          </p>
+          <p class="tc-hint">创建房间前，请先在游戏里进入存档并点「对局域网开放」；加入房间只需邀请码。</p>
         </template>
 
-        <div v-else-if="tcStateName === 'host-scanning'" class="mp-empty mp-empty--card">
-          <span class="mp-pulse" />
-          <div class="mp-empty__text">
-            <strong>正在扫描局域网世界</strong>
-            <span class="muted small">
-              请先在游戏里进入存档，按 Esc 点「对局域网开放」。
-              {{ SCAN_TIMEOUT - scanSeconds }} 秒后仍未发现会自动停止。
-            </span>
+        <div v-else-if="tcStateName === 'host-scanning'" class="tc-scan">
+          <div class="tc-scan__main">
+            <span class="tc-scan__num mono">{{ SCAN_TIMEOUT - scanSeconds }}</span>
+            <div class="tc-scan__text">
+              <strong>正在扫描局域网世界</strong>
+              <span>请先在游戏里进入存档，按 Esc 点「对局域网开放」。</span>
+            </div>
           </div>
-          <WoodButton variant="ghost" size="sm" @click="cancelScan(false)">
-            停止扫描
-          </WoodButton>
+          <WoodButton variant="ghost" size="sm" @click="cancelScan(false)">停止扫描</WoodButton>
         </div>
 
-        <div v-else-if="tcStateName === 'host-starting'" class="mp-empty">
+        <div v-else-if="tcStateName === 'host-starting'" class="tc-state">
           <span class="mp-pulse" />
           正在创建房间…
         </div>
 
-        <div v-else-if="tcStateName === 'host-ok'" class="mp-tc-room">
-          <span class="eyebrow">ROOM CODE</span>
-          <button
-            class="mp-room-code mono"
-            title="点击复制邀请码"
-            @click="copyAddress(tcRoom)"
-          >
+        <div v-else-if="tcStateName === 'host-ok'" class="tc-room">
+          <div class="tc-room__label mono">房间码</div>
+          <button class="tc-code mono" title="点击复制邀请码" @click="copyAddress(tcRoom)">
             {{ tcRoom }}
           </button>
-          <span class="muted small">
-            把邀请码发给朋友；他们加入后，多人列表里会出现你的局域网世界。
-          </span>
-          <div v-if="tcProfiles.length" class="mp-members">
-            <span v-for="profile in tcProfiles" :key="profile.machine_id" class="mp-member">
-              <AppIcon :name="profile.kind === 'HOST' ? 'globe' : 'user'" :size="12" />
-              {{ profile.name }}
+          <div v-if="tcProfiles.length" class="tc-members">
+            <span v-for="profile in tcProfiles" :key="profile.machine_id" class="tc-member mono">
+              {{ profile.kind === "HOST" ? "HOST" : "GUEST" }} · {{ profile.name }}
             </span>
           </div>
-          <div class="mp-tc-actions">
-            <WoodButton variant="ghost" size="sm" @click="leaveTc">关闭房间</WoodButton>
+          <div class="tc-actions">
             <WoodButton variant="soft" size="sm" @click="copyAddress(tcRoom)">
               <AppIcon name="copy" :size="12" />
               复制邀请码
             </WoodButton>
+            <WoodButton variant="ghost" size="sm" @click="leaveTc">关闭房间</WoodButton>
           </div>
         </div>
 
         <div
           v-else-if="tcStateName === 'guest-connecting' || tcStateName === 'guest-starting'"
-          class="mp-empty"
+          class="tc-state"
         >
           <span class="mp-pulse" />
           {{ tcStateName === "guest-connecting" ? "正在连接房主…" : tcDifficulty }}
         </div>
 
-        <div v-else-if="tcStateName === 'guest-ok'" class="mp-tc-room">
-          <span class="eyebrow">CONNECTED</span>
-          <div class="section-title">已加入房间</div>
-          <span class="muted small">
-            房主的世界已经广播到本机，直接打开游戏里的「多人游戏」即可看到。
-          </span>
-          <button class="mp-room-code mono" title="点击复制直连地址" @click="copyAddress(tcUrl)">
+        <div v-else-if="tcStateName === 'guest-ok'" class="tc-room">
+          <div class="tc-room__label mono">直连地址</div>
+          <button class="tc-code mono" title="点击复制直连地址" @click="copyAddress(tcUrl)">
             {{ tcUrl }}
           </button>
-          <div v-if="tcProfiles.length" class="mp-members">
-            <span v-for="profile in tcProfiles" :key="profile.machine_id" class="mp-member">
-              <AppIcon :name="profile.kind === 'HOST' ? 'globe' : 'user'" :size="12" />
-              {{ profile.name }}
+          <div v-if="tcProfiles.length" class="tc-members">
+            <span v-for="profile in tcProfiles" :key="profile.machine_id" class="tc-member mono">
+              {{ profile.kind === "HOST" ? "HOST" : "GUEST" }} · {{ profile.name }}
             </span>
           </div>
-          <div class="mp-tc-actions">
+          <div class="tc-actions">
             <WoodButton variant="primary" size="sm" @click="join(tcUrl)">
               <AppIcon name="play" :size="12" />
               启动游戏加入
@@ -993,34 +973,30 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <div v-else-if="tcStateName === 'exception'" class="mp-alert">
-          <AppIcon name="log" :size="14" />
-          {{ tcExceptionText }}
+        <div v-else-if="tcStateName === 'exception'" class="tc-alert">
+          <span class="tc-alert__text">{{ tcExceptionText }}</span>
           <WoodButton variant="ghost" size="sm" @click="leaveTc">返回</WoodButton>
         </div>
 
-        <div v-else class="mp-empty">
+        <div v-else class="tc-state">
           <span class="mp-pulse" />
           正在同步房间状态…
         </div>
       </template>
 
-      <div v-else class="mp-empty">
-        <WoodButton variant="soft" size="sm" @click="prepareTc">启动陶瓦联机</WoodButton>
+      <div v-else class="tc-idle">
+        <WoodButton variant="primary" size="md" @click="prepareTc">启动陶瓦联机</WoodButton>
       </div>
 
-      <div class="mp-credit">
-        Terracotta | 陶瓦联机 by burningtnt · AGPL-3.0 ·
-        <button @click="openExternal('https://github.com/burningtnt/Terracotta')">
-          项目主页
-        </button>
+      <div class="tc-credit">
+        Terracotta / 陶瓦联机 by burningtnt · AGPL-3.0
+        <button @click="openExternal('https://github.com/burningtnt/Terracotta')">项目主页</button>
       </div>
     </section>
 
     <section v-else-if="tab === 'direct'" class="card card-pad mp-panel reveal">
       <div class="mp-panel__head">
         <div>
-          <span class="eyebrow">DIRECT CONNECT</span>
           <div class="section-title">直连服务器</div>
         </div>
       </div>
@@ -1053,7 +1029,6 @@ onBeforeUnmount(() => {
     <section v-else-if="tab === 'recent'" class="card card-pad mp-panel reveal">
       <div class="mp-panel__head">
         <div>
-          <span class="eyebrow">RECENT</span>
           <div class="section-title">最近服务器</div>
         </div>
         <IconButton
@@ -1137,7 +1112,6 @@ onBeforeUnmount(() => {
           <div class="mp-server__state">
             <span class="mp-dot" :class="{ 'mp-dot--on': serverStatus.online }" />
             <div>
-              <span class="eyebrow">LOCAL SERVER</span>
               <div class="section-title">
                 {{
                   serverStatus.attached
@@ -1166,11 +1140,11 @@ onBeforeUnmount(() => {
 
         <div class="mp-address">
           <button class="mp-address__item" @click="copyAddress(serverStatus.lan_address)">
-            <span class="eyebrow">LAN</span>
+            <span class="muted small">局域网</span>
             <strong class="mono">{{ serverStatus.lan_address }}</strong>
           </button>
           <button class="mp-address__item" @click="copyAddress(serverStatus.local_address)">
-            <span class="eyebrow">LOCAL</span>
+            <span class="muted small">本机</span>
             <strong class="mono">{{ serverStatus.local_address }}</strong>
           </button>
           <span class="muted small">
@@ -1209,7 +1183,6 @@ onBeforeUnmount(() => {
       <template v-else>
         <div class="mp-panel__head">
           <div>
-            <span class="eyebrow">LOCAL SERVER</span>
             <div class="section-title">本地开服</div>
           </div>
         </div>
@@ -1300,13 +1273,6 @@ onBeforeUnmount(() => {
   gap: 16px;
 }
 
-.mp-head-tags {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 .mp-layout {
   display: grid;
   grid-template-columns: 208px minmax(0, 1fr);
@@ -1343,7 +1309,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 34px;
   padding: 0 10px;
-  border-radius: 9px;
+  border-radius: 4px;
   color: var(--ink-soft);
   font-size: 12.5px;
   font-weight: 600;
@@ -1389,7 +1355,7 @@ onBeforeUnmount(() => {
   flex: none;
   min-width: 18px;
   padding: 1px 5px;
-  border-radius: 99px;
+  border-radius: 3px;
   background: var(--panel);
   border: 1px solid var(--line);
   color: var(--muted);
@@ -1460,7 +1426,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 9px 12px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line-strong);
   background: var(--danger-soft);
   color: var(--danger);
@@ -1478,7 +1444,7 @@ onBeforeUnmount(() => {
 
 .mp-empty--card {
   padding: 16px 16px;
-  border-radius: 12px;
+  border-radius: 6px;
   border: 1px dashed var(--line-strong);
   background: var(--panel-2);
 }
@@ -1488,7 +1454,7 @@ onBeforeUnmount(() => {
   place-items: center;
   width: 38px;
   height: 38px;
-  border-radius: 10px;
+  border-radius: 4px;
   background: var(--moss-soft);
   color: var(--moss);
   flex-shrink: 0;
@@ -1506,6 +1472,236 @@ onBeforeUnmount(() => {
   font-size: 12.5px;
   font-weight: 700;
   color: var(--walnut-deep);
+}
+
+/* ---------- 陶瓦房间 ---------- */
+.tc-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 16px 16px;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.tc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  height: 44px;
+  margin: 0 -16px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tc-head__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--walnut-deep);
+}
+
+.tc-head__state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.tc-dot {
+  width: 6px;
+  height: 6px;
+  background: var(--line-strong);
+}
+
+.tc-dot--on {
+  background: var(--moss);
+  box-shadow: 0 0 6px rgba(var(--accent-rgb), 0.5);
+}
+
+.tc-version {
+  color: var(--muted);
+}
+
+.tc-desc {
+  padding-top: 12px;
+  max-width: 72ch;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.tc-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: rgba(var(--glass-rgb), 0.28);
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.tc-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(190, 92, 70, 0.28);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 11.5px;
+}
+
+.tc-alert__text {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.tc-form {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 12px;
+}
+
+.tc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.tc-field__label {
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.tc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tc-hint {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.tc-scan {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: rgba(var(--glass-rgb), 0.28);
+}
+
+.tc-scan__main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.tc-scan__num {
+  min-width: 42px;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--walnut-deep);
+}
+
+.tc-scan__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.tc-scan__text strong {
+  font-size: 12.5px;
+  color: var(--walnut-deep);
+}
+
+.tc-scan__text span {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tc-room {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  background: rgba(var(--glass-rgb), 0.28);
+}
+
+.tc-room__label {
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.tc-code {
+  align-self: flex-start;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line-strong);
+  color: var(--walnut-deep);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  user-select: text;
+  transition: color var(--dur-1) ease, border-color var(--dur-1) ease;
+}
+
+.tc-code:hover {
+  color: var(--moss);
+  border-color: var(--moss);
+}
+
+.tc-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tc-member {
+  padding: 2px 7px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 10.5px;
+}
+
+.tc-idle {
+  display: flex;
+  justify-content: flex-start;
+  padding: 4px 0;
+}
+
+.tc-credit {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.tc-credit button {
+  margin-left: 6px;
+  color: var(--moss);
+  font-size: 10.5px;
+}
+
+.tc-credit button:hover {
+  text-decoration: underline;
 }
 
 .mp-pulse {
@@ -1540,9 +1736,9 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 12px;
   padding: 9px 12px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel);
 }
 
 .mp-room__icon {
@@ -1550,7 +1746,7 @@ onBeforeUnmount(() => {
   place-items: center;
   width: 34px;
   height: 34px;
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--moss-soft);
   color: var(--moss);
   flex-shrink: 0;
@@ -1647,7 +1843,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px dashed var(--line-strong);
   background: var(--panel-2);
 }
@@ -1657,7 +1853,7 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 1px;
   padding: 4px 8px;
-  border-radius: 7px;
+  border-radius: 3px;
   text-align: left;
   transition: background var(--dur-1) ease;
 }
@@ -1680,7 +1876,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   padding: 10px 12px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px dashed var(--line-strong);
   background: var(--panel-2);
   color: var(--ink-soft);
@@ -1691,7 +1887,7 @@ onBeforeUnmount(() => {
 .mp-console {
   height: 220px;
   overflow-y: auto;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--paper-2);
   padding: 9px 12px;
@@ -1756,7 +1952,7 @@ onBeforeUnmount(() => {
   color: var(--walnut-deep);
   background: var(--panel-2);
   border: 1px dashed var(--line-strong);
-  border-radius: 10px;
+  border-radius: 4px;
   padding: 7px 14px;
   transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
 }
@@ -1778,7 +1974,7 @@ onBeforeUnmount(() => {
   gap: 5px;
   height: 25px;
   padding: 0 10px;
-  border-radius: 99px;
+  border-radius: 3px;
   background: var(--moss-soft);
   color: var(--moss);
   font-size: 11.5px;

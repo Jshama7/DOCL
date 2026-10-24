@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   api,
@@ -73,6 +73,10 @@ const info = ref<InstanceInfo | null>(null);
 const paths = ref<InstancePaths | null>(null);
 const loading = ref(true);
 const saving = ref(false);
+/// 回填表单时暂停自动保存，避免保存后再次触发
+let formSyncing = false;
+let metaTimer: number | undefined;
+let metaPending = false;
 const files = ref<InstanceFile[]>([]);
 const filesLoading = ref(false);
 const fileQuery = ref("");
@@ -390,6 +394,7 @@ async function loadAll() {
 }
 
 function applyForm(detail: InstanceInfo) {
+  formSyncing = true;
   form.display_name =
     detail.display_name && detail.display_name !== detail.id
       ? detail.display_name
@@ -422,7 +427,20 @@ function applyForm(detail: InstanceInfo) {
   form.height = detail.window_height ? String(detail.window_height) : "";
   form.fullscreen =
     detail.fullscreen === null ? "inherit" : detail.fullscreen ? "on" : "off";
+  void nextTick(() => {
+    formSyncing = false;
+  });
 }
+
+/// 任意字段改动后防抖保存，不再需要手动点保存
+watch(
+  () => ({ ...form }),
+  () => {
+    if (formSyncing || !store.instanceId) return;
+    window.clearTimeout(metaTimer);
+    metaTimer = window.setTimeout(() => void saveMeta(true), 700);
+  }
+);
 
 function numberOrNull(value: string, min: number) {
   const parsed = Number(value);
@@ -452,25 +470,34 @@ function buildMeta(): InstanceMeta {
   };
 }
 
-async function saveMeta() {
-  if (!store.instanceId || saving.value) return;
+async function saveMeta(silent = false) {
+  if (!store.instanceId) return;
+  window.clearTimeout(metaTimer);
+  if (saving.value) {
+    metaPending = true;
+    return;
+  }
   saving.value = true;
   try {
     const detail = await api.instanceSaveMeta(store.instanceId, buildMeta());
     info.value = detail;
     applyForm(detail);
     await refreshInstanceMetas();
-    notify("版本设置已保存");
+    if (!silent) notify("版本设置已保存");
   } catch (err) {
     notify(`保存失败：${String(err)}`, "err");
   } finally {
     saving.value = false;
+    if (metaPending) {
+      metaPending = false;
+      window.clearTimeout(metaTimer);
+      metaTimer = window.setTimeout(() => void saveMeta(true), 700);
+    }
   }
 }
 
-async function toggleFavorite() {
+function toggleFavorite() {
   form.favorite = !form.favorite;
-  await saveMeta();
 }
 
 async function loadFiles() {
@@ -892,7 +919,6 @@ function launch() {
         <InstanceGlyph v-else :preset="form.icon" :size="28" />
       </span>
       <div class="ins-head__text">
-        <span class="eyebrow">DOCL / INSTANCE</span>
         <h1 class="page-title">{{ info?.display_name ?? "版本设置" }}</h1>
         <p class="page-sub">
           {{ info?.id }}
@@ -964,20 +990,9 @@ function launch() {
             <div class="group-head">
               <span class="group-no display">01</span>
               <div class="group-titles">
-                <span class="eyebrow">IDENTITY</span>
                 <div class="section-title">个性化</div>
               </div>
               <span class="group-line" />
-              <WoodButton
-                variant="primary"
-                size="sm"
-                sheen
-                :disabled="saving"
-                @click="saveMeta"
-              >
-                <AppIcon name="check" :size="14" />
-                保存
-              </WoodButton>
             </div>
 
             <div class="setting">
@@ -1062,7 +1077,6 @@ function launch() {
             <div class="group-head">
               <span class="group-no display">02</span>
               <div class="group-titles">
-                <span class="eyebrow">SHORTCUTS</span>
                 <div class="section-title">快捷方式</div>
               </div>
               <span class="group-line" />
@@ -1104,7 +1118,6 @@ function launch() {
             <div class="group-head">
               <span class="group-no display">03</span>
               <div class="group-titles">
-                <span class="eyebrow">DETAILS</span>
                 <div class="section-title">详细信息</div>
               </div>
               <span class="group-line" />
@@ -1167,20 +1180,9 @@ function launch() {
           <div class="group-head">
             <span class="group-no display">02</span>
             <div class="group-titles">
-              <span class="eyebrow">LAUNCH</span>
               <div class="section-title">启动设置</div>
             </div>
             <span class="group-line" />
-            <WoodButton
-              variant="primary"
-              size="sm"
-              sheen
-              :disabled="saving"
-              @click="saveMeta"
-            >
-              <AppIcon name="check" :size="14" />
-              保存
-            </WoodButton>
           </div>
 
           <p class="muted small">
@@ -1309,7 +1311,6 @@ function launch() {
           <div class="group-head">
             <span class="group-no display">03</span>
             <div class="group-titles">
-              <span class="eyebrow">CONTENT</span>
               <div class="section-title">{{ contentLabel }}</div>
             </div>
             <span class="group-line" />
@@ -1417,7 +1418,6 @@ function launch() {
           <div v-else-if="tab === 'mods' && modUpdates" class="update-panel">
             <header class="update-panel__head">
               <div class="update-panel__title">
-                <span class="eyebrow">MODRINTH</span>
                 <strong>
                   {{
                     modUpdates.updates.length
@@ -1651,7 +1651,6 @@ function launch() {
           <div class="pack-modal__card">
             <header class="pack-modal__head">
               <div>
-                <span class="eyebrow">DOCL / EXPORT</span>
                 <h2 class="pack-modal__title">导出整合包</h2>
                 <p class="muted small">
                   {{ exportPreview.game_version }} · {{ exportPreview.loader }}
@@ -1754,12 +1753,13 @@ function launch() {
 <style scoped>
 .ins-head {
   align-items: center;
+  justify-content: space-between;
 }
 
 .ins-tile {
   width: 46px;
   height: 46px;
-  border-radius: 12px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
   background: linear-gradient(
@@ -1821,7 +1821,7 @@ function launch() {
   gap: 9px;
   height: 38px;
   padding: 0 11px;
-  border-radius: 8px;
+  border-radius: 4px;
   color: var(--ink-soft);
   font-size: 13px;
   font-weight: 600;
@@ -1993,9 +1993,9 @@ function launch() {
 .ins-textarea {
   width: 100%;
   padding: 10px 13px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line-strong);
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel);
   color: var(--ink);
   font-size: 13px;
   line-height: 1.5;
@@ -2021,9 +2021,9 @@ function launch() {
   gap: 7px;
   height: 36px;
   padding: 0 10px 0 6px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel);
   color: var(--ink-soft);
   font-size: 12px;
   transition: border-color var(--dur-2) ease, color var(--dur-2) ease;
@@ -2106,7 +2106,7 @@ function launch() {
   flex-direction: column;
   gap: 1px;
   padding: 8px 10px;
-  border-radius: 9px;
+  border-radius: 4px;
   text-align: left;
   transition: background var(--dur-2) ease;
 }
@@ -2147,7 +2147,7 @@ function launch() {
   margin: 10px 0 4px;
   padding: 10px 12px;
   border: 1px dashed var(--line);
-  border-radius: 9px;
+  border-radius: 4px;
   background: rgba(var(--accent-rgb), 0.03);
 }
 
@@ -2158,7 +2158,7 @@ function launch() {
   margin: 10px 0 4px;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 4px;
   background: rgba(var(--accent-rgb), 0.05);
 }
 
@@ -2167,7 +2167,7 @@ function launch() {
   place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: 4px;
   flex-shrink: 0;
   background: rgba(var(--accent-rgb), 0.12);
   color: var(--moss);
@@ -2228,7 +2228,7 @@ function launch() {
 
 .seed-value {
   padding: 12px 14px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px dashed var(--line-strong);
   background: var(--panel-2);
 }
@@ -2296,7 +2296,7 @@ function launch() {
   align-items: center;
   gap: 10px;
   padding: 8px 9px;
-  border-radius: 8px;
+  border-radius: 4px;
   transition: background var(--dur-1) ease;
 }
 
@@ -2307,7 +2307,7 @@ function launch() {
 .file-row__icon {
   width: 30px;
   height: 30px;
-  border-radius: 7px;
+  border-radius: 3px;
   display: grid;
   place-items: center;
   background: var(--moss-soft);
@@ -2318,7 +2318,7 @@ function launch() {
 .file-row__thumb {
   width: 34px;
   height: 34px;
-  border-radius: 7px;
+  border-radius: 3px;
   overflow: hidden;
   border: 1px solid var(--line);
   background: var(--panel-2);
@@ -2343,7 +2343,7 @@ function launch() {
   display: flex;
   flex-direction: column;
   border: 1px solid var(--line);
-  border-radius: 11px;
+  border-radius: 5px;
   overflow: hidden;
   background: var(--panel-2);
   transition: border-color var(--dur-2) ease, transform var(--dur-2) var(--ease-out-expo),
@@ -2467,7 +2467,7 @@ function launch() {
   max-height: calc(100vh - 72px);
   overflow-y: auto;
   padding: 20px 22px;
-  border-radius: 16px;
+  border-radius: 6px;
   border: 1px solid var(--line-strong);
   background: rgba(var(--glass-rgb), 0.97);
   box-shadow: var(--shadow-2);
@@ -2546,8 +2546,8 @@ function launch() {
   gap: 8px;
   padding: 8px 9px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  border-radius: 4px;
+  background: var(--panel);
   text-align: left;
   color: var(--ink-soft);
   transition: border-color var(--dur-2) ease;
@@ -2648,7 +2648,7 @@ function launch() {
   align-items: center;
   gap: 9px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px dashed var(--line-strong);
   background: var(--panel-2);
   color: var(--muted);
@@ -2670,7 +2670,7 @@ function launch() {
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: 6px;
   border: 1px solid var(--line-strong);
   background: linear-gradient(180deg, rgba(var(--accent-rgb), 0.06), transparent);
 }
@@ -2707,7 +2707,7 @@ function launch() {
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel);
 }
@@ -2717,7 +2717,7 @@ function launch() {
   place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: 8px;
+  border-radius: 4px;
   background: var(--moss-soft);
   color: var(--moss);
   flex-shrink: 0;

@@ -20,7 +20,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
         <span class="modal__accent" />
         <header class="modal__head">
           <div>
-            <span class="eyebrow">DOCL</span>
             <h3 class="modal__title">{{ title }}</h3>
           </div>
           <button class="modal__close" aria-label="关闭" @click="$emit('close')">
@@ -50,7 +49,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
   position: relative;
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-radius: 16px;
+  border-radius: 6px;
   box-shadow: 0 30px 70px rgba(50, 34, 18, 0.32);
   max-width: 88vw;
   max-height: 84vh;
@@ -63,8 +62,8 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 .modal__accent {
   position: absolute;
   inset: 0 0 auto;
-  height: 4px;
-  background: linear-gradient(90deg, var(--moss), var(--moss-bright) 42%, var(--amber));
+  height: 2px;
+  background: var(--moss);
 }
 
 .modal__head {
@@ -84,7 +83,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 .modal__close {
   width: 30px;
   height: 30px;
-  border-radius: 8px;
+  border-radius: 4px;
   display: grid;
   place-items: center;
   color: var(--ink-soft);

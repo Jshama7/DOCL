@@ -28,9 +28,9 @@ defineEmits<{ (e: "update:modelValue", value: string): void }>();
 .input {
   width: 100%;
   height: 38px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line-strong);
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel);
   padding: 0 13px;
   transition: border-color var(--dur-2) ease, box-shadow var(--dur-2) ease,
     background var(--dur-2) ease;

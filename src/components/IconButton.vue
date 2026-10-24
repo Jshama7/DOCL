@@ -89,7 +89,7 @@ onBeforeUnmount(() => {
 .icon-btn {
   display: grid;
   place-items: center;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid transparent;
   color: var(--ink-soft);
   background: transparent;
@@ -98,12 +98,12 @@ onBeforeUnmount(() => {
 }
 
 .icon-btn:hover:not(:disabled) {
-  background: rgba(111, 66, 36, 0.07);
+  background: rgba(var(--accent-rgb), 0.07);
   color: var(--walnut-deep);
 }
 
 .icon-btn:active:not(:disabled) {
-  background: rgba(111, 66, 36, 0.12);
+  background: rgba(var(--accent-rgb), 0.12);
 }
 
 .icon-btn:disabled {
@@ -112,14 +112,13 @@ onBeforeUnmount(() => {
 }
 
 .icon-btn--soft {
-  border-color: rgba(var(--glass-rgb), 0.58);
-  background: rgba(var(--glass-rgb), 0.4);
-  backdrop-filter: blur(10px) saturate(1.15);
+  border-color: var(--line);
+  background: var(--panel-2);
 }
 
 .icon-btn--soft:hover:not(:disabled) {
-  border-color: rgba(var(--accent-rgb), 0.3);
-  background: rgba(var(--glass-rgb), 0.58);
+  border-color: var(--line-strong);
+  background: var(--hover);
 }
 
 .icon-btn--danger {

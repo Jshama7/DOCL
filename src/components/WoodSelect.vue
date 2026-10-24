@@ -137,9 +137,9 @@ onBeforeUnmount(() => {
 .select__value {
   width: 100%;
   height: 38px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line-strong);
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel);
   padding: 0 34px 0 13px;
   text-align: left;
   position: relative;
@@ -184,7 +184,7 @@ onBeforeUnmount(() => {
   max-width: min(320px, calc(100vw - 16px));
   background: var(--panel);
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: 4px;
   padding: 5px;
   box-shadow: var(--shadow-3);
   max-height: 260px;
@@ -195,7 +195,7 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 34px;
   padding: 0 10px;
-  border-radius: 7px;
+  border-radius: 3px;
   text-align: left;
   color: var(--ink-soft);
   white-space: nowrap;

@@ -540,7 +540,6 @@ const partOptions = [
       <div class="row">
         <IconButton icon="chevron-left" label="返回账号页" :size="34" @click="emit('close')" />
         <div>
-          <span class="eyebrow">DOCL / SKIN EDITOR</span>
           <h1 class="page-title">{{ account.name }} 的皮肤</h1>
         </div>
       </div>
@@ -772,7 +771,6 @@ const partOptions = [
         <section class="card card-pad preview-card">
           <div class="row-between">
             <div>
-              <span class="eyebrow">LIVE PREVIEW</span>
               <div class="section-title">实时 3D</div>
             </div>
             <div class="model-toggle">
@@ -903,7 +901,7 @@ const partOptions = [
   height: 28px;
   min-width: 34px;
   padding: 0 9px;
-  border-radius: 7px;
+  border-radius: 3px;
   border: 1px solid var(--line);
   background: var(--panel-2);
   color: var(--ink-soft);
@@ -943,7 +941,7 @@ const partOptions = [
 .sv-area {
   position: relative;
   height: 132px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--line-strong);
   cursor: crosshair;
   touch-action: none;
@@ -964,7 +962,7 @@ const partOptions = [
 .hue-bar {
   position: relative;
   height: 14px;
-  border-radius: 7px;
+  border-radius: 3px;
   border: 1px solid var(--line-strong);
   cursor: pointer;
   touch-action: none;
@@ -1017,7 +1015,7 @@ const partOptions = [
   align-items: center;
   gap: 3px;
   padding: 4px 5px;
-  border-radius: 8px;
+  border-radius: 4px;
   border: 1px solid transparent;
   transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
 }
@@ -1079,7 +1077,7 @@ const partOptions = [
 .color-current {
   width: 30px;
   height: 30px;
-  border-radius: 8px;
+  border-radius: 4px;
   border: 1px solid var(--line-strong);
   box-shadow: 0 1px 3px rgba(80, 58, 34, 0.2);
   flex-shrink: 0;
@@ -1112,7 +1110,7 @@ const partOptions = [
 .hex-input {
   width: 92px;
   height: 30px;
-  border-radius: 7px;
+  border-radius: 3px;
   border: 1px solid var(--line-strong);
   background: var(--panel);
   padding: 0 8px;
@@ -1123,7 +1121,7 @@ const partOptions = [
 .canvas-scroll {
   overflow: auto;
   max-height: 560px;
-  border-radius: 12px;
+  border-radius: 6px;
   border: 1px solid var(--line);
   background: var(--paper-2);
   padding: 14px;
@@ -1176,7 +1174,7 @@ const partOptions = [
 
 .warning {
   padding: 11px 13px;
-  border-radius: 9px;
+  border-radius: 4px;
   background: var(--danger-soft);
   border: 1px solid #e7cfc5;
   color: var(--danger);

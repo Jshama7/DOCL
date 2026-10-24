@@ -43,6 +43,17 @@ const skinSourceLabel = computed(() => {
   }
 });
 
+/// 截图/录屏时把 UUID 换成圆点，避免公开真实账号标识
+const privacy = computed(() => import.meta.env.DEV && store.maskIds);
+
+function shortUuid(uuid: string) {
+  return privacy.value ? "••••••••" : uuid.slice(0, 8);
+}
+
+function fullUuid(uuid: string) {
+  return privacy.value ? "••••••••••••••••••••••••••••••••" : uuid;
+}
+
 function addOffline() {
   const value = name.value.trim();
   if (!value) {
@@ -168,118 +179,91 @@ onMounted(() => {
     />
 
     <div v-else class="page">
-    <header class="page-head">
-      <div>
-        <span class="eyebrow">DOCL / ACCOUNTS</span>
-      </div>
-      <span class="tag" :class="{ 'tag--grass': !!selectedAccount }">
-        当前 {{ selectedAccount?.name ?? "未登录" }}
-      </span>
-    </header>
-
-    <div class="accounts-layout">
-      <section class="card accounts-list">
-        <div class="panel-head">
-          <div>
-            <span class="eyebrow">PROFILES</span>
-            <div class="section-title">账号列表</div>
-          </div>
-          <span class="muted small">{{ store.accounts.length }} 个</span>
+    <div class="accounts-frame card">
+      <section class="acc-list">
+        <div class="acc-list__head">
+          <span class="acc-list__title">账号</span>
+          <span class="acc-list__count mono">{{ store.accounts.length }}</span>
         </div>
 
-        <div v-if="!store.accounts.length" class="empty">
-          <span class="empty__mark display">?</span>
-          <p class="muted small">还没有账号，先在下方创建或登录。</p>
+        <div v-if="!store.accounts.length" class="acc-empty">
+          还没有账号，先在下方创建或登录
         </div>
 
-        <div v-else class="account-list">
-          <div
+        <div v-else class="acc-rows">
+          <button
             v-for="(account, index) in store.accounts"
             :key="account.id"
-            class="account"
-            :class="{ 'account--active': account.id === selectedAccount?.id }"
+            class="acc-row"
+            :class="{ 'acc-row--active': account.id === selectedAccount?.id }"
             :style="{ '--i': index }"
-            role="button"
-            tabindex="0"
             @click="pickAccount(account.id)"
-            @keydown.enter="pickAccount(account.id)"
           >
-            <PlayerAvatar :account="account" :size="42" :radius="10" />
-            <span class="account__info">
-              <span class="row">
-                <strong>{{ account.name }}</strong>
-                <span class="tag" :class="{ 'tag--grass': account.kind === 'microsoft' }">
-                  {{ account.kind === "microsoft" ? "微软" : "离线" }}
-                </span>
+            <PlayerAvatar :account="account" :size="34" :radius="2" />
+            <span class="acc-row__body">
+              <span class="acc-row__name">{{ account.name }}</span>
+              <span class="acc-row__meta mono">
+                {{ account.kind === "microsoft" ? "MSA" : "OFFLINE" }} ·
+                {{ shortUuid(account.uuid) }}
               </span>
-              <span class="muted small mono account__uuid">{{ account.uuid }}</span>
             </span>
-            <span class="account__right">
-              <AppIcon
-                v-if="account.id === selectedAccount?.id"
-                name="check"
-                :size="16"
-                class="account__check"
-              />
-              <IconButton
-                icon="trash"
-                :label="confirmId === account.id ? '确认移除账号' : '移除账号'"
-                variant="danger"
-                :size="28"
-                @click.stop="requestDelete(account.id)"
-              />
-            </span>
-          </div>
+            <IconButton
+              icon="trash"
+              :label="confirmId === account.id ? '确认移除账号' : '移除账号'"
+              variant="danger"
+              :size="26"
+              @click.stop="requestDelete(account.id)"
+            />
+          </button>
         </div>
 
-        <div class="add-panel">
-          <div class="row add-row">
+        <div class="acc-add">
+          <div class="acc-add__row">
             <WoodInput v-model="name" placeholder="离线用户名，例如 Steve" @keyup.enter="addOffline" />
             <WoodButton variant="primary" size="sm" @click="addOffline">
               <AppIcon name="plus" :size="14" />
               添加
             </WoodButton>
           </div>
-          <WoodButton variant="soft" block @click="beginMsLogin">
+          <WoodButton variant="ghost" block @click="beginMsLogin">
             <AppIcon name="external" :size="15" />
             登录微软账号
           </WoodButton>
         </div>
       </section>
 
-      <section v-if="selectedAccount" class="card player-panel">
-        <div class="player-head">
-          <div>
-            <span class="eyebrow">SELECTED PROFILE</span>
-            <h2 class="player-name display">{{ selectedAccount.name }}</h2>
-            <p class="muted small mono">{{ selectedAccount.uuid }}</p>
+      <section v-if="selectedAccount" class="acc-detail">
+        <header class="acc-detail__head">
+          <div class="acc-detail__id">
+            <span class="acc-detail__label mono">当前账号</span>
+            <h2 class="acc-detail__name">{{ selectedAccount.name }}</h2>
           </div>
-          <div class="row">
+          <div class="acc-detail__tags">
             <span class="tag" :class="{ 'tag--grass': selectedAccount.kind === 'microsoft' }">
               {{ selectedAccount.kind === "microsoft" ? "微软账号" : "离线账号" }}
             </span>
             <span class="tag">{{ skinSourceLabel }}</span>
           </div>
-        </div>
+        </header>
 
-        <div class="model-wrap">
-          <div v-if="store.skinLoading" class="model-loading">
+        <div class="acc-detail__uuid mono">{{ fullUuid(selectedAccount.uuid) }}</div>
+
+        <div class="acc-model">
+          <div v-if="store.skinLoading" class="acc-model__loading">
             <span class="skeleton" />
-            <p class="muted small">正在获取皮肤…</p>
+            <span class="muted small">正在获取皮肤…</span>
           </div>
           <SkinModel
             v-else
             :skin="skinSource"
             :seed="selectedAccount.uuid"
             :model="skinModel"
-            :height="380"
+            :height="360"
           />
         </div>
 
-        <div class="player-actions">
-          <WoodButton variant="primary" sheen @click="editSkin">
-            编辑皮肤
-          </WoodButton>
+        <div class="acc-actions">
+          <WoodButton variant="primary" @click="editSkin">编辑皮肤</WoodButton>
           <WoodButton variant="soft" @click="exportSkin">
             <AppIcon name="download" :size="15" />
             导出 PNG
@@ -297,14 +281,13 @@ onMounted(() => {
           </WoodButton>
         </div>
 
-        <p class="player-note muted small">
-          离线账号的自定义皮肤只用于启动器内预览与导出，游戏内原版不会显示；
-          微软账号可保存本地，也可在编辑页选择上传到 Mojang。
+        <p class="acc-note">
+          离线账号的皮肤只用于启动器内预览与导出，游戏内原版不会显示；微软账号可在编辑页选择上传到 Mojang。
         </p>
       </section>
 
-      <section v-else class="card player-panel player-panel--empty">
-        <p class="muted">选择或创建一个账号后，这里会显示 3D 皮肤。</p>
+      <section v-else class="acc-detail acc-detail--empty">
+        选择或创建一个账号后，这里会显示 3D 皮肤
       </section>
     </div>
 
@@ -339,181 +322,209 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.accounts-layout {
+.accounts-frame {
   display: grid;
-  grid-template-columns: 330px minmax(0, 1fr);
-  gap: 16px;
-  align-items: start;
-}
-
-.accounts-list {
-  padding: 18px 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  position: sticky;
-  top: 0;
-}
-
-.panel-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-}
-
-.empty {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 20px 8px;
-}
-
-.empty__mark {
-  font-size: 44px;
-  line-height: 1;
-  color: var(--line-strong);
-}
-
-.account-list {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-  max-height: 460px;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.account {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 10px 10px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  text-align: left;
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
-  position: relative;
+  grid-template-columns: 300px minmax(0, 1fr);
+  min-height: calc(100vh - 168px);
+  border-radius: 3px;
   overflow: hidden;
-  transition: transform var(--dur-2) var(--ease-out-expo),
-    border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
-  animation: rise-in 480ms var(--ease-out-expo) both;
-  animation-delay: calc(var(--i, 0) * 45ms);
 }
 
-.account:hover {
-  transform: translateY(-2px);
-  border-color: var(--walnut-light);
-  box-shadow: var(--shadow-1);
+.acc-list {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--line);
 }
 
-.account--active {
-  border-color: var(--moss);
-  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
+.acc-list__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-shrink: 0;
+  height: 42px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
 }
 
-.account--active::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  background: var(--moss);
+.acc-list__title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--walnut-deep);
 }
 
-.account__info {
+.acc-list__count {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.acc-empty {
+  padding: 28px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.acc-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.acc-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  transition: background var(--dur-1) ease;
+}
+
+.acc-row:hover {
+  background: rgba(var(--accent-rgb), 0.05);
+}
+
+.acc-row--active {
+  background: rgba(var(--accent-rgb), 0.08);
+  box-shadow: inset 2px 0 0 var(--moss);
+}
+
+.acc-row__body {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 }
 
-.account__uuid {
+.acc-row__name {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--walnut-deep);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.account__right {
+.acc-row__meta {
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.acc-add {
   display: flex;
-  align-items: center;
-  gap: 2px;
+  flex-direction: column;
+  gap: 8px;
   flex-shrink: 0;
+  padding: 12px;
+  border-top: 1px solid var(--line);
 }
 
-.account__check {
-  color: var(--moss);
+.acc-add__row {
+  display: flex;
+  gap: 6px;
 }
 
-.add-panel {
-  border-top: 1px dashed var(--line);
-  padding-top: 12px;
+.acc-detail {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  min-width: 0;
+  padding: 18px 20px;
 }
 
-.add-row {
-  gap: 8px;
-}
-
-.player-panel {
-  padding: 20px 22px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.player-panel--empty {
-  min-height: 420px;
+.acc-detail--empty {
   display: grid;
   place-items: center;
+  color: var(--muted);
+  font-size: 12.5px;
 }
 
-.player-head {
+.acc-detail__head {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
 }
 
-.player-name {
-  font-size: 34px;
+.acc-detail__id {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.acc-detail__label {
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  color: var(--muted);
+}
+
+.acc-detail__name {
+  font-size: 26px;
+  font-weight: 800;
   line-height: 1.1;
+  letter-spacing: -0.02em;
   color: var(--walnut-deep);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.model-wrap {
-  position: relative;
+.acc-detail__tags {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
 }
 
-.model-loading {
-  height: 380px;
-  border-radius: 14px;
-  border: 1px solid var(--line);
-  background: var(--panel-2);
+.acc-detail__uuid {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acc-model {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 260px;
+}
+
+.acc-model__loading {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 10px;
+  width: 100%;
+  height: 360px;
+  border: 1px solid var(--line);
+  background: rgba(var(--glass-rgb), 0.3);
 }
 
-.model-loading .skeleton {
+.acc-model__loading .skeleton {
   width: 120px;
   height: 160px;
 }
 
-.player-actions {
+.acc-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 9px;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
 }
 
-.player-note {
-  padding-top: 8px;
-  border-top: 1px dashed var(--line);
+.acc-note {
+  color: var(--muted);
+  font-size: 11.5px;
   line-height: 1.6;
 }
 
@@ -553,7 +564,7 @@ onMounted(() => {
   height: 54px;
   display: grid;
   place-items: center;
-  border-radius: 10px;
+  border-radius: 4px;
   background: var(--panel-2);
   border: 1px dashed var(--line-strong);
   font-size: 26px;
@@ -570,8 +581,8 @@ onMounted(() => {
 }
 
 @media (max-width: 1080px) {
-  .accounts-layout {
-    grid-template-columns: 280px minmax(0, 1fr);
+  .accounts-frame {
+    grid-template-columns: 264px minmax(0, 1fr);
   }
 }
 </style>

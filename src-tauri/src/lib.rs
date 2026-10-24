@@ -20,6 +20,7 @@ mod moddeps;
 mod modrinth;
 mod models;
 mod news;
+mod pclimport;
 mod ping;
 mod server;
 mod skins;
@@ -63,6 +64,9 @@ pub fn run() {
             commands::export_settings,
             commands::import_settings,
             commands::app_version,
+            commands::app_portable,
+            commands::pcl_import_preview,
+            commands::pcl_import_apply,
             commands::update_check,
             commands::update_download,
             commands::update_install,

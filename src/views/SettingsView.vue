@@ -1,8 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { listen } from "@tauri-apps/api/event";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   api,
+  openFolder,
   pickDirectory,
   pickImage,
   pickSettingsFile,
@@ -85,8 +87,9 @@ watch(
   { immediate: true }
 );
 
-/// 除游戏目录外的设置都即时保存；游戏目录允许手动输入，留给保存按钮校验。
+/// 所有设置都即时保存
 const autoSaveKeys: (keyof Config)[] = [
+  "game_dir",
   "theme",
   "background_image",
   "background_blur",
@@ -134,6 +137,8 @@ async function refreshMemory() {
 function autoPatch(): Partial<Config> {
   const patch: Partial<Config> = {};
   for (const key of autoSaveKeys) {
+    // 游戏目录清空时保留上一次的有效路径，避免把启动器保存成无目录状态
+    if (key === "game_dir" && !form.game_dir.trim()) continue;
     (patch as Record<string, unknown>)[key] = form[key];
   }
   return patch;
@@ -143,6 +148,7 @@ async function runAutoSave() {
   if (!store.config) return;
   autoPending = false;
   const seq = autoSeq;
+  const previousDir = store.config.game_dir;
   try {
     const saved = await api.saveConfig({ ...store.config, ...autoPatch() });
     // 保存期间又改过设置就放弃回填，让下一次防抖保存继续写入新值
@@ -151,6 +157,11 @@ async function runAutoSave() {
       store.config = saved;
       await nextTick();
       syncing = false;
+      if (saved.game_dir !== previousDir) {
+        await loadDirs();
+        await refreshInstalled();
+        notify(`游戏目录已切换为 ${saved.game_dir}`);
+      }
     }
   } catch (err) {
     notify(`自动保存失败：${String(err)}`, "err");
@@ -169,7 +180,6 @@ watch(
 );
 
 const runtimeMajor = ref("21");
-const saving = ref(false);
 const runtimeBusy = ref(false);
 
 type SettingsTab =
@@ -208,6 +218,7 @@ const themes = [
   { value: "lavender", label: "香芋", colors: ["#f3eff8", "#6d5590", "#b49ccb"] },
   { value: "nocturne", label: "夜墨", colors: ["#1d1a16", "#c08a55", "#88a867"] },
   { value: "graphite", label: "石墨", colors: ["#1b1d20", "#9fb4c7", "#8aa88a"] },
+  { value: "forge", label: "硬朗", colors: ["#0d1217", "#eef3f7", "#6fae67"] },
 ];
 
 const builtinBackgrounds = [
@@ -394,11 +405,20 @@ async function chooseDir() {
 const gameDirs = ref<GameDirEntry[]>([]);
 const activeDir = ref("");
 const officialDir = ref("");
+
+/// 截图/录屏时把 Windows 用户名替换成 Player，避免公开本机用户名
+const privacy = computed(() => import.meta.env.DEV && store.maskIds);
+
+function maskPath(path: string) {
+  if (!privacy.value) return path;
+  return path.replace(/([A-Za-z]:\\Users\\)[^\\/]+/i, "$1Player");
+}
 const dirBusy = ref(false);
 
 onMounted(loadDirs);
 
 const appVersion = ref("");
+const portable = ref(false);
 const updateInfo = ref<UpdateInfo | null>(null);
 const updateBusy = ref(false);
 const updateError = ref("");
@@ -419,11 +439,24 @@ const updateProgressText = computed(() => {
   return `${(progress.downloaded / 1048576).toFixed(1)} MB`;
 });
 
+/// 便携版优先取压缩包地址；没配便携包时回退到安装包
+const updateTargetUrl = computed(() =>
+  portable.value && updateInfo.value?.portable_url
+    ? updateInfo.value.portable_url
+    : updateInfo.value?.url ?? ""
+);
+const isPortablePack = computed(() => /\.zip$/i.test(updateTargetUrl.value));
+
 async function initUpdateSection() {
   try {
     appVersion.value = await api.appVersion();
   } catch {
     appVersion.value = "";
+  }
+  try {
+    portable.value = await api.appPortable();
+  } catch {
+    portable.value = false;
   }
   // 启动时已经检查到的新版本直接接续展示，不用再点一次检查
   if (startupUpdate.value) {
@@ -473,7 +506,7 @@ async function downloadUpdate() {
   updateProgress.value = { downloaded: 0, total: 0 };
   try {
     updatePath.value = await api.updateDownload(
-      updateInfo.value.url,
+      updateTargetUrl.value,
       updateInfo.value.latest
     );
   } catch (err) {
@@ -482,6 +515,12 @@ async function downloadUpdate() {
   } finally {
     updateBusy.value = false;
   }
+}
+
+/// 便携包不做自动安装，下载后直接带用户到所在目录
+function revealDownload() {
+  const dir = updatePath.value.replace(/[\\/][^\\/]+$/, "");
+  if (dir) openFolder(dir);
 }
 
 async function installUpdate() {
@@ -591,6 +630,33 @@ async function installRuntime() {
 }
 
 const backupBusy = ref(false);
+const pclBusy = ref(false);
+
+/// 从 PCL 目录读取设置并迁移；账号缓存是加密的，只能重新登录
+async function importFromPcl() {
+  if (pclBusy.value) return;
+  const dir = await pickDirectory("选择 PCL 所在文件夹");
+  if (!dir) return;
+  pclBusy.value = true;
+  window.clearTimeout(autoTimer);
+  autoPending = false;
+  try {
+    const preview = await api.pclImportPreview(dir);
+    const ok = await confirm(
+      `将从 ${preview.root} 导入以下设置：\n\n${preview.findings.join("\n")}\n\n只覆盖读到的项，其余保持现状。`,
+      { title: "从 PCL 迁移", kind: "info" }
+    );
+    if (!ok) return;
+    const config = await api.pclImportApply(dir);
+    await adoptConfig(config);
+    await loadBackground();
+    notify("已导入 PCL 设置");
+  } catch (err) {
+    notify(`导入 PCL 设置失败：${String(err)}`, "err");
+  } finally {
+    pclBusy.value = false;
+  }
+}
 
 async function exportSettings() {
   if (backupBusy.value) return;
@@ -625,24 +691,6 @@ async function importSettings() {
   }
 }
 
-async function save() {
-  if (!form.game_dir.trim()) {
-    notify("请先选择游戏目录", "err");
-    return;
-  }
-  window.clearTimeout(autoTimer);
-  autoPending = false;
-  saving.value = true;
-  try {
-    await saveConfig({ ...form });
-    await loadBackground();
-    await loadDirs();
-    notify("设置已保存");
-  } finally {
-    saving.value = false;
-  }
-}
-
 function useAutoJava() {
   form.java_path = null;
   notify("已改为自动选择 Java");
@@ -651,17 +699,6 @@ function useAutoJava() {
 
 <template>
   <div class="page">
-    <header class="page-head">
-      <div>
-        <span class="eyebrow">DOCL / SETTINGS</span>
-        <div class="muted small">除游戏目录外，修改会自动保存</div>
-      </div>
-      <WoodButton variant="primary" sheen :disabled="saving" @click="save">
-        <AppIcon name="check" :size="15" />
-        {{ saving ? "保存中…" : "保存设置" }}
-      </WoodButton>
-    </header>
-
     <div class="settings-layout">
       <aside class="settings-side card">
         <button
@@ -682,7 +719,6 @@ function useAutoJava() {
       <div class="group-head">
         <span class="group-no display">01</span>
         <div class="group-titles">
-          <span class="eyebrow">GAME</span>
           <div class="section-title">游戏与启动</div>
         </div>
         <span class="group-line" />
@@ -717,7 +753,7 @@ function useAutoJava() {
                 <AppIcon name="folder" :size="15" />
                 <span class="dir-row__text">
                   <strong>{{ dir.name }}</strong>
-                  <span class="mono">{{ dir.path }}</span>
+                  <span class="mono">{{ maskPath(dir.path) }}</span>
                 </span>
                 <span v-if="dir.path === activeDir" class="tag tag--grass">当前</span>
               </button>
@@ -776,6 +812,18 @@ function useAutoJava() {
           </div>
         </div>
       </div>
+      <div class="setting">
+        <div class="setting__label">
+          <strong>从 PCL 迁移</strong>
+          <span>选择 PCL 所在文件夹，读取内存、Java、窗口与下载设置，并接管它的 .minecraft；账号需重新登录</span>
+        </div>
+        <div class="setting__control">
+          <WoodButton variant="ghost" size="sm" :disabled="pclBusy" @click="importFromPcl">
+            <AppIcon name="package" :size="14" />
+            {{ pclBusy ? "读取中…" : "选择 PCL 文件夹" }}
+          </WoodButton>
+        </div>
+      </div>
       <div class="setting setting--last">
         <div class="setting__label">
           <strong>配置备份</strong>
@@ -798,7 +846,6 @@ function useAutoJava() {
       <div class="group-head">
         <span class="group-no display">02</span>
         <div class="group-titles">
-          <span class="eyebrow">RUNTIME</span>
           <div class="section-title">Java 运行时</div>
         </div>
         <span class="group-line" />
@@ -877,7 +924,6 @@ function useAutoJava() {
       <div class="group-head">
         <span class="group-no display">03</span>
         <div class="group-titles">
-          <span class="eyebrow">APPEARANCE</span>
           <div class="section-title">外观</div>
         </div>
         <span class="group-line" />
@@ -1043,7 +1089,6 @@ function useAutoJava() {
       <div class="group-head">
         <span class="group-no display">04</span>
         <div class="group-titles">
-          <span class="eyebrow">PERFORMANCE</span>
           <div class="section-title">性能与参数</div>
         </div>
         <span class="group-line" />
@@ -1185,7 +1230,6 @@ function useAutoJava() {
       <div class="group-head">
         <span class="group-no display">05</span>
         <div class="group-titles">
-          <span class="eyebrow">DOWNLOAD</span>
           <div class="section-title">下载</div>
         </div>
         <span class="group-line" />
@@ -1219,7 +1263,6 @@ function useAutoJava() {
       <div class="group-head">
         <span class="group-no display">06</span>
         <div class="group-titles">
-          <span class="eyebrow">MULTIPLAYER</span>
           <div class="section-title">联机</div>
         </div>
         <span class="group-line" />
@@ -1253,10 +1296,10 @@ function useAutoJava() {
       <div class="group-head">
         <span class="group-no display">07</span>
         <div class="group-titles">
-          <span class="eyebrow">UPDATE</span>
           <div class="section-title">启动器更新</div>
         </div>
         <span class="group-line" />
+        <span v-if="portable" class="tag mono">便携版</span>
         <span class="tag mono">v{{ appVersion || "—" }}</span>
       </div>
 
@@ -1299,8 +1342,13 @@ function useAutoJava() {
 
       <p class="muted small update-hint">
         清单格式：
-        <span class="mono">{ "version": "0.2.0", "url": "https://…/DOCL_0.2.0-setup.exe", "notes": "更新说明" }</span>。
-        发现新版本后下载的是完整安装包，点击安装时启动器会自动退出。
+        <span class="mono">{ "version": "0.2.0", "url": "https://…/DOCL_0.2.0-setup.exe", "portable_url": "https://…/DOCL_0.2.0_portable.zip", "notes": "更新说明" }</span>。
+        <template v-if="portable">
+          便携版下载的是完整压缩包，解压覆盖旧文件即可，不会弹出安装向导。
+        </template>
+        <template v-else>
+          发现新版本后下载的是完整安装包，点击安装时启动器会自动退出。
+        </template>
       </p>
 
       <div v-if="updateError" class="update-error">
@@ -1332,7 +1380,16 @@ function useAutoJava() {
             @click="downloadUpdate"
           >
             <AppIcon name="download" :size="14" />
-            {{ updateBusy ? "下载中…" : "下载安装包" }}
+            {{ updateBusy ? "下载中…" : isPortablePack ? "下载便携包" : "下载安装包" }}
+          </WoodButton>
+          <WoodButton
+            v-else-if="isPortablePack"
+            variant="primary"
+            size="sm"
+            @click="revealDownload"
+          >
+            <AppIcon name="folder" :size="14" />
+            打开所在文件夹
           </WoodButton>
           <WoodButton v-else variant="primary" size="sm" @click="installUpdate">
             <AppIcon name="check" :size="14" />
@@ -1373,7 +1430,7 @@ function useAutoJava() {
   align-items: center;
   gap: 9px;
   padding: 10px 12px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--line-strong);
   background: var(--danger-soft);
   color: var(--danger);
@@ -1390,7 +1447,7 @@ function useAutoJava() {
   gap: 10px;
   padding: 12px 14px;
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
+  border-radius: 6px;
   background: var(--panel-2);
 }
 
@@ -1432,7 +1489,7 @@ function useAutoJava() {
 .update-progress__bar {
   flex: 1;
   height: 6px;
-  border-radius: 99px;
+  border-radius: 3px;
   background: rgba(var(--accent-rgb), 0.12);
   overflow: hidden;
 }
@@ -1440,7 +1497,7 @@ function useAutoJava() {
 .update-progress__bar > span {
   display: block;
   height: 100%;
-  border-radius: 99px;
+  border-radius: 3px;
   background: linear-gradient(90deg, var(--moss), var(--walnut-light));
   transition: width 0.2s ease;
 }
@@ -1453,21 +1510,22 @@ function useAutoJava() {
 }
 
 .settings-side {
-  padding: 12px 10px;
+  padding: 10px 8px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   position: sticky;
   top: 0;
 }
 
 .settings-side__item {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 9px;
-  height: 38px;
+  height: 40px;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: 4px;
   color: var(--ink-soft);
   font-size: 12.5px;
   font-weight: 600;
@@ -1481,9 +1539,18 @@ function useAutoJava() {
 }
 
 .settings-side__item--active {
-  background: var(--panel);
+  background: rgba(var(--accent-rgb), 0.07);
   color: var(--walnut-deep);
-  box-shadow: var(--shadow-1);
+}
+
+.settings-side__item--active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  background: var(--moss);
 }
 
 .settings-side__item--active .icon {
@@ -1627,7 +1694,7 @@ function useAutoJava() {
   display: flex;
   gap: 3px;
   padding: 3px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel-2);
 }
@@ -1635,7 +1702,7 @@ function useAutoJava() {
 .memory__mode {
   height: 28px;
   padding: 0 13px;
-  border-radius: 7px;
+  border-radius: 3px;
   color: var(--ink-soft);
   font-size: 12px;
   font-weight: 600;
@@ -1673,7 +1740,7 @@ function useAutoJava() {
 .memory__chip {
   height: 26px;
   padding: 0 10px;
-  border-radius: 7px;
+  border-radius: 3px;
   border: 1px dashed var(--line-strong);
   color: var(--ink-soft);
   font-size: 11.5px;
@@ -1693,7 +1760,7 @@ function useAutoJava() {
 
 .memory__bar {
   height: 8px;
-  border-radius: 99px;
+  border-radius: 3px;
   border: 1px solid var(--line);
   background: var(--paper-2);
   overflow: hidden;
@@ -1702,7 +1769,7 @@ function useAutoJava() {
 .memory__bar-fill {
   display: block;
   height: 100%;
-  border-radius: 99px;
+  border-radius: 3px;
   background: linear-gradient(90deg, var(--moss), var(--moss-bright));
   transition: width var(--dur-3) var(--ease-out-expo);
 }
@@ -1732,8 +1799,8 @@ function useAutoJava() {
   gap: 6px;
   padding: 2px 4px 2px 2px;
   border: 1px solid var(--line);
-  border-radius: 9px;
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  border-radius: 4px;
+  background: var(--panel);
   transition: border-color var(--dur-2) ease;
 }
 
@@ -1754,7 +1821,7 @@ function useAutoJava() {
   gap: 9px;
   height: 42px;
   padding: 0 9px;
-  border-radius: 7px;
+  border-radius: 3px;
   text-align: left;
   color: var(--ink-soft);
 }
@@ -1799,9 +1866,9 @@ function useAutoJava() {
   align-items: center;
   gap: 13px;
   padding: 10px 13px;
-  border-radius: 10px;
+  border-radius: 4px;
   border: 1px solid var(--line);
-  background: linear-gradient(180deg, var(--panel), var(--panel-2));
+  background: var(--panel);
   text-align: left;
   position: relative;
   overflow: hidden;
@@ -1850,7 +1917,7 @@ function useAutoJava() {
 
 .java-empty {
   padding: 18px;
-  border-radius: 10px;
+  border-radius: 4px;
   background: var(--panel-2);
   border: 1px dashed var(--line-strong);
   color: var(--muted);
@@ -1886,7 +1953,7 @@ function useAutoJava() {
   gap: 7px;
   height: 34px;
   padding: 0 10px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel-2);
   color: var(--ink-soft);
@@ -1937,7 +2004,7 @@ function useAutoJava() {
   gap: 7px;
   height: 34px;
   padding: 0 10px;
-  border-radius: 9px;
+  border-radius: 4px;
   border: 1px solid var(--line);
   background: var(--panel-2);
   color: var(--ink-soft);

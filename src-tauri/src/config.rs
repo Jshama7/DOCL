@@ -115,7 +115,33 @@ impl Default for Config {
     }
 }
 
+/// 便携版标记：exe 同目录存在 portable.txt 或 data 目录时启用。
+/// 只读位置（Program Files、只读介质）无法写入时自动回退到用户目录，避免启动即报错。
+fn portable_root() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let data = dir.join("data");
+    let marked = dir.join("portable.txt").is_file() || data.is_dir();
+    if !marked {
+        return None;
+    }
+    fs::create_dir_all(&data).ok()?;
+    Some(dir)
+}
+
+fn portable_base() -> Option<&'static PathBuf> {
+    static CACHE: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(portable_root).as_ref()
+}
+
+/// 当前是否为便携版（配置、账号、实例索引都放在 exe 同目录的 data 下）。
+pub fn is_portable() -> bool {
+    portable_base().is_some()
+}
+
 pub fn data_dir() -> PathBuf {
+    if let Some(root) = portable_base() {
+        return root.join("data");
+    }
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("McLauncher")
@@ -126,6 +152,9 @@ pub fn runtime_dir() -> PathBuf {
 }
 
 pub fn default_game_dir() -> PathBuf {
+    if let Some(root) = portable_base() {
+        return root.join("data").join(".minecraft");
+    }
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".minecraft")

@@ -15,6 +15,7 @@ use crate::launch;
 use crate::models::*;
 use crate::modpack;
 use crate::news;
+use crate::pclimport;
 use crate::ping::{self, ServerPingResult};
 use crate::server;
 use crate::skins;
@@ -139,6 +140,28 @@ pub fn import_settings(state: State<'_, AppState>, path: String) -> CmdResult<Co
 #[tauri::command]
 pub fn app_version() -> String {
     appupdate::CURRENT_VERSION.to_string()
+}
+
+/// 便携版会把配置、账号、实例索引放在 exe 同目录的 data 下。
+#[tauri::command]
+pub fn app_portable() -> bool {
+    config::is_portable()
+}
+
+/// 读取 PCL 目录里的设置并返回预览，不写入任何内容。
+#[tauri::command]
+pub fn pcl_import_preview(path: String) -> CmdResult<pclimport::PclPreview> {
+    pclimport::inspect(&path).map_err(err)
+}
+
+/// 应用 PCL 设置；只覆盖确实读到的字段。
+#[tauri::command]
+pub fn pcl_import_apply(state: State<'_, AppState>, path: String) -> CmdResult<Config> {
+    let mut next = state.config.lock().unwrap().clone();
+    pclimport::apply(&mut next, &path).map_err(err)?;
+    config::save(&next).map_err(err)?;
+    *state.config.lock().unwrap() = next.clone();
+    Ok(next)
 }
 
 #[tauri::command]

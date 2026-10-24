@@ -360,7 +360,22 @@ export interface UpdateInfo {
   latest: string;
   available: boolean;
   url: string;
+  portable_url: string;
   notes: string;
+}
+
+export interface PclPreview {
+  root: string;
+  game_dir: string | null;
+  java_path: string | null;
+  memory_auto: boolean | null;
+  memory_mb: number | null;
+  window_width: number | null;
+  window_height: number | null;
+  update_mode: string | null;
+  download_source: string | null;
+  selected_version: string | null;
+  findings: string[];
 }
 
 export interface UpdateProgress {
@@ -626,6 +641,10 @@ export const api = {
   instanceWorldSeed: (versionId: string, folder: string) =>
     invoke<WorldSeed>("instance_world_seed", { versionId, folder }),
   appVersion: () => invoke<string>("app_version"),
+  appPortable: () => invoke<boolean>("app_portable"),
+  pclImportPreview: (path: string) =>
+    invoke<PclPreview>("pcl_import_preview", { path }),
+  pclImportApply: (path: string) => invoke<Config>("pcl_import_apply", { path }),
   updateCheck: (url: string) => invoke<UpdateInfo>("update_check", { url }),
   updateDownload: (url: string, version: string) =>
     invoke<string>("update_download", { url, version }),
@@ -802,8 +821,8 @@ export function onMsLogin(
   return listen<{ ok: boolean; message?: string }>("ms-login", (e) => cb(e.payload));
 }
 
-export async function pickDirectory(): Promise<string | null> {
-  const result = await open({ directory: true, multiple: false, title: "选择游戏目录" });
+export async function pickDirectory(title = "选择游戏目录"): Promise<string | null> {
+  const result = await open({ directory: true, multiple: false, title });
   return typeof result === "string" ? result : null;
 }
 

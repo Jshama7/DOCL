@@ -16,6 +16,8 @@ pub struct UpdateInfo {
     pub latest: String,
     pub available: bool,
     pub url: String,
+    /// 便携版压缩包地址，留空表示只发安装包
+    pub portable_url: String,
     pub notes: String,
 }
 
@@ -23,6 +25,8 @@ pub struct UpdateInfo {
 struct Manifest {
     version: String,
     url: String,
+    #[serde(default)]
+    portable_url: String,
     #[serde(default)]
     notes: String,
 }
@@ -85,6 +89,7 @@ pub async fn check(url: &str) -> Result<UpdateInfo> {
         available: is_newer(&manifest.version, CURRENT_VERSION),
         latest: manifest.version,
         url: manifest.url,
+        portable_url: manifest.portable_url,
         notes: manifest.notes,
     })
 }
@@ -95,7 +100,7 @@ fn download_name(url: &str, version: &str) -> String {
         .next()
         .map(|name| name.trim().to_string())
         .unwrap_or_default();
-    if (last.ends_with(".exe") || last.ends_with(".msi"))
+    if (last.ends_with(".exe") || last.ends_with(".msi") || last.ends_with(".zip"))
         && last
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))

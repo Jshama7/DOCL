@@ -1,6 +1,8 @@
 node_modules
 dist
 dist-ssr
+dist-portable
+promo/shots
 *.local
 .vite
 

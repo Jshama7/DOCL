@@ -1,6 +1,6 @@
 {
-  "version": "1.3.0",
-  "url": "https://github.com/dawo4/DOCL/releases/download/v1.3.0/DOCL_1.3.0_x64-setup.exe",
-  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.3.0/DOCL_1.3.0_portable.zip",
-  "notes": "新增便携版与从 PCL 迁移设置；界面全面翻新，设置改为实时保存。"
+  "version": "1.4.0",
+  "url": "https://github.com/dawo4/DOCL/releases/download/v1.4.0/DOCL_1.4.0_x64-setup.exe",
+  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.4.0/DOCL_1.4.0_portable.zip",
+  "notes": "新增毛玻璃透出桌面与社区资源类型筛选；修复无底图时玻璃不透明度失效。"
 }

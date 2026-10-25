@@ -1,7 +1,6 @@
 {
-  "version": "1.5.1",
-  "url": "https://github.com/dawo4/DOCL/releases/download/v1.5.1/DOCL_1.5.1_x64-setup.exe",
-  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.5.1/DOCL_1.5.1_portable.zip",
-  "notes": "导出整合包支持额外包含文件夹（TACZ 枪包不再丢失），添加账户改为弹窗流程，社区资源详情全面增强。"
+  "version": "1.5.2",
+  "url": "https://github.com/dawo4/DOCL/releases/download/v1.5.2/DOCL_1.5.2_x64-setup.exe",
+  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.5.2/DOCL_1.5.2_portable.zip",
+  "notes": "动态栏版本日志全面汉化（含中文 Wiki 正文），下载支持全局限速与更高并发，修复 PCL 导入实例启动误报。"
 }
-

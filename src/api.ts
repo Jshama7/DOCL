@@ -438,6 +438,8 @@ export interface ExportPreview {
   loader_version: string | null;
   entries: ExportEntry[];
   total_bytes: number;
+  /// 检测到的常用自定义目录（tacz 枪包等），可在导出时勾选
+  suggested_extras: ExportEntry[];
 }
 
 export interface ExportOptions {
@@ -446,6 +448,8 @@ export interface ExportOptions {
   format: string;
   groups: string[];
   target: string;
+  /// 额外打包的自定义文件夹（相对实例目录，如 tacz）
+  extra_dirs?: string[];
 }
 
 export interface ExportResult {
@@ -482,6 +486,8 @@ export interface CfProject {
   id: string;
   name: string;
   slug: string;
+  /// 官方项目网页地址（Modrinth / CurseForge 项目页）
+  website_url: string;
   summary: string;
   download_count: number;
   class_id: number;

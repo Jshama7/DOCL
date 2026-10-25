@@ -174,22 +174,32 @@ pub async fn search(
         .hits
         .into_iter()
         .filter(|hit| hit.project_type.is_empty() || hit.project_type == project_type(kind).unwrap_or(""))
-        .map(|hit| CfProject {
-            source: "modrinth".into(),
-            id: hit.project_id,
-            name: hit.title,
-            slug: hit.slug,
-            summary: hit.description,
-            download_count: hit.downloads,
-            class_id: 0,
-            logo_url: hit.icon_url.unwrap_or_default(),
-            author: hit.author,
-            updated: hit.date_modified,
-            categories: hit
-                .categories
-                .into_iter()
-                .filter(|name| loader_tag(name).is_none())
-                .collect(),
+        .map(|hit| {
+            let page_type = if hit.project_type.is_empty() {
+                project_type(kind).unwrap_or("mod").to_string()
+            } else {
+                hit.project_type.clone()
+            };
+            let slug = hit.slug.clone();
+            let website_url = format!("https://modrinth.com/{}/{}", page_type, slug);
+            CfProject {
+                source: "modrinth".into(),
+                id: hit.project_id,
+                name: hit.title,
+                slug,
+                website_url,
+                summary: hit.description,
+                download_count: hit.downloads,
+                class_id: 0,
+                logo_url: hit.icon_url.unwrap_or_default(),
+                author: hit.author,
+                updated: hit.date_modified,
+                categories: hit
+                    .categories
+                    .into_iter()
+                    .filter(|name| loader_tag(name).is_none())
+                    .collect(),
+            }
         })
         .collect();
     Ok(CfSearchResult {
@@ -270,6 +280,8 @@ struct MrProjectDetail {
     #[serde(default)]
     slug: String,
     #[serde(default)]
+    project_type: String,
+    #[serde(default)]
     description: String,
     #[serde(default)]
     downloads: u64,
@@ -293,22 +305,32 @@ pub async fn projects(client: &reqwest::Client, ids: &[String]) -> Result<Vec<Cf
     let projects: Vec<MrProjectDetail> = download::get_json(client, url.as_str(), false).await?;
     Ok(projects
         .into_iter()
-        .map(|project| CfProject {
-            source: "modrinth".into(),
-            id: project.id,
-            name: project.title,
-            slug: project.slug,
-            summary: project.description,
-            download_count: project.downloads,
-            class_id: 0,
-            logo_url: project.icon_url.unwrap_or_default(),
-            author: String::new(),
-            updated: project.date_modified,
-            categories: project
-                .categories
-                .into_iter()
-                .filter(|name| loader_tag(name).is_none())
-                .collect(),
+        .map(|project| {
+            let page_type = if project.project_type.is_empty() {
+                "mod".to_string()
+            } else {
+                project.project_type.clone()
+            };
+            let slug = project.slug.clone();
+            let website_url = format!("https://modrinth.com/{}/{}", page_type, slug);
+            CfProject {
+                source: "modrinth".into(),
+                id: project.id,
+                name: project.title,
+                slug,
+                website_url,
+                summary: project.description,
+                download_count: project.downloads,
+                class_id: 0,
+                logo_url: project.icon_url.unwrap_or_default(),
+                author: String::new(),
+                updated: project.date_modified,
+                categories: project
+                    .categories
+                    .into_iter()
+                    .filter(|name| loader_tag(name).is_none())
+                    .collect(),
+            }
         })
         .collect())
 }

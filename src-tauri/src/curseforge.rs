@@ -62,6 +62,13 @@ struct CfCategory {
     name: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct CfLinks {
+    #[serde(default)]
+    website_url: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CfMod {
@@ -83,6 +90,8 @@ struct CfMod {
     logo: Option<CfLogo>,
     #[serde(default)]
     authors: Vec<CfAuthor>,
+    #[serde(default)]
+    links: Option<CfLinks>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -111,6 +120,8 @@ pub struct CfProject {
     pub id: String,
     pub name: String,
     pub slug: String,
+    /// 官方项目网页地址，前端「转到官网」按钮直接打开
+    pub website_url: String,
     pub summary: String,
     pub download_count: u64,
     pub class_id: i64,
@@ -221,11 +232,19 @@ pub async fn search(
 }
 
 fn to_project(project: CfMod) -> CfProject {
+    let links = project.links.unwrap_or_default();
+    // CF 模组的网页路径是 mc-mods，mods 路径会 404；其余分类由 websiteUrl 官方地址兜底
+    let website_url = if links.website_url.is_empty() {
+        format!("https://www.curseforge.com/minecraft/mc-mods/{}", project.slug)
+    } else {
+        links.website_url
+    };
     CfProject {
         source: "curseforge".into(),
         id: project.id.to_string(),
         name: project.name,
         slug: project.slug,
+        website_url,
         summary: project.summary,
         download_count: project.download_count,
         class_id: project.class_id,

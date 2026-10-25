@@ -23,6 +23,9 @@ import {
 
 const name = ref("");
 const confirmId = ref<string | null>(null);
+/// 添加账户弹窗：type 选择 → 离线表单，正版直接走微软登录
+const addOpen = ref(false);
+const offlineOpen = ref(false);
 
 const loginVisible = computed(() => store.msLogin !== null);
 const code = computed(() => store.msLogin?.code ?? null);
@@ -62,6 +65,17 @@ function addOffline() {
   }
   createOffline(value);
   name.value = "";
+  offlineOpen.value = false;
+  notify(`已添加离线账号 ${value}`);
+}
+
+function pickAccountType(kind: "offline" | "microsoft") {
+  addOpen.value = false;
+  if (kind === "offline") {
+    offlineOpen.value = true;
+  } else {
+    beginMsLogin();
+  }
 }
 
 function requestDelete(id: string) {
@@ -209,8 +223,9 @@ onMounted(() => {
             </span>
             <IconButton
               icon="trash"
+              class="acc-del"
               :label="confirmId === account.id ? '确认移除账号' : '移除账号'"
-              variant="danger"
+              variant="ghost"
               :size="26"
               @click.stop="requestDelete(account.id)"
             />
@@ -218,16 +233,9 @@ onMounted(() => {
         </div>
 
         <div class="acc-add">
-          <div class="acc-add__row">
-            <WoodInput v-model="name" placeholder="离线用户名，例如 Steve" @keyup.enter="addOffline" />
-            <WoodButton variant="primary" size="sm" @click="addOffline">
-              <AppIcon name="plus" :size="14" />
-              添加
-            </WoodButton>
-          </div>
-          <WoodButton variant="ghost" block @click="beginMsLogin">
-            <AppIcon name="external" :size="15" />
-            登录微软账号
+          <WoodButton variant="primary" block sheen @click="addOpen = true">
+            <AppIcon name="plus" :size="15" />
+            添加账户
           </WoodButton>
         </div>
       </section>
@@ -263,12 +271,12 @@ onMounted(() => {
         </div>
 
         <div class="acc-actions">
-          <WoodButton variant="primary" @click="editSkin">编辑皮肤</WoodButton>
+          <WoodButton variant="soft" @click="editSkin">编辑皮肤</WoodButton>
           <WoodButton variant="soft" @click="exportSkin">
             <AppIcon name="download" :size="15" />
             导出 PNG
           </WoodButton>
-          <WoodButton v-if="selectedAccount.kind === 'microsoft'" variant="ghost" @click="refreshOfficial">
+          <WoodButton v-if="selectedAccount.kind === 'microsoft'" variant="soft" @click="refreshOfficial">
             <AppIcon name="refresh" :size="14" />
             重新拉取官方皮肤
           </WoodButton>
@@ -290,6 +298,39 @@ onMounted(() => {
         选择或创建一个账号后，这里会显示 3D 皮肤
       </section>
     </div>
+
+    <WoodModal v-if="addOpen" title="添加账户" :width="440" @close="addOpen = false">
+      <p class="add-type__hint muted">选择要添加的账户类型。</p>
+      <button class="add-type" @click="pickAccountType('offline')">
+        <AppIcon name="user" :size="22" />
+        <span class="add-type__body">
+          <b>离线账户</b>
+          <span>使用本地用户名进入游戏。</span>
+        </span>
+      </button>
+      <button class="add-type" @click="pickAccountType('microsoft')">
+        <AppIcon name="star" :size="22" />
+        <span class="add-type__body">
+          <b>正版账户</b>
+          <span>通过 Microsoft 账户登录并获取皮肤头像。</span>
+        </span>
+      </button>
+    </WoodModal>
+
+    <WoodModal v-if="offlineOpen" title="离线账户" :width="440" @close="offlineOpen = false">
+      <p class="offline-hint muted">
+        如果您尚未拥有正版 Minecraft，请始终优先考虑购入正版
+        <a class="offline-hint__link" href="#" @click.prevent="openExternal('https://www.minecraft.net/zh-hans/store/minecraft-java-bedrock-edition-pc')">Minecraft</a>。
+      </p>
+      <label class="offline-field">
+        <span class="offline-field__label">用户名</span>
+        <WoodInput v-model="name" placeholder="例如 Steve" @keyup.enter="addOffline" />
+      </label>
+      <div class="offline-actions">
+        <WoodButton variant="ghost" @click="offlineOpen = false">取消</WoodButton>
+        <WoodButton variant="primary" sheen @click="addOffline">确定</WoodButton>
+      </div>
+    </WoodModal>
 
     <WoodModal v-if="loginVisible" title="微软账号登录" :width="470" @close="closeLogin">
       <div v-if="status === 'loading'" class="login-state">正在向微软申请登录码…</div>
@@ -422,9 +463,102 @@ onMounted(() => {
   border-top: 1px solid var(--line);
 }
 
-.acc-add__row {
+/* 删除按钮平时完全隐形，悬停行时才浮现红色 */
+.acc-del {
+  opacity: 0;
+  color: var(--muted);
+  transition: opacity var(--dur-1) ease, color var(--dur-1) ease, background var(--dur-1) ease;
+}
+
+.acc-row:hover .acc-del,
+.acc-del:focus-visible {
+  opacity: 1;
+}
+
+.acc-del:hover:not(:disabled) {
+  color: var(--danger);
+  background: rgba(190, 92, 70, 0.12);
+}
+
+/* ---------- 添加账户弹窗 ---------- */
+
+.add-type__hint {
+  margin-bottom: 10px;
+  font-size: 12.5px;
+}
+
+.add-type {
   display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 14px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(var(--glass-rgb), 0.4);
+  color: var(--ink);
+  text-align: left;
+  transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
+}
+
+.add-type:hover {
+  border-color: var(--moss);
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+.add-type > svg {
+  color: var(--walnut);
+  flex-shrink: 0;
+}
+
+.add-type__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.add-type__body b {
+  font-size: 13px;
+  color: var(--walnut-deep);
+}
+
+.add-type__body span {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* ---------- 离线账户表单 ---------- */
+
+.offline-hint {
+  margin-bottom: 14px;
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.offline-hint__link {
+  color: var(--moss);
+  text-decoration: underline;
+}
+
+.offline-field {
+  display: flex;
+  flex-direction: column;
   gap: 6px;
+}
+
+.offline-field__label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-soft);
+}
+
+.offline-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
 }
 
 .acc-detail {
@@ -495,6 +629,13 @@ onMounted(() => {
   justify-content: center;
   flex: 1;
   min-height: 260px;
+}
+
+/* BlockHelm 式：预览浮在页面上，不套框不铺底 */
+.acc-model :deep(.skin-model) {
+  border: none;
+  border-radius: 0;
+  background: transparent;
 }
 
 .acc-model__loading {

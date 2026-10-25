@@ -1,4 +1,4 @@
-﻿# 发版收尾：清掉 jsdelivr 对 update.json 的 CDN 缓存。
+﻿﻿﻿﻿﻿﻿﻿﻿# 发版收尾：清掉 jsdelivr 对 update.json 的 CDN 缓存。
 # jsdelivr 对 @main 分支引用缓存很久，发版后不清缓存国内更新源会一直读到旧版本。
 # 用法: powershell -ExecutionPolicy Bypass -File scripts/purge-cdn.ps1
 # 可选: -Version 1.5.0 指定期望版本做校验（默认只回读显示）

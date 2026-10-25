@@ -16,7 +16,15 @@ import {
   refreshVersions,
   store,
 } from "../store";
-import { formatBytes, formatDate, formatSpeed, kindLabel } from "../utils";
+import {
+  APRIL_FOOLS_IDS,
+  formatBytes,
+  formatDate,
+  formatSpeed,
+  kindLabel,
+  matchVersionFilter,
+  type VersionFilter,
+} from "../utils";
 
 type Category = "vanilla" | "mods" | "modpacks" | "datapacks" | "resourcepacks" | "shaders";
 
@@ -38,14 +46,15 @@ const loaderVersionMap = ref<Record<string, LoaderVersion[]>>({});
 const versionLoading = ref<string | null>(null);
 const versionError = ref("");
 
-const filter = ref<"release" | "snapshot" | "all">("release");
+const filter = ref<VersionFilter>("release");
 const query = ref("");
 const limit = ref(240);
 
 const tabs = [
   { key: "release", label: "正式版" },
-  { key: "snapshot", label: "快照" },
-  { key: "all", label: "全部" },
+  { key: "snapshot", label: "快照版" },
+  { key: "april", label: "愚人节版" },
+  { key: "legacy", label: "远古版" },
 ] as const;
 
 onMounted(() => {
@@ -105,7 +114,7 @@ const detailInstalled = computed(
 const filtered = computed(() => {
   const keyword = query.value.trim().toLowerCase();
   return store.versions
-    .filter((v) => (filter.value === "all" ? true : v.kind === filter.value))
+    .filter((v) => matchVersionFilter(v.kind, v.id, filter.value))
     .filter((v) => (keyword ? v.id.toLowerCase().includes(keyword) : true))
     .slice(0, limit.value);
 });
@@ -113,7 +122,7 @@ const filtered = computed(() => {
 const totalMatched = computed(() => {
   const keyword = query.value.trim().toLowerCase();
   return store.versions
-    .filter((v) => (filter.value === "all" ? true : v.kind === filter.value))
+    .filter((v) => matchVersionFilter(v.kind, v.id, filter.value))
     .filter((v) => (keyword ? v.id.toLowerCase().includes(keyword) : true)).length;
 });
 
@@ -419,8 +428,11 @@ function launchLoader(id: string | null) {
                 <span class="version-row__mark" />
                 <span class="version-row__main">
                   <strong class="version-row__id">{{ item.id }}</strong>
-                  <span class="tag" :class="{ 'tag--grass': item.kind === 'release' }">
-                    {{ kindLabel(item.kind) }}
+                  <span
+                    class="tag"
+                    :class="{ 'tag--grass': item.kind === 'release' || APRIL_FOOLS_IDS.has(item.id) }"
+                  >
+                    {{ APRIL_FOOLS_IDS.has(item.id) ? "愚人节版" : kindLabel(item.kind) }}
                   </span>
                   <span v-if="item.installed" class="tag tag--grass">已安装</span>
                   <span class="version-row__date mono">{{ formatDate(item.release_time) }}</span>

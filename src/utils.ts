@@ -66,3 +66,29 @@ export const ICON_PRESETS: IconPreset[] = [
 export function iconColor(value?: string): string {
   return ICON_PRESETS.find((preset) => preset.value === value)?.color ?? "#8b9d6f";
 }
+
+/* ---------- 版本分类 ---------- */
+
+/// 官方清单里的愚人节彩蛋版本（kind 都标成 snapshot，按 id 单独归一档）
+export const APRIL_FOOLS_IDS: ReadonlySet<string> = new Set([
+  "2.0",
+  "15w14a",
+  "1.RV-Pre1",
+  "20w14infinite",
+  "3D Shareware v1.34",
+]);
+
+export type VersionFilter = "release" | "snapshot" | "legacy" | "april";
+
+export function matchVersionFilter(kind: string, id: string, target: VersionFilter): boolean {
+  switch (target) {
+    case "release":
+      return kind === "release";
+    case "snapshot":
+      return kind === "snapshot" && !APRIL_FOOLS_IDS.has(id);
+    case "april":
+      return APRIL_FOOLS_IDS.has(id);
+    case "legacy":
+      return kind === "old_alpha" || kind === "old_beta";
+  }
+}

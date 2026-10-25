@@ -1021,7 +1021,7 @@ function useAutoJava() {
             <IconButton
               icon="trash"
               label="移除背景图片"
-              variant="danger"
+              variant="danger-quiet"
               :size="34"
               :disabled="!form.background_image"
               @click="clearBackground"

@@ -7,7 +7,7 @@ const props = withDefaults(
   defineProps<{
     icon: string;
     label: string;
-    variant?: "ghost" | "soft" | "danger" | "primary";
+    variant?: "ghost" | "soft" | "danger" | "primary" | "danger-quiet";
     size?: number;
     disabled?: boolean;
     active?: boolean;
@@ -130,6 +130,19 @@ onBeforeUnmount(() => {
 .icon-btn--danger:hover:not(:disabled) {
   background: rgba(190, 92, 70, 0.16);
   color: var(--danger);
+}
+
+/* 常显灰调、无框无底，悬停才转红——用于列表行内删除 */
+.icon-btn--danger-quiet {
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+}
+
+.icon-btn--danger-quiet:hover:not(:disabled) {
+  color: var(--danger);
+  background: rgba(190, 92, 70, 0.12);
+  border-color: transparent;
 }
 
 .icon-btn--primary {

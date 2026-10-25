@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   api,
+  openExternal,
   type CfFileView,
   type CfProject,
   type InstanceContext,
@@ -20,6 +21,7 @@ import {
   installCfFile,
   notify,
   openInstance,
+  refreshVersions,
   store,
 } from "../store";
 import { formatBytes, formatDate } from "../utils";
@@ -269,6 +271,8 @@ const depLoading = ref(false);
 const depError = ref("");
 const filesLoading = ref(false);
 const filesError = ref("");
+/// 文件列表按 MC 版本筛选的 tab
+const versionTab = ref("all");
 
 const showImport = ref(false);
 const packPath = ref("");
@@ -283,6 +287,61 @@ const importForm = reactive({
 });
 
 const label = computed(() => CLASS_LABELS[props.kind] ?? "资源");
+
+/// 当前资源的外部页面链接（来源站点项目页 + MC 百科搜索）
+const projectLinks = computed(() => {
+  const project = active.value;
+  if (!project) return [];
+  const links: { label: string; url: string }[] = [];
+  if (project.website_url) {
+    links.push({
+      label: project.source === "modrinth" ? "转到 Modrinth" : "转到 CurseForge",
+      url: project.website_url,
+    });
+  }
+  links.push({
+    label: "转到 MC 百科",
+    url: `https://search.mcmod.cn/s?key=${encodeURIComponent(project.name)}&site=mcm&filter=0`,
+  });
+  return links;
+});
+
+async function copyProjectName() {
+  if (!active.value) return;
+  try {
+    await navigator.clipboard.writeText(active.value.name);
+    notify("名称已复制");
+  } catch {
+    notify("复制失败，请手动选中复制", "err");
+  }
+}
+
+/// 文件列表的版本 tab：与官方版本表求交集，滤掉 CurseForge 混入的
+/// 加载器 / 环境 token（Fabric、Client、Java 17 等），按版本发布时间新→旧取前 11 个
+const versionTabs = computed(() => {
+  const official = new Map(store.versions.map((v) => [v.id, v.release_time]));
+  const counter = new Map<string, number>();
+  for (const file of files.value) {
+    for (const version of file.game_versions) {
+      if (!official.has(version)) continue;
+      counter.set(version, (counter.get(version) ?? 0) + 1);
+    }
+  }
+  const top = [...counter.keys()]
+    .sort((a, b) => (official.get(b) ?? "").localeCompare(official.get(a) ?? ""))
+    .slice(0, 11);
+  return ["all", ...top];
+});
+
+const visibleFiles = computed(() =>
+  versionTab.value === "all"
+    ? files.value
+    : files.value.filter((file) => file.game_versions.includes(versionTab.value))
+);
+
+watch([active, files], () => {
+  versionTab.value = "all";
+});
 const parentOptions = computed(() =>
   store.installed
     .filter((item) => !item.dependency)
@@ -388,6 +447,8 @@ onMounted(async () => {
   void loadCategories();
   await loadContext();
   await search(true);
+  // 版本 tab 需要与官方版本表求交集，确保 manifest 已加载
+  if (!store.versions.length) void refreshVersions();
   if (preset?.projectId) {
     const hit =
       items.value.find((project) => project.id === preset.projectId) ??
@@ -965,7 +1026,7 @@ async function confirmImport() {
               :key="category"
               class="chip"
             >
-              {{ category }}
+              {{ zhCategory(category) }}
             </span>
           </div>
           <p class="muted small">
@@ -973,6 +1034,21 @@ async function confirmImport() {
             <template v-if="active.updated"> · {{ updatedLabel(active.updated) }}</template>
           </p>
           <p class="muted small cf-detail__summary">{{ active.summary }}</p>
+          <div class="cf-detail__links">
+            <button
+              v-for="link in projectLinks"
+              :key="link.label"
+              class="cf-link"
+              @click="openExternal(link.url)"
+            >
+              <AppIcon name="external" :size="13" />
+              {{ link.label }}
+            </button>
+            <button class="cf-link" @click="copyProjectName">
+              <AppIcon name="copy" :size="13" />
+              复制名称
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1000,8 +1076,21 @@ async function confirmImport() {
         <div v-else-if="!files.length" class="cf-files__state muted small">
           没有找到适配当前筛选的文件。
         </div>
-        <div v-else class="cf-file-list">
-          <div v-for="file in files" :key="file.id" class="cf-file">
+        <template v-else>
+          <div v-if="versionTabs.length > 2" class="cf-version-tabs">
+            <button
+              v-for="version in versionTabs"
+              :key="version"
+              class="cf-version-tab"
+              :class="{ 'cf-version-tab--active': versionTab === version }"
+              @click="versionTab = version"
+            >
+              {{ version === "all" ? "全部" : version }}
+            </button>
+          </div>
+          <div v-else class="cf-version-tabs cf-version-tabs--empty" />
+          <div class="cf-file-list">
+            <div v-for="file in visibleFiles" :key="file.id" class="cf-file">
             <div class="cf-file__main">
               <span class="cf-file__name">{{ file.name }}</span>
               <span class="cf-file__meta mono">
@@ -1079,6 +1168,7 @@ async function confirmImport() {
             </div>
           </div>
         </div>
+        </template>
       </section>
     </template>
 
@@ -1134,7 +1224,7 @@ async function confirmImport() {
                 :key="category"
                 class="chip"
               >
-                {{ category }}
+                {{ zhCategory(category) }}
               </span>
             </div>
             <p class="cf-row__summary">{{ project.summary }}</p>
@@ -1609,6 +1699,71 @@ async function confirmImport() {
 .cf-detail__summary {
   margin-top: 4px;
   max-width: 720px;
+}
+
+.cf-detail__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.cf-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(var(--glass-rgb), 0.4);
+  color: var(--ink-soft);
+  font-size: 12px;
+  transition: border-color var(--dur-1) ease, color var(--dur-1) ease, background var(--dur-1) ease;
+}
+
+.cf-link:hover {
+  border-color: var(--moss);
+  color: var(--walnut-deep);
+  background: rgba(var(--accent-rgb), 0.07);
+}
+
+.cf-version-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: rgba(var(--glass-rgb), 0.4);
+}
+
+.cf-version-tabs--empty {
+  border: none;
+  background: transparent;
+  padding: 0;
+  min-height: 2px;
+}
+
+.cf-version-tab {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  transition: background var(--dur-1) ease, color var(--dur-1) ease;
+}
+
+.cf-version-tab:hover {
+  color: var(--walnut-deep);
+  background: rgba(var(--accent-rgb), 0.08);
+}
+
+.cf-version-tab--active {
+  color: #fff8ea;
+  background: var(--moss);
+  font-weight: 700;
 }
 
 .cf-files {

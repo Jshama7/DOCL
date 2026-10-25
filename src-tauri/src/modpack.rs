@@ -775,6 +775,8 @@ pub struct ExportPreview {
     pub loader_version: Option<String>,
     pub entries: Vec<ExportEntry>,
     pub total_bytes: u64,
+    /// 检测到的常用自定义目录（tacz 枪包等），前端展示为可勾选项
+    pub suggested_extras: Vec<ExportEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -785,6 +787,9 @@ pub struct ExportOptions {
     pub format: String,
     pub groups: Vec<String>,
     pub target: String,
+    /// 额外打包的自定义文件夹（相对实例目录，如 tacz 或 config/tacz/custom）
+    #[serde(default)]
+    pub extra_dirs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -887,6 +892,90 @@ fn collect_group_files(
     files
 }
 
+/// 逻辑单元计数：存档按存档文件夹、光影/资源包按压缩包或文件夹，
+/// 其余组按文件数。展示"1992 个文件"没有意义，用户关心的是"几个存档"。
+fn count_units(root: &Path, group: &str) -> u32 {
+    let (dirs, names) = group_roots(group);
+    let mut count = 0u32;
+    match group {
+        "saves" | "shaderpacks" | "resourcepacks" | "maps" | "jei" => {
+            for dir in dirs {
+                if let Ok(entries) = std::fs::read_dir(root.join(dir)) {
+                    count += entries.flatten().count() as u32;
+                }
+            }
+        }
+        _ => {
+            for dir in dirs {
+                let mut collected = Vec::new();
+                walk_collect(root, Path::new(dir), &mut collected);
+                count += collected.len() as u32;
+            }
+            for name in names {
+                if root.join(name).is_file() {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+/// 常见的"启动器不会自动带上"的自定义目录，典型如 TACZ 枪械包
+const SUGGESTED_EXTRA_DIRS: &[&str] = &["tacz", "config/tacz/custom", "customitems", "customworld"];
+
+/// 校验用户输入的额外目录：拒绝绝对路径、越级逃逸与空路径，统一为 / 分隔
+fn sanitize_extra_dir(value: &str) -> Option<String> {
+    let trimmed = value.trim().trim_matches(['/', '\\']);
+    if trimmed.is_empty() {
+        return None;
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return None;
+    }
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => {
+                let text = part.to_string_lossy();
+                if text == "." || text.eq_ignore_ascii_case("c:$recycle.bin") {
+                    return None;
+                }
+                parts.push(text.to_string());
+            }
+            _ => return None,
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// 统计一个额外目录的内容
+fn extra_dir_entry(root: &Path, relative: &str) -> Option<ExportEntry> {
+    let dir = root.join(relative);
+    if !dir.is_dir() {
+        return None;
+    }
+    let mut collected = Vec::new();
+    walk_collect(&dir, Path::new(""), &mut collected);
+    if collected.is_empty() {
+        return None;
+    }
+    let bytes: u64 = collected
+        .iter()
+        .map(|(path, _)| std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
+        .sum();
+    Some(ExportEntry {
+        key: relative.to_string(),
+        label: relative.to_string(),
+        file_count: collected.len() as u32,
+        bytes,
+    })
+}
+
 fn loader_key(loader: &str) -> Option<&'static str> {
     match loader {
         "fabric" => Some("fabric-loader"),
@@ -954,9 +1043,19 @@ pub fn export_preview(cfg: &Config, version_id: &str) -> Result<ExportPreview> {
         entries.push(ExportEntry {
             key: key.to_string(),
             label: label.to_string(),
-            file_count: files.len() as u32,
+            file_count: count_units(&root, key),
             bytes,
         });
+    }
+    let mut suggested_extras = Vec::new();
+    for dir in SUGGESTED_EXTRA_DIRS {
+        // 已被常规组覆盖的目录不再建议（如 config/tacz/custom 不在 config 展开时）
+        if all.contains(&dir.to_string()) {
+            continue;
+        }
+        if let Some(entry) = extra_dir_entry(&root, dir) {
+            suggested_extras.push(entry);
+        }
     }
     for (key, _) in EXPORT_GROUPS {
         let files = collect_group_files(&root, &[key.to_string()]);
@@ -975,6 +1074,7 @@ pub fn export_preview(cfg: &Config, version_id: &str) -> Result<ExportPreview> {
         loader_version: loader_version_of(cfg, version_id, &detail.loader),
         entries,
         total_bytes,
+        suggested_extras,
     })
 }
 
@@ -996,7 +1096,21 @@ pub async fn export(
     } else {
         options.groups.clone()
     };
-    let files = collect_group_files(&root, &groups);
+    let mut files = collect_group_files(&root, &groups);
+    // 额外包含文件夹（TACZ 枪包等）：相对实例目录整体打包，路径必须安全
+    for raw in &options.extra_dirs {
+        let Some(relative) = sanitize_extra_dir(raw) else {
+            continue;
+        };
+        let mut collected = Vec::new();
+        walk_collect(&root, Path::new(&relative), &mut collected);
+        for (path, rel) in collected {
+            let key = sanitize_entry(&rel.to_string_lossy());
+            files.push((path, PathBuf::from(key)));
+        }
+    }
+    let mut seen_paths = std::collections::HashSet::new();
+    files.retain(|(_, rel)| seen_paths.insert(sanitize_entry(&rel.to_string_lossy())));
     if files.is_empty() {
         bail!("没有可导出的文件");
     }

@@ -104,7 +104,39 @@ const exportForm = reactive({
   format: "zip",
   groups: [] as string[],
   target: "",
+  extras: [] as string[],
 });
+/// 用户手动添加的额外目录（TACZ 枪包等）
+const customExtras = ref<string[]>([]);
+const customExtraInput = ref("");
+
+function toggleExtra(dir: string) {
+  const index = exportForm.extras.indexOf(dir);
+  if (index >= 0) {
+    exportForm.extras.splice(index, 1);
+  } else {
+    exportForm.extras.push(dir);
+  }
+}
+
+function addCustomExtra() {
+  const value = customExtraInput.value.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  if (!value) return;
+  if (value.startsWith("..") || /^[a-zA-Z]:/.test(value)) {
+    notify("请输入实例内的相对路径，例如 tacz", "err");
+    return;
+  }
+  if (
+    exportForm.extras.includes(value) ||
+    customExtras.value.includes(value) ||
+    (exportPreview.value?.suggested_extras ?? []).some((entry) => entry.key === value)
+  ) {
+    notify("该目录已经在列表中", "err");
+    return;
+  }
+  customExtras.value.push(value);
+  customExtraInput.value = "";
+}
 
 const exportFormats = [
   { value: "zip", label: "通用 ZIP（兼容各启动器）" },
@@ -830,6 +862,10 @@ async function openExport() {
           !["personal", "saves", "screenshots"].includes(entry.key)
       )
       .map((entry) => entry.key);
+    // 建议的额外目录（tacz 枪包等）默认勾选
+    exportForm.extras = preview.suggested_extras.map((entry) => entry.key);
+    customExtras.value = [];
+    customExtraInput.value = "";
     showExport.value = true;
   } catch (err) {
     notify(`读取导出内容失败：${String(err)}`, "err");
@@ -886,6 +922,7 @@ async function startExport() {
       format: exportForm.format,
       groups: exportForm.groups,
       target: exportForm.target,
+      extra_dirs: [...exportForm.extras, ...customExtras.value],
     },
     exportForm.name
   );
@@ -1677,6 +1714,9 @@ function launch() {
               <label class="pack-field">
                 <span class="pack-field__label">导出格式</span>
                 <WoodSelect v-model="exportForm.format" :options="exportFormats" />
+                <span class="pack-field__hint muted">
+                  两种格式都会把所选内容直接打包进整合包，导入时无需联网下载。
+                </span>
               </label>
 
               <div class="export-head">
@@ -1710,6 +1750,68 @@ function launch() {
                     {{ entry.file_count }} 个 · {{ formatBytes(entry.bytes) }}
                   </span>
                 </button>
+              </div>
+
+              <div
+                v-if="exportPreview.suggested_extras.length || customExtras.length"
+                class="export-head"
+              >
+                <span class="pack-field__label">额外包含文件夹</span>
+                <span class="muted small">TACZ 枪包等自定义内容默认不进整合包，勾选后一并打包</span>
+              </div>
+
+              <div
+                v-if="exportPreview.suggested_extras.length || customExtras.length"
+                class="export-groups export-groups--extras"
+              >
+                <button
+                  v-for="entry in exportPreview.suggested_extras"
+                  :key="entry.key"
+                  class="export-group"
+                  :class="{ 'export-group--on': exportForm.extras.includes(entry.key) }"
+                  @click="toggleExtra(entry.key)"
+                >
+                  <span class="export-group__box">
+                    <AppIcon
+                      v-if="exportForm.extras.includes(entry.key)"
+                      name="check"
+                      :size="12"
+                    />
+                  </span>
+                  <span class="export-group__label mono">{{ entry.key }}</span>
+                  <span class="export-group__meta mono">
+                    {{ entry.file_count }} 个文件 · {{ formatBytes(entry.bytes) }}
+                  </span>
+                </button>
+                <div
+                  v-for="dir in customExtras"
+                  :key="dir"
+                  class="export-group export-group--on export-group--custom"
+                >
+                  <span class="export-group__box">
+                    <AppIcon name="check" :size="12" />
+                  </span>
+                  <span class="export-group__label mono">{{ dir }}</span>
+                  <button
+                    class="export-link"
+                    title="移除该目录"
+                    @click.stop="customExtras = customExtras.filter((item) => item !== dir)"
+                  >
+                    <AppIcon name="close" :size="12" />
+                  </button>
+                </div>
+              </div>
+
+              <div class="export-extra-add">
+                <WoodInput
+                  v-model="customExtraInput"
+                  placeholder="添加其他文件夹，例如 config/tacz/custom"
+                  @keyup.enter="addCustomExtra"
+                />
+                <WoodButton variant="soft" size="sm" @click="addCustomExtra">
+                  <AppIcon name="plus" :size="14" />
+                  添加
+                </WoodButton>
               </div>
 
               <div class="export-target">
@@ -2538,6 +2640,29 @@ function launch() {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 5px;
+}
+
+/* 额外包含文件夹区：整体加一条淡边框与常规组区分 */
+.export-groups--extras {
+  padding: 8px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 4px;
+}
+
+.export-group--custom {
+  cursor: default;
+}
+
+.export-extra-add {
+  display: flex;
+  gap: 6px;
+  margin-top: -6px;
+}
+
+.pack-field__hint {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .export-group {

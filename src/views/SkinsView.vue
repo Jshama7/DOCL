@@ -339,7 +339,7 @@ onMounted(async () => {
               icon="trash"
               label="删除"
               :size="26"
-              variant="danger"
+              variant="danger-quiet"
               @click="deleteTarget = item"
             />
           </footer>
@@ -379,7 +379,12 @@ onMounted(async () => {
           :class="{ 'cape--active': cape.active }"
         >
           <div class="cape__preview">
-            <img :src="cape.url" :alt="cape.alias" loading="lazy" />
+            <div
+              class="cape-front"
+              :style="{ backgroundImage: `url(${cape.url})` }"
+              role="img"
+              :aria-label="cape.alias"
+            />
           </div>
           <div class="cape__meta">
             <strong class="cape__name">{{ cape.alias }}</strong>
@@ -629,6 +634,13 @@ onMounted(async () => {
   overflow: hidden;
 }
 
+/* 预览浮起：去掉 SkinModel 自带的渐变底和边框，融入卡片底色 */
+.skin__preview :deep(.skin-model) {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
 .skin__meta {
   display: flex;
   flex-direction: column;
@@ -694,8 +706,14 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-.cape__preview img {
-  height: 96px;
+/* Mojang 披风纹理是 64x32 的拼接图（正面 + 侧面），只裁正面区域
+   （x=1..10, y=0..16）放大展示，避免露出难看的侧面拼接 */
+.cape-front {
+  width: 70px;
+  height: 112px;
+  background-size: 448px 224px;
+  background-position: -7px 0;
+  background-repeat: no-repeat;
   image-rendering: pixelated;
 }
 

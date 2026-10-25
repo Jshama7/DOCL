@@ -298,7 +298,7 @@ async function chooseImage(id: string) {
                   ? '删除整合包'
                   : '删除版本'
             "
-            variant="danger"
+            variant="danger-quiet"
             :size="30"
             @click="requestDelete(item.id)"
           />

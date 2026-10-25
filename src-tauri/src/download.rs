@@ -377,11 +377,17 @@ async fn throttle(bytes: u64) {
     }
 }
 
+/// 镜像速度下限（字节/秒）：低于它在探测窗口后判定源不合格并换源，PCL 同样用 256 KB/s
+const SLOW_SOURCE_BYTES_PER_SEC: u64 = 256 * 1024;
+/// 速度探测窗口，太短容易被网络抖动误判
+const SLOW_PROBE_WINDOW: Duration = Duration::from_secs(6);
+
 async fn fetch_to_file(
     client: &reqwest::Client,
     url: &str,
     task: &FileTask,
     progress: &Arc<ProgressState>,
+    allow_slow_bail: bool,
 ) -> Result<()> {
     if let Some(parent) = task.dest.parent() {
         tokio::fs::create_dir_all(parent).await?;
@@ -401,6 +407,10 @@ async fn fetch_to_file(
     let mut file = tokio::fs::File::create(&tmp).await?;
     let mut hasher = Sha1::new();
     let mut stream = resp.bytes_stream();
+    // 连接已完成，从这里开始算有效速度
+    let probe_start = Instant::now();
+    let mut probe_bytes = 0u64;
+    let mut probed = false;
     loop {
         if progress.is_cancelled() {
             drop(file);
@@ -419,6 +429,31 @@ async fn fetch_to_file(
             .bytes_done
             .fetch_add(chunk.len() as u64, Ordering::Relaxed);
         throttle(chunk.len() as u64).await;
+
+        // 镜像慢到不可用时提前放弃，交给上层换源（用户主动限速时不判定，否则必然误切）
+        if allow_slow_bail && !probed {
+            probe_bytes += chunk.len() as u64;
+            let elapsed = probe_start.elapsed();
+            if elapsed >= SLOW_PROBE_WINDOW {
+                probed = true;
+                let speed = probe_bytes as f64 / elapsed.as_secs_f64();
+                if SPEED_LIMIT.load(Ordering::Relaxed) == 0
+                    && speed < SLOW_SOURCE_BYTES_PER_SEC as f64
+                {
+                    drop(file);
+                    let _ = tokio::fs::remove_file(&tmp).await;
+                    // 这部分数据已经丢弃，进度要扣回避免虚高
+                    progress
+                        .bytes_done
+                        .fetch_sub(probe_bytes, Ordering::Relaxed);
+                    bail!(
+                        "镜像速度过慢（{} KB/s）：{}，换源重试",
+                        (speed / 1024.0) as u64,
+                        task.label
+                    );
+                }
+            }
+        }
     }
     file.flush().await?;
     drop(file);
@@ -475,7 +510,8 @@ async fn download_one(
         }
         let uses_mirror = if mirror_healthy { attempt % 2 == 0 } else { attempt % 2 == 1 };
         let url = &order[attempt % 2];
-        match fetch_to_file(client, url, task, progress).await {
+        // 只有镜像才做慢速判定：官方已经是最后手段，慢也只能继续
+        match fetch_to_file(client, url, task, progress, uses_mirror).await {
             Ok(()) => {
                 progress.files_done.fetch_add(1, Ordering::Relaxed);
                 return Ok(());

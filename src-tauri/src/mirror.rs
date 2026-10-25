@@ -54,6 +54,8 @@ const HOST_MAPPINGS: &[(&str, &str)] = &[
         "https://mod.mcimirror.top/",
     ),
     ("https://media.forgecdn.net/", "https://mod.mcimirror.top/"),
+    // Modrinth CDN：国内多数网络直接不可达，MCIM 同样按路径代理
+    ("https://cdn.modrinth.com/", "https://mod.mcimirror.top/"),
 ];
 
 pub fn rewrite(url: &str) -> String {

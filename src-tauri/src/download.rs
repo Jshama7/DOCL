@@ -33,7 +33,8 @@ pub struct ProgressState {
     pub active: AtomicBool,
     /// 是否已有刷新联动的任务，避免重复起多个
     ticking: AtomicBool,
-    started: Instant,
+    /// 当前阶段的计时基准，进入新阶段会重置
+    started: Mutex<Instant>,
 }
 
 /// 面板最多展示的步骤数量，避免加载器日志刷屏
@@ -71,8 +72,21 @@ impl ProgressState {
             cancel: AtomicBool::new(false),
             active: AtomicBool::new(true),
             ticking: AtomicBool::new(false),
-            started: Instant::now(),
+            started: Mutex::new(Instant::now()),
         })
+    }
+
+    /// 进入新的下载阶段：重置本阶段计数与计时基准。
+    /// 不能只覆盖 total 而不清 done，否则第二阶段会出现「已下载 885MB / 总量 9MB」，
+    /// 百分比直接算成 100%、剩余文件变 0，看起来像卡死。
+    pub fn begin_phase(&self, files_total: u64, bytes_total: u64) {
+        self.files_done.store(0, Ordering::Relaxed);
+        self.bytes_done.store(0, Ordering::Relaxed);
+        self.files_total.store(files_total, Ordering::Relaxed);
+        self.bytes_total.store(bytes_total, Ordering::Relaxed);
+        if let Ok(mut started) = self.started.lock() {
+            *started = Instant::now();
+        }
     }
 
     pub fn set_message(&self, msg: impl Into<String>) {
@@ -150,7 +164,11 @@ impl ProgressState {
             files_total: self.files_total.load(Ordering::Relaxed),
             bytes_done: self.bytes_done.load(Ordering::Relaxed),
             bytes_total: self.bytes_total.load(Ordering::Relaxed),
-            elapsed_ms: self.started.elapsed().as_millis() as u64,
+            elapsed_ms: self
+                .started
+                .lock()
+                .map(|started| started.elapsed().as_millis() as u64)
+                .unwrap_or(0),
             active,
         }
     }
@@ -542,8 +560,7 @@ pub async fn run_tasks(
 ) -> Result<()> {
     let total_files = tasks.len() as u64;
     let total_bytes: u64 = tasks.iter().map(|t| t.size).sum();
-    progress.files_total.store(total_files, Ordering::Relaxed);
-    progress.bytes_total.store(total_bytes, Ordering::Relaxed);
+    progress.begin_phase(total_files, total_bytes);
     progress.active.store(true, Ordering::Relaxed);
 
     if tasks.is_empty() {

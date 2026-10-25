@@ -33,7 +33,9 @@ const speed = computed(() => {
 
 const eta = computed(() => {
   const p = snapshot.value;
-  if (!p || p.bytes_total <= p.bytes_done) return active.value ? "计算中…" : "—";
+  // 整合包清单不带文件大小（bytes_total 为 0）时无法估算剩余时间
+  if (!p || p.bytes_total <= 0) return "—";
+  if (p.bytes_total <= p.bytes_done) return active.value ? "计算中…" : "—";
   const elapsed = Math.max(1, p.elapsed_ms);
   const bytesPerMs = p.bytes_done / elapsed;
   if (bytesPerMs <= 0) return "计算中…";
@@ -205,8 +207,11 @@ onBeforeUnmount(() => {
 
               <WoodProgress :value="percent" :height="6" />
               <div class="dl-task__bytes mono">
-                {{ formatBytes(snapshot?.bytes_done ?? 0) }} /
-                {{ formatBytes(snapshot?.bytes_total ?? 0) }}
+                <template v-if="(snapshot?.bytes_total ?? 0) > 0">
+                  {{ formatBytes(snapshot?.bytes_done ?? 0) }} /
+                  {{ formatBytes(snapshot?.bytes_total ?? 0) }}
+                </template>
+                <template v-else>{{ formatBytes(snapshot?.bytes_done ?? 0) }}</template>
                 · {{ formatDuration(snapshot?.elapsed_ms ?? 0) }}
               </div>
 
@@ -249,7 +254,11 @@ onBeforeUnmount(() => {
           <div class="dl-tip__rows">
             <span>{{ Math.round(percent) }}%</span>
             <span>{{ speed }}</span>
-            <span>{{ formatBytes(snapshot?.bytes_done ?? 0) }} / {{ formatBytes(snapshot?.bytes_total ?? 0) }}</span>
+            <span v-if="(snapshot?.bytes_total ?? 0) > 0">
+              {{ formatBytes(snapshot?.bytes_done ?? 0) }} /
+              {{ formatBytes(snapshot?.bytes_total ?? 0) }}
+            </span>
+            <span v-else>{{ formatBytes(snapshot?.bytes_done ?? 0) }}</span>
             <span>剩余 {{ eta }}</span>
           </div>
           <p v-if="failed" class="dl-tip__err">{{ store.lastJobError }}</p>

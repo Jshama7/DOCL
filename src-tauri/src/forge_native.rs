@@ -63,15 +63,17 @@ struct Processor {
 
 /* ---------- 入口 ---------- */
 
-/// 安装器带处理器配置（Forge 1.13+ 及同代 NeoForge）才走原生流程，
-/// 老版安装器或未知格式仍交给官方安装器
+/// 安装器自带内嵌清单（version + minecraft + json）就走原生流程。
+/// 1.13+ 的安装器带处理器，1.12 这类处理器为空、只需下载库 + 解内嵌 jar，
+/// 交给官方安装器会卡在境外 maven 上（实测两分钟以上），一并接管。
 pub fn supports_native(installer_path: &Path) -> bool {
     let Ok(bytes) = read_entry(installer_path, "install_profile.json") else {
         return false;
     };
-    serde_json::from_slice::<InstallProfile>(&bytes)
-        .map(|profile| !profile.version.is_empty() && !profile.processors.is_empty())
-        .unwrap_or(false)
+    let Ok(profile) = serde_json::from_slice::<InstallProfile>(&bytes) else {
+        return false;
+    };
+    !profile.version.is_empty() && !profile.minecraft.is_empty() && profile.json.is_some()
 }
 
 pub async fn install(

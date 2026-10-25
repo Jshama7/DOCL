@@ -1245,10 +1245,10 @@ async fn install_forge_like(
         tokio::fs::write(&installer_path, bytes).await?;
     }
 
-    // 官方安装器的 JVM 联网不受我们控制（--mirror 不覆盖 Mojang 源），
-    // 带处理器配置的安装器（Forge 1.13+ / 同代 NeoForge）优先原生安装
+    // 带内嵌清单的安装器优先原生安装：库走启动器镜像，不受安装器自身联网限制。
+    // 原生流程失败时回退官方安装器，避免个别清单差异导致装不上。
     if crate::forge_native::supports_native(&installer_path) {
-        let target = crate::forge_native::install(
+        match crate::forge_native::install(
             app,
             client,
             cfg,
@@ -1256,10 +1256,16 @@ async fn install_forge_like(
             loader,
             game_version,
             &java.path,
-            progress,
+            progress.clone(),
         )
-        .await?;
-        return finish_loader_install(cfg, game_version, &target);
+        .await
+        {
+            Ok(target) => return finish_loader_install(cfg, game_version, &target),
+            Err(err) => {
+                progress.set_message(format!("原生安装未完成，改用官方安装器：{err}"));
+                download::emit_now(app, &progress);
+            }
+        }
     }
 
     progress.files_total.store(1, Ordering::Relaxed);

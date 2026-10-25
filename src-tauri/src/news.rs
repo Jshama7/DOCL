@@ -163,6 +163,17 @@ fn truncate_text(input: &str, max: usize) -> String {
     out
 }
 
+/// minecraft.net 文章链接切到中文站：已翻译的文章直接是中文，未翻译的至少带中文界面。
+fn zh_article_url(link: &str) -> Option<String> {
+    let rest = link.split("minecraft.net").nth(1)?;
+    let rest = rest.strip_prefix("/en-us").unwrap_or(rest);
+    let path = rest.split('?').next()?.trim_end_matches('/');
+    if !path.starts_with("/article/") || path.len() <= "/article/".len() {
+        return None;
+    }
+    Some(format!("https://www.minecraft.net/zh-hans{path}"))
+}
+
 fn is_java_news(entry: &OfficialEntry) -> bool {
     entry
         .news_type
@@ -201,7 +212,8 @@ async fn fetch_official(client: &reqwest::Client) -> Result<Vec<NewsItem>> {
             image_url: image_url(entry.play_page_image.or(entry.news_page_image)),
             url: entry
                 .read_more_link
-                .filter(|link| !link.trim().is_empty()),
+                .filter(|link| !link.trim().is_empty())
+                .map(|link| zh_article_url(&link).unwrap_or(link)),
             source: "official".into(),
             version: None,
             kind: None,

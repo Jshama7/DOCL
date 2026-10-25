@@ -98,8 +98,6 @@ struct PatchEntry {
     kind: String,
     #[serde(default)]
     date: String,
-    #[serde(rename = "shortText", default)]
-    short_text: String,
     #[serde(default)]
     image: Option<ImageRef>,
     #[serde(rename = "contentPath", default)]
@@ -552,6 +550,11 @@ async fn wiki_extract(client: &reqwest::Client, title: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct WikiExtractQuery {
         #[serde(default)]
+        query: Option<WikiExtractInner>,
+    }
+    #[derive(Deserialize)]
+    struct WikiExtractInner {
+        #[serde(default)]
         pages: Vec<WikiExtractPage>,
     }
     #[derive(Deserialize)]
@@ -577,11 +580,20 @@ async fn wiki_extract(client: &reqwest::Client, title: &str) -> Option<String> {
             .await;
         let result = match response {
             Ok(value) => match value.json::<WikiExtractQuery>().await {
-                Ok(parsed) => parsed
-                    .pages
-                    .into_iter()
-                    .find_map(|page| page.extract)
-                    .filter(|text| !text.trim().is_empty()),
+                Ok(parsed) => {
+                    let extract = parsed
+                        .query
+                        .and_then(|inner| inner.pages.into_iter().find_map(|page| page.extract))
+                        .filter(|text| !text.trim().is_empty());
+                    if extract.is_none() {
+                        #[cfg(debug_assertions)]
+                        eprintln!(
+                            "[news] 中文 Wiki 未返回正文（第 {} 次）: {title}",
+                            attempt + 1
+                        );
+                    }
+                    extract
+                }
                 Err(err) => {
                     #[cfg(debug_assertions)]
                     eprintln!("[news] 中文 Wiki 响应解析失败（第 {} 次）: {err}", attempt + 1);

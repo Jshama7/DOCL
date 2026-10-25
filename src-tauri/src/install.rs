@@ -386,7 +386,8 @@ pub async fn install_version(
         app,
         client,
         tasks,
-        cfg.concurrency as usize,
+        // 依赖库多为大文件，并发太高容易触发镜像限流
+        (cfg.concurrency as usize).max(16),
         use_mirror,
         progress.clone(),
     )
@@ -434,7 +435,8 @@ pub async fn install_version(
             app,
             client,
             asset_tasks,
-            cfg.concurrency as usize,
+            // 资源文件是几千个小文件，并发 8 严重拖慢；镜像与官方源都支持 32+
+            (cfg.concurrency as usize).max(32),
             use_mirror,
             progress.clone(),
         )

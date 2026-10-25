@@ -196,13 +196,27 @@ pub async fn get_bytes(
     } else {
         vec![url.to_string(), mirror::rewrite(url)]
     };
+    // 单文件请求必须有总超时：connect_timeout 只管握手，
+    // 响应体挂起（官方源被墙断流）会无限等待，表现为「卡在某一步」
     for (idx, candidate) in candidates.iter().enumerate() {
-        match client.get(candidate).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                return Ok(resp.bytes().await.context("读取响应失败")?.to_vec());
+        for attempt in 0..2 {
+            let request = client
+                .get(candidate)
+                .timeout(Duration::from_secs(45));
+            match request.send().await {
+                Ok(resp) if resp.status().is_success() => {
+                    match resp.bytes().await {
+                        Ok(bytes) => return Ok(bytes.to_vec()),
+                        Err(err) => last_err = Some(err.into()),
+                    }
+                }
+                Ok(resp) => last_err = Some(anyhow!("HTTP {}", resp.status())),
+                Err(err) => last_err = Some(err.into()),
             }
-            Ok(resp) => last_err = Some(anyhow!("HTTP {}", resp.status())),
-            Err(err) => last_err = Some(err.into()),
+            // 首次失败稍等再重试；两个候选共 4 次机会
+            if attempt == 0 {
+                tokio::time::sleep(Duration::from_millis(400)).await;
+            }
         }
         if idx == 0 {
             tokio::time::sleep(Duration::from_millis(300)).await;

@@ -120,7 +120,8 @@ fn now_secs() -> u64 {
 }
 
 fn cache_path() -> PathBuf {
-    config::data_dir().join("news_cache.json")
+    // v2：条目改为中文标题/摘要并带 Wiki 链接，弃用旧缓存避免 30 分钟内一直显示英文
+    config::data_dir().join("news_cache_v2.json")
 }
 
 fn read_cache() -> Option<CacheFile> {
@@ -254,7 +255,7 @@ fn zh_patch_summary(kind: &str, pretty: &str) -> String {
         return String::new();
     }
     match kind {
-        "snapshot" => format!("Java 快照 {pretty}：测试新特性并修复一批问题，快照可能损坏存档，游玩前请备份"),
+        "snapshot" => format!("{pretty}：测试新特性并修复一批问题，可能损坏存档，游玩前请备份"),
         "pre-release" => format!("预发布版 {pretty}：快照阶段收尾，集中修复遗留问题"),
         "release-candidate" => format!("候选版 {pretty}：若无重大问题将在近期转为正式版"),
         "release" => format!("正式版 {pretty} 发布，汇总此前快照的全部新特性与修复"),
@@ -514,8 +515,80 @@ fn html_to_text(html: &str) -> String {
     lines.join("\n")
 }
 
-/// 拉取单条版本更新日志正文。
-pub async fn article(client: &reqwest::Client, path: &str) -> Result<String> {
+/// 把 Wiki 纯文本里的 == 标题 == 转成更易读的样式并压缩空行。
+fn prettify_wiki_extract(text: &str) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let rendered = if let Some(inner) =
+            trimmed.strip_prefix("== ").and_then(|rest| rest.strip_suffix(" =="))
+        {
+            format!("【{inner}】")
+        } else if let Some(inner) =
+            trimmed.strip_prefix("=== ").and_then(|rest| rest.strip_suffix(" ==="))
+        {
+            format!("· {inner}")
+        } else {
+            trimmed
+                .trim_start_matches(|c| c == ';' || c == '*' || c == ' ')
+                .to_string()
+        };
+        if rendered.is_empty() {
+            if lines.last().map(|last| !last.is_empty()).unwrap_or(false) {
+                lines.push(String::new());
+            }
+        } else {
+            lines.push(rendered);
+        }
+    }
+    while lines.last().map(|line| line.is_empty()).unwrap_or(false) {
+        lines.pop();
+    }
+    lines.join("\n")
+}
+
+/// 拉取中文 Wiki 版本页的纯文本汉化内容（TextExtracts 接口）。
+async fn wiki_extract(client: &reqwest::Client, title: &str) -> Option<String> {
+    #[derive(Deserialize)]
+    struct WikiExtractQuery {
+        #[serde(default)]
+        pages: Vec<WikiExtractPage>,
+    }
+    #[derive(Deserialize)]
+    struct WikiExtractPage {
+        #[serde(default)]
+        extract: Option<String>,
+    }
+
+    let response = client
+        .get(WIKI_API)
+        .query(&[
+            ("action", "query"),
+            ("prop", "extracts"),
+            ("explaintext", "1"),
+            ("exsectionformat", "wiki"),
+            ("titles", title),
+            ("format", "json"),
+            ("formatversion", "2"),
+        ])
+        .timeout(Duration::from_secs(8))
+        .send()
+        .await
+        .ok()?;
+    let parsed: WikiExtractQuery = response.json().await.ok()?;
+    parsed
+        .pages
+        .into_iter()
+        .find_map(|page| page.extract)
+        .filter(|text| !text.trim().is_empty())
+}
+
+/// 拉取单条版本更新日志正文；若提供 Wiki 标题则把中文 Wiki 汉化介绍放在正文前面。
+pub async fn article(
+    client: &reqwest::Client,
+    path: &str,
+    wiki_title: Option<&str>,
+) -> Result<String> {
     let relative = path.trim();
     if !relative.starts_with("javaPatchNotes/") || relative.contains("..") {
         bail!("无效的更新日志路径");
@@ -530,9 +603,21 @@ pub async fn article(client: &reqwest::Client, path: &str) -> Result<String> {
         .json()
         .await
         .context("解析更新日志失败")?;
-    let text = html_to_text(&detail.body);
-    if text.trim().is_empty() {
+    let english = html_to_text(&detail.body);
+    if english.trim().is_empty() {
         bail!("更新日志正文为空");
     }
-    Ok(text)
+
+    let mut combined = String::new();
+    if let Some(title) = wiki_title.map(str::trim).filter(|title| !title.is_empty()) {
+        if let Some(wiki) = wiki_extract(client, title).await {
+            let pretty = prettify_wiki_extract(&wiki);
+            if !pretty.is_empty() {
+                combined.push_str(&pretty);
+                combined.push_str("\n\n——— 以下为 Mojang 官方英文原文 ———\n\n");
+            }
+        }
+    }
+    combined.push_str(&english);
+    Ok(combined)
 }

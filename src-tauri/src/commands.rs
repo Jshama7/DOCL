@@ -103,8 +103,14 @@ pub async fn news_feed(
 }
 
 #[tauri::command]
-pub async fn news_article(state: State<'_, AppState>, path: String) -> CmdResult<String> {
-    news::article(&state.client, &path).await.map_err(err)
+pub async fn news_article(
+    state: State<'_, AppState>,
+    path: String,
+    wiki_title: Option<String>,
+) -> CmdResult<String> {
+    news::article(&state.client, &path, wiki_title.as_deref())
+        .await
+        .map_err(err)
 }
 
 #[tauri::command]

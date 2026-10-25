@@ -598,7 +598,8 @@ export const api = {
   getConfig: () => invoke<Config>("get_config"),
   systemMemory: () => invoke<SystemMemory>("system_memory"),
   newsFeed: (force = false) => invoke<NewsFeed>("news_feed", { force }),
-  newsArticle: (path: string) => invoke<string>("news_article", { path }),
+  newsArticle: (path: string, wikiTitle?: string) =>
+    invoke<string>("news_article", { path, wikiTitle: wikiTitle ?? null }),
   saveConfig: (config: Config) => invoke<Config>("save_config", { config }),
   gameDirs: () => invoke<GameDirsView>("game_dirs"),
   gameDirVersionCounts: () => invoke<Record<string, number>>("game_dir_version_counts"),

@@ -177,7 +177,8 @@ async function openItem(item: NewsItem) {
     article.value = { item, text: "" };
     articleLoading.value = true;
     try {
-      const text = await api.newsArticle(item.detail_path);
+      const wikiTitle = item.version ? `Java版${item.version}` : undefined;
+      const text = await api.newsArticle(item.detail_path, wikiTitle);
       if (article.value) article.value.text = text;
     } catch (err) {
       article.value = null;

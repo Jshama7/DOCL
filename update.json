@@ -1,6 +1,7 @@
 {
-  "version": "1.5.0",
-  "url": "https://github.com/dawo4/DOCL/releases/download/v1.5.0/DOCL_1.5.0_x64-setup.exe",
-  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.5.0/DOCL_1.5.0_portable.zip",
-  "notes": "整合包全面改为自包含实例：一个整合包就是一个完整目录，删除即彻底卸载；导入全程后台进行，不再打断操作。"
+  "version": "1.5.1",
+  "url": "https://github.com/dawo4/DOCL/releases/download/v1.5.1/DOCL_1.5.1_x64-setup.exe",
+  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.5.1/DOCL_1.5.1_portable.zip",
+  "notes": "导出整合包支持额外包含文件夹（TACZ 枪包不再丢失），添加账户改为弹窗流程，社区资源详情全面增强。"
 }
+

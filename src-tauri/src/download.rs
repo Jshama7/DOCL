@@ -191,11 +191,15 @@ pub async fn get_bytes(
     use_mirror: bool,
 ) -> Result<Vec<u8>> {
     let mut last_err: Option<anyhow::Error> = None;
-    let candidates = if use_mirror {
-        vec![mirror::rewrite(url), url.to_string()]
+    let mirror_url = mirror::rewrite(url);
+    // 镜像未覆盖该主机时 rewrite 原样返回，去重避免对同一地址打两遍
+    let raw = if use_mirror {
+        vec![mirror_url, url.to_string()]
     } else {
-        vec![url.to_string(), mirror::rewrite(url)]
+        vec![url.to_string(), mirror_url]
     };
+    let mut seen = std::collections::HashSet::new();
+    let candidates: Vec<String> = raw.into_iter().filter(|c| seen.insert(c.clone())).collect();
     // 单文件请求必须有总超时：connect_timeout 只管握手，
     // 响应体挂起（官方源被墙断流）会无限等待，表现为「卡在某一步」
     for (idx, candidate) in candidates.iter().enumerate() {
@@ -213,12 +217,13 @@ pub async fn get_bytes(
                 Ok(resp) => last_err = Some(anyhow!("HTTP {}", resp.status())),
                 Err(err) => last_err = Some(err.into()),
             }
-            // 首次失败稍等再重试；两个候选共 4 次机会
+            // 首次失败稍等再重试
             if attempt == 0 {
                 tokio::time::sleep(Duration::from_millis(400)).await;
             }
         }
-        if idx == 0 {
+        // 还有下一个候选时才等待，避免末尾白等
+        if idx + 1 < candidates.len() {
             tokio::time::sleep(Duration::from_millis(300)).await;
         }
     }

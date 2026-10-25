@@ -177,12 +177,19 @@ pub fn detect(cfg: &Config) -> Vec<JavaInfo> {
         }
     }
 
-    let runtime_root = cfg.java_runtime_root();
-    if let Ok(entries) = std::fs::read_dir(&runtime_root) {
-        for entry in entries.flatten() {
-            let candidate = entry.path().join("bin").join("java.exe");
-            if let Some(info) = inspect_java(&candidate, "启动器运行时") {
-                push(info);
+    // 内置 runtime 与用户自定义目录都扫，改了安装位置也不会漏掉此前装好的运行时
+    let mut runtime_roots = vec![config::runtime_dir()];
+    let custom_root = cfg.java_runtime_root();
+    if custom_root != runtime_roots[0] {
+        runtime_roots.push(custom_root);
+    }
+    for runtime_root in runtime_roots {
+        if let Ok(entries) = std::fs::read_dir(&runtime_root) {
+            for entry in entries.flatten() {
+                let candidate = entry.path().join("bin").join("java.exe");
+                if let Some(info) = inspect_java(&candidate, "启动器运行时") {
+                    push(info);
+                }
             }
         }
     }

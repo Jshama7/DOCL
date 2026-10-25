@@ -464,14 +464,27 @@ pub async fn file_download(
         .await?
         .data;
 
-    let download_url = file
-        .download_url
-        .filter(|url| !url.trim().is_empty())
-        .ok_or_else(|| anyhow!("作者未开放第三方下载"))?;
-    let name = if file.file_name.is_empty() {
+    let file_name = file.file_name.clone();
+    // 作者关闭第三方分发时接口会把 downloadUrl 置空，但 CDN 仍按 fileId 分段可直达。
+    // 官方 CDN 对这情况返回 404，镜像能取到，交给下载层的镜像轮换处理。
+    let download_url = match file.download_url.filter(|url| !url.trim().is_empty()) {
+        Some(url) => url,
+        None => {
+            if file_name.trim().is_empty() {
+                return Err(anyhow!("作者未开放第三方下载，且接口未返回文件名"));
+            }
+            format!(
+                "https://edge.forgecdn.net/files/{}/{}/{}",
+                file.id / 1000,
+                file.id % 1000,
+                file_name
+            )
+        }
+    };
+    let name = if file_name.is_empty() {
         format!("{mod_id}-{file_id}.jar")
     } else {
-        file.file_name
+        file_name
     };
     Ok((download_url, name))
 }

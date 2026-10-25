@@ -8,6 +8,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const BASE: &str = "https://launchercontent.mojang.com";
 const NEWS_URL: &str = "https://launchercontent.mojang.com/v2/news.json";
 const PATCH_URL: &str = "https://launchercontent.mojang.com/v2/javaPatchNotes.json";
+const WIKI_API: &str = "https://zh.minecraft.wiki/api.php";
+const WIKI_BASE: &str = "https://zh.minecraft.wiki/wiki/";
 const CACHE_TTL: u64 = 30 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -229,9 +231,110 @@ fn patch_tag(kind: &str) -> String {
     match kind {
         "snapshot" => "快照".into(),
         "release" => "正式版".into(),
+        "pre-release" => "预发布".into(),
+        "release-candidate" => "候选版".into(),
         other if !other.is_empty() => other.to_string(),
         _ => "更新".into(),
     }
+}
+
+/// 把内部版本号转成可读形式：26.4-snapshot-5 → 26.4 快照 5。
+fn pretty_version(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if let Some((base, number)) = trimmed.split_once("-snapshot-") {
+        format!("{base} 快照 {number}")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// 版本条目的中文摘要模板，替代英文 shortText。
+fn zh_patch_summary(kind: &str, pretty: &str) -> String {
+    if pretty.is_empty() {
+        return String::new();
+    }
+    match kind {
+        "snapshot" => format!("Java 快照 {pretty}：测试新特性并修复一批问题，快照可能损坏存档，游玩前请备份"),
+        "pre-release" => format!("预发布版 {pretty}：快照阶段收尾，集中修复遗留问题"),
+        "release-candidate" => format!("候选版 {pretty}：若无重大问题将在近期转为正式版"),
+        "release" => format!("正式版 {pretty} 发布，汇总此前快照的全部新特性与修复"),
+        _ => format!("Minecraft Java 版 {pretty} 已更新"),
+    }
+}
+
+/// 非 ASCII 路径段转百分号编码（中文 Wiki 页面标题需要）。
+fn percent_encode_path(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() * 3);
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// 批量查询中文 Wiki 是否存在版本页，返回实际存在的标题集合。
+async fn wiki_pages_exist(client: &reqwest::Client, titles: &[String]) -> HashSet<String> {
+    static EMPTY: std::sync::LazyLock<HashSet<String>> = std::sync::LazyLock::new(HashSet::new);
+    if titles.is_empty() {
+        return HashSet::new();
+    }
+
+    #[derive(Deserialize)]
+    struct WikiQuery {
+        #[serde(default)]
+        query: Option<WikiQueryInner>,
+    }
+    #[derive(Deserialize)]
+    struct WikiQueryInner {
+        #[serde(default)]
+        pages: Vec<WikiPage>,
+    }
+    #[derive(Deserialize)]
+    struct WikiPage {
+        #[serde(default)]
+        title: String,
+        #[serde(default)]
+        missing: bool,
+        #[serde(default)]
+        invalid: bool,
+    }
+
+    let joined = titles.join("|");
+    let response = client
+        .get(WIKI_API)
+        .query(&[
+            ("action", "query"),
+            ("titles", joined.as_str()),
+            ("redirects", "1"),
+            ("format", "json"),
+            ("formatversion", "2"),
+        ])
+        .timeout(Duration::from_secs(6))
+        .send()
+        .await;
+    let response = match response {
+        Ok(value) => value,
+        Err(_) => return EMPTY.clone(),
+    };
+    let parsed: WikiQuery = match response.json().await {
+        Ok(value) => value,
+        Err(_) => return EMPTY.clone(),
+    };
+    parsed
+        .query
+        .map(|inner| {
+            inner
+                .pages
+                .into_iter()
+                .filter(|page| !page.missing && !page.invalid)
+                .map(|page| page.title)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 async fn fetch_patch_notes(client: &reqwest::Client) -> Result<Vec<NewsItem>> {
@@ -249,35 +352,59 @@ async fn fetch_patch_notes(client: &reqwest::Client) -> Result<Vec<NewsItem>> {
     let mut items: Vec<NewsItem> = feed
         .entries
         .into_iter()
-        .map(|entry| NewsItem {
-            id: entry.id,
-            title: entry.title.trim().to_string(),
-            category: "Java 版本".into(),
-            tag: patch_tag(&entry.kind),
-            date: entry.date.chars().take(10).collect(),
-            summary: truncate_text(&entry.short_text, 160),
-            image_url: image_url(entry.image),
-            url: None,
-            source: "patch".into(),
-            version: if entry.version.trim().is_empty() {
-                None
+        .map(|entry| {
+            let version = entry.version.trim().to_string();
+            let pretty = pretty_version(&version);
+            let title = if pretty.is_empty() {
+                entry.title.trim().to_string()
             } else {
-                Some(entry.version)
-            },
-            kind: if entry.kind.trim().is_empty() {
-                None
-            } else {
-                Some(entry.kind)
-            },
-            detail_path: if entry.content_path.trim().is_empty() {
-                None
-            } else {
-                Some(entry.content_path)
-            },
+                format!("Minecraft Java 版 {pretty}")
+            };
+            NewsItem {
+                id: entry.id,
+                title,
+                category: "Java 版本".into(),
+                tag: patch_tag(&entry.kind),
+                date: entry.date.chars().take(10).collect(),
+                summary: zh_patch_summary(&entry.kind, &pretty),
+                image_url: image_url(entry.image),
+                url: None,
+                source: "patch".into(),
+                version: if version.is_empty() {
+                    None
+                } else {
+                    Some(version)
+                },
+                kind: if entry.kind.trim().is_empty() {
+                    None
+                } else {
+                    Some(entry.kind)
+                },
+                detail_path: if entry.content_path.trim().is_empty() {
+                    None
+                } else {
+                    Some(entry.content_path)
+                },
+            }
         })
         .collect();
     items.sort_by(|a, b| b.date.cmp(&a.date));
     items.truncate(8);
+
+    // 给存在中文 Wiki 页面的版本挂上汉化介绍链接（单次批量查询，失败不影响列表）
+    let wiki_titles: Vec<String> = items
+        .iter()
+        .filter_map(|item| item.version.as_ref().map(|version| format!("Java版{version}")))
+        .collect();
+    let existing = wiki_pages_exist(client, &wiki_titles).await;
+    for item in items.iter_mut() {
+        if let Some(version) = item.version.as_ref() {
+            let title = format!("Java版{version}");
+            if existing.contains(&title) {
+                item.url = Some(format!("{WIKI_BASE}{}", percent_encode_path(&title)));
+            }
+        }
+    }
     Ok(items)
 }
 

@@ -196,6 +196,12 @@ async function openItem(item: NewsItem) {
   }
 }
 
+function openArticleLink() {
+  const url = article.value?.item.url;
+  if (!url) return;
+  void openExternal(url).catch((err) => notify(`打开链接失败：${String(err)}`, "err"));
+}
+
 onMounted(() => {
   void loadOfficial(false);
   void loadCommunity(true);
@@ -369,7 +375,13 @@ onMounted(() => {
         <span class="skeleton news__skeleton-row" />
         <span class="skeleton news__skeleton-row" />
       </div>
-      <pre v-else class="news-article">{{ article.text }}</pre>
+      <pre v-if="!articleLoading" class="news-article">{{ article.text }}</pre>
+      <div v-if="article.item.url && !articleLoading" class="news-article-actions">
+        <WoodButton variant="ghost" size="sm" @click="openArticleLink">
+          <AppIcon name="globe" :size="13" />
+          在中文 Wiki 查看汉化介绍
+        </WoodButton>
+      </div>
     </WoodModal>
   </section>
 </template>
@@ -694,6 +706,12 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.news-article-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 
 .news-article {

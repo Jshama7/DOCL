@@ -1185,6 +1185,21 @@ fn finish_loader_install(
     })
 }
 
+/// 安装器退出前最后一段输出往往没有换行符，补记一次避免丢失关键报错。
+fn flush_tail(pending: &str, progress: &ProgressState, tail: &std::sync::Mutex<Vec<String>>) {
+    let text = pending.rsplit(['\r', '\n']).next().unwrap_or("").trim();
+    if text.is_empty() {
+        return;
+    }
+    progress.set_detail(text.chars().take(120).collect::<String>());
+    if let Ok(mut log) = tail.lock() {
+        log.push(text.chars().take(160).collect::<String>());
+        if log.len() > 8 {
+            log.remove(0);
+        }
+    }
+}
+
 async fn install_forge_like(
     app: &AppHandle,
     client: &reqwest::Client,
@@ -1341,6 +1356,8 @@ async fn install_forge_like(
                     Err(_) => break,
                 }
             }
+            // 进程退出前最后一段输出常常没有换行符，补记一次
+            flush_tail(&pending, &progress, &tail);
         }
     };
     let read_err = |stream: Option<tokio::process::ChildStderr>,
@@ -1376,6 +1393,7 @@ async fn install_forge_like(
                     Err(_) => break,
                 }
             }
+            flush_tail(&pending, &progress, &tail);
         }
     };
 

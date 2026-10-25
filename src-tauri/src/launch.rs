@@ -130,7 +130,12 @@ fn supports_quick_play(game_version: &str) -> bool {
 pub fn find_java(cfg: &Config, required: u32) -> Result<java::JavaInfo> {
     if let Some(path) = &cfg.java_path {
         if let Some(info) = java::inspect_java(std::path::Path::new(path), "手动指定") {
-            return Ok(info);
+            // 手动指定优先，但版本严重不匹配时（例如 1.12 配 Java 21）
+            // 游戏和 Forge 安装器都会直接崩，这种情况继续往下找匹配版本。
+            // Java 8 时代的版本只认 8，更高版本才允许向上兼容。
+            if info.major >= required && (required > 8 || info.major == required) {
+                return Ok(info);
+            }
         }
     }
     let detected = java::detect(cfg);

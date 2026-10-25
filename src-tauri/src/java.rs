@@ -222,17 +222,30 @@ pub fn pick_for_major(list: &[JavaInfo], required: u32) -> Option<JavaInfo> {
     if let Some(exact) = list.iter().find(|j| j.major == required) {
         return Some(exact.clone());
     }
+    // Java 8 时代的版本（1.12 及更早）不能拿高版本 JDK 顶替，
+    // Forge 安装器和游戏都会直接崩，宁可报缺失也不误选
+    if required <= 8 {
+        return None;
+    }
     let mut newer: Vec<&JavaInfo> = list.iter().filter(|j| j.major > required).collect();
     newer.sort_by_key(|j| j.major);
     newer.first().map(|info| (*info).clone())
 }
 
 fn parse_major(version: &str) -> u32 {
-    version
-        .split('.')
-        .next()
-        .and_then(|s| s.parse::<u32>().ok())
-        .unwrap_or(0)
+    // Mojang 运行时的版本号有三种写法：21.0.7 / 1.8.0_51 / 8u51-cacert462b08
+    let trimmed = version.trim();
+    let digits: String = trimmed.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let first = digits.parse::<u32>().unwrap_or(0);
+    if first == 1 {
+        // 旧式 1.8.0_xxx，主版本在第二段
+        return trimmed
+            .split('.')
+            .nth(1)
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+    }
+    first
 }
 
 pub async fn install_runtime(

@@ -10,6 +10,50 @@ const BASE: &str = "https://api.curse.tools/v1/cf";
 /// 备用 API 源（MCIM 国内镜像，PCL 也用它），海外代理被墙或拒绝时兜底
 const MIRROR_BASE: &str = "https://mod.mcimirror.top/curseforge/v1";
 
+/// 依次尝试两个 API 源，返回第一个成功的结果。
+/// 默认镜像优先：curse.tools 在国内经常完全连不上（实测 HTTP 000，等满超时才失败）。
+async fn get_json_api<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    path: &str,
+    prefer_mirror: bool,
+) -> Result<T> {
+    let bases: [&str; 2] = if prefer_mirror {
+        [MIRROR_BASE, BASE]
+    } else {
+        [BASE, MIRROR_BASE]
+    };
+    let mut last_error: Option<anyhow::Error> = None;
+    for base in bases {
+        let url = format!("{base}{path}");
+        // 单个源最多等 12 秒，避免被墙的源拖满整轮超时
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(12),
+            download::get_json::<T>(client, &url, false),
+        )
+        .await;
+        match outcome {
+            Ok(Ok(value)) => return Ok(value),
+            Ok(Err(err)) => {
+                #[cfg(debug_assertions)]
+                eprintln!("[curseforge] {base} 请求 {path} 失败: {err}");
+                last_error = Some(err);
+            }
+            Err(_) => {
+                #[cfg(debug_assertions)]
+                eprintln!("[curseforge] {base} 请求 {path} 超时");
+                last_error = Some(anyhow!("CurseForge 接口超时"));
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    Err(last_error.unwrap_or_else(|| anyhow!("CurseForge 接口不可用")))
+}
+
+/// 把基于 BASE 拼好的完整 URL 转成相对路径，交给多源请求。
+fn relative_path(full: &str) -> String {
+    full.trim_start_matches(BASE).to_string()
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CfLogo {
@@ -222,7 +266,7 @@ pub async fn search(
     }
 
     let response: CfSearchResponse =
-        download::get_json(client, url.as_str(), false).await?;
+        get_json_api(client, &relative_path(url.as_str()), true).await?;
     let items = response.data.into_iter().map(to_project).collect();
     Ok(CfSearchResult {
         items,
@@ -283,8 +327,8 @@ pub async fn projects(client: &reqwest::Client, ids: &[i64]) -> Vec<CfProject> {
     }
     let mut result = Vec::new();
     for id in ids.iter().take(10) {
-        let url = format!("{BASE}/mods/{id}");
-        if let Ok(response) = download::get_json::<CfModResponse>(client, &url, false).await {
+        let path = format!("/mods/{id}");
+        if let Ok(response) = get_json_api::<CfModResponse>(client, &path, true).await {
             result.push(to_project(response.data));
         }
     }
@@ -315,7 +359,8 @@ pub async fn categories(client: &reqwest::Client, class_id: i64) -> Result<Vec<C
             .append_pair("gameId", "432")
             .append_pair("classId", &class_id.to_string());
     }
-    let response: CfCategoryListResponse = download::get_json(client, url.as_str(), false).await?;
+    let response: CfCategoryListResponse =
+        get_json_api(client, &relative_path(url.as_str()), true).await?;
     let mut list: Vec<CfCategoryView> = response
         .data
         .into_iter()
@@ -330,12 +375,8 @@ pub async fn categories(client: &reqwest::Client, class_id: i64) -> Result<Vec<C
 
 /// 供版本下拉框使用的正式版列表，按发布时间倒序。
 pub async fn game_versions(client: &reqwest::Client) -> Result<Vec<String>> {
-    let response: CfGameVersionsResponse = download::get_json(
-        client,
-        &format!("{BASE}/minecraft/version"),
-        false,
-    )
-    .await?;
+    let response: CfGameVersionsResponse =
+        get_json_api(client, "/minecraft/version", true).await?;
     let mut list: Vec<CfGameVersion> = response
         .data
         .into_iter()
@@ -374,7 +415,7 @@ pub async fn files(
             pairs.append_pair("modLoaderType", loader);
         }
     }
-    let response: CfFilesResponse = download::get_json(client, url.as_str(), false).await?;
+    let response: CfFilesResponse = get_json_api(client, &relative_path(url.as_str()), true).await?;
     let mut files: Vec<CfFileView> = response
         .data
         .into_iter()
@@ -418,35 +459,10 @@ pub async fn file_download(
         data: CfFile,
     }
 
-    let bases: [&str; 2] = if prefer_mirror {
-        [MIRROR_BASE, BASE]
-    } else {
-        [BASE, MIRROR_BASE]
-    };
-
-    let mut fetched: Option<CfFile> = None;
-    let mut last_error: Option<anyhow::Error> = None;
-    for base in bases {
-        let url = format!("{base}/mods/{mod_id}/files/{file_id}");
-        match download::get_json::<CfFileResponse>(client, &url, false).await {
-            Ok(response) => {
-                fetched = Some(response.data);
-                break;
-            }
-            Err(err) => {
-                #[cfg(debug_assertions)]
-                eprintln!("[curseforge] {base} 获取文件 {file_id} 失败: {err}");
-                last_error = Some(err);
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            }
-        }
-    }
-    let file = match fetched {
-        Some(file) => file,
-        None => {
-            return Err(last_error.unwrap_or_else(|| anyhow!("获取文件 {file_id} 信息失败")));
-        }
-    };
+    let path = format!("/mods/{mod_id}/files/{file_id}");
+    let file = get_json_api::<CfFileResponse>(client, &path, prefer_mirror)
+        .await?
+        .data;
 
     let download_url = file
         .download_url

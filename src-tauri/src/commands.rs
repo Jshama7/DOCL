@@ -944,7 +944,16 @@ pub async fn cf_categories(
 pub async fn cf_game_versions(
     state: State<'_, AppState>,
 ) -> CmdResult<Vec<String>> {
-    curseforge::game_versions(&state.client).await.map_err(err)
+    match curseforge::game_versions(&state.client).await {
+        Ok(list) if !list.is_empty() => Ok(list),
+        // CurseForge 的版本接口在镜像上缺失，退回官方版本清单保证下拉框可用
+        _ => {
+            let use_mirror = state.config.lock().unwrap().use_mirror();
+            install::manifest_version_ids(&state.client, use_mirror)
+                .await
+                .map_err(err)
+        }
+    }
 }
 
 #[tauri::command]

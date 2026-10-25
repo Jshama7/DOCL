@@ -32,6 +32,22 @@ pub async fn fetch_manifest(client: &reqwest::Client, use_mirror: bool) -> Resul
     download::get_json_race(client, MANIFEST_URL, use_mirror, None).await
 }
 
+/// 仅返回正式版版本号，供筛选下拉框在 CurseForge 接口不可用时兜底。
+pub async fn manifest_version_ids(
+    client: &reqwest::Client,
+    use_mirror: bool,
+) -> Result<Vec<String>> {
+    let manifest = fetch_manifest(client, use_mirror).await?;
+    let mut list: Vec<String> = manifest
+        .versions
+        .into_iter()
+        .filter(|entry| entry.kind == "release")
+        .map(|entry| entry.id)
+        .collect();
+    list.truncate(60);
+    Ok(list)
+}
+
 pub fn list_installed(cfg: &Config) -> Vec<InstalledVersion> {
     let dir = cfg.game_root().join("versions");
     let mut result = Vec::new();

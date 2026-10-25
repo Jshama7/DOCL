@@ -271,7 +271,8 @@ pub fn set_speed_limit(bytes_per_sec: u64) {
 /// 超出配额时挂起等待到下一窗口，保证平均速率不超过限制。
 async fn throttle(bytes: u64) {
     let limit = SPEED_LIMIT.load(Ordering::Relaxed);
-    if limit == 0 {
+    // 未设限，或单块就超过整秒配额时直接放行，否则永远等不到够用的窗口
+    if limit == 0 || bytes > limit {
         return;
     }
     loop {
@@ -292,8 +293,11 @@ async fn throttle(bytes: u64) {
         if used <= limit {
             return;
         }
-        // 配额不足：退回记账，睡到本窗口结束再试
-        WINDOW_BYTES.fetch_sub(bytes, Ordering::Relaxed);
+        // 配额不足：退回记账，睡到本窗口结束再试。
+        // 窗口可能已被其他任务重置，用饱和减法避免 u64 下溢成巨大值
+        let _ = WINDOW_BYTES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            Some(value.saturating_sub(bytes))
+        });
         let remain_ms = 1000u64.saturating_sub(elapsed).max(10);
         tokio::time::sleep(Duration::from_millis(remain_ms)).await;
     }

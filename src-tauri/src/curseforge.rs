@@ -7,6 +7,8 @@ use std::sync::Arc;
 use tauri::AppHandle;
 
 const BASE: &str = "https://api.curse.tools/v1/cf";
+/// 备用 API 源（MCIM 国内镜像，PCL 也用它），海外代理被墙或拒绝时兜底
+const MIRROR_BASE: &str = "https://mod.mcimirror.top/curseforge/v1";
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -403,39 +405,39 @@ pub async fn files(
 }
 
 /// 读取文件详情并取出下载直链。
-/// curse.tools 是缓存代理，冷条目会回源官方 API，并发偏高时容易收到 403，
-/// 因此对 403/429/超时做退避重试。
+/// 403/404 属于服务端明确拒绝，原地重试没有意义，像 PCL 一样直接换源：
+/// 先试配置偏好的源，失败再换另一个；每个源内部仍有一次重试。
 pub async fn file_download(
     client: &reqwest::Client,
     mod_id: i64,
     file_id: i64,
+    prefer_mirror: bool,
 ) -> Result<(String, String)> {
     #[derive(Deserialize)]
     struct CfFileResponse {
         data: CfFile,
     }
 
-    let url = format!("{BASE}/mods/{mod_id}/files/{file_id}");
+    let bases: [&str; 2] = if prefer_mirror {
+        [MIRROR_BASE, BASE]
+    } else {
+        [BASE, MIRROR_BASE]
+    };
+
     let mut fetched: Option<CfFile> = None;
     let mut last_error: Option<anyhow::Error> = None;
-    for attempt in 0..4u32 {
+    for base in bases {
+        let url = format!("{base}/mods/{mod_id}/files/{file_id}");
         match download::get_json::<CfFileResponse>(client, &url, false).await {
             Ok(response) => {
                 fetched = Some(response.data);
                 break;
             }
             Err(err) => {
-                let text = err.to_string();
-                let retriable = text.contains("403")
-                    || text.contains("429")
-                    || text.contains("timeout")
-                    || text.contains("timed out")
-                    || text.contains("超时");
+                #[cfg(debug_assertions)]
+                eprintln!("[curseforge] {base} 获取文件 {file_id} 失败: {err}");
                 last_error = Some(err);
-                if !retriable || attempt == 3 {
-                    break;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(700 * (1 << attempt))).await;
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
             }
         }
     }

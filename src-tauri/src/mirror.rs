@@ -47,6 +47,13 @@ const HOST_MAPPINGS: &[(&str, &str)] = &[
         "https://maven.quiltmc.org/repository/release/",
         "https://bmclapi2.bangbang93.com/maven/",
     ),
+    // CurseForge CDN：国内直连 forgecdn 常超时或 403，走 MCIM 镜像（路径规则一致）
+    ("https://edge.forgecdn.net/", "https://mod.mcimirror.top/"),
+    (
+        "https://mediafilez.forgecdn.net/",
+        "https://mod.mcimirror.top/",
+    ),
+    ("https://media.forgecdn.net/", "https://mod.mcimirror.top/"),
 ];
 
 pub fn rewrite(url: &str) -> String {

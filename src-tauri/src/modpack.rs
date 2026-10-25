@@ -1334,12 +1334,14 @@ pub async fn import(
                 format!("正在获取 {total_specs} 个文件地址…"),
             );
             let client_ref = client.clone();
+            // API 源顺序跟随全局下载源设置：优先镜像时先试国内 MCIM
+            let prefer_mirror = cfg.use_mirror();
             let mut tasks: Vec<FileTask> = Vec::new();
             let mut results: Vec<Result<Option<(String, String)>>> = Vec::new();
             let mut stream = stream::iter(specs.into_iter().map(|(project_id, file_id, required)| {
                 let client = client_ref.clone();
                 async move {
-                    match curseforge::file_download(&client, project_id, file_id).await {
+                    match curseforge::file_download(&client, project_id, file_id, prefer_mirror).await {
                         Ok(pair) => Ok(Some(pair)),
                         Err(err) => {
                             if required {
@@ -1358,8 +1360,8 @@ pub async fn import(
                     }
                 }
             }))
-            // 请求过快会让 curse.tools 回源被限流并返回 403，这里压低并发
-            .buffer_unordered(3);
+            // 403 来自上游网络而非并发压力（PCL 同样高并发无此问题），保持原并发
+            .buffer_unordered(8);
             let mut resolved = 0usize;
             while let Some(result) = stream.next().await {
                 results.push(result);
@@ -1399,7 +1401,7 @@ pub async fn import(
                     client,
                     tasks,
                     cfg.concurrency.clamp(1, 32) as usize,
-                    false,
+                    cfg.use_mirror(),
                     progress.clone(),
                 )
                 .await?;
@@ -1501,7 +1503,7 @@ pub async fn import(
                     client,
                     tasks,
                     cfg.concurrency.clamp(1, 32) as usize,
-                    false,
+                    cfg.use_mirror(),
                     progress.clone(),
                 )
                 .await?;

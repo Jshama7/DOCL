@@ -396,7 +396,8 @@ pub async fn install_version(
     // 2) 资源索引与资源文件
     if let Some(index_ref) = &detail.asset_index {
         progress.set_message("正在获取资源索引…");
-        let raw = download::get_bytes(client, &index_ref.url, use_mirror).await?;
+        let raw = download::get_bytes_cancellable(client, &index_ref.url, use_mirror, &progress)
+            .await?;
         let index: AssetIndexFile =
             serde_json::from_slice(&raw).context("解析资源索引失败")?;
         let index_path = game_root

@@ -234,6 +234,28 @@ pub async fn get_json<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&bytes).context("解析 JSON 失败")
 }
 
+/// 取消感知的单文件请求：用于资源索引这类大 JSON，
+/// 用户点取消时立刻返回，不必等满整轮 45 秒超时。
+pub async fn get_bytes_cancellable(
+    client: &reqwest::Client,
+    url: &str,
+    use_mirror: bool,
+    progress: &Arc<ProgressState>,
+) -> Result<Vec<u8>> {
+    tokio::select! {
+        biased;
+        _ = wait_cancel(progress) => bail!("下载已取消"),
+        result = get_bytes(client, url, use_mirror) => result,
+    }
+}
+
+/// 等待取消标志被置位，供 select 分支使用
+async fn wait_cancel(progress: &Arc<ProgressState>) {
+    while !progress.is_cancelled() {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+    }
+}
+
 async fn fetch_to_file(
     client: &reqwest::Client,
     url: &str,
@@ -246,10 +268,10 @@ async fn fetch_to_file(
     let tmp = task.dest.with_extension("part");
     let _ = tokio::fs::remove_file(&tmp).await;
 
-    let resp = client
-        .get(url)
-        .send()
+    // 连接阶段必须有超时：CDN 握手挂起时 send() 会一直等，取消也无法打断
+    let resp = tokio::time::timeout(Duration::from_secs(30), client.get(url).send())
         .await
+        .map_err(|_| anyhow!("连接超时：{}", task.label))?
         .with_context(|| format!("连接失败：{}", task.label))?;
     if !resp.status().is_success() {
         bail!("服务器返回 {}", resp.status());
@@ -258,13 +280,18 @@ async fn fetch_to_file(
     let mut file = tokio::fs::File::create(&tmp).await?;
     let mut hasher = Sha1::new();
     let mut stream = resp.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        let chunk = chunk.context("读取下载数据失败")?;
+    loop {
         if progress.is_cancelled() {
             drop(file);
             let _ = tokio::fs::remove_file(&tmp).await;
             bail!("下载已取消");
         }
+        // 单块读取加超时，避免数据流卡住时永远等不到下一个 chunk
+        let next = tokio::time::timeout(Duration::from_secs(30), stream.next())
+            .await
+            .map_err(|_| anyhow!("下载超时（30 秒无数据）：{}", task.label))?;
+        let Some(chunk) = next else { break };
+        let chunk = chunk.context("读取下载数据失败")?;
         hasher.update(&chunk);
         file.write_all(&chunk).await?;
         progress
@@ -379,17 +406,34 @@ pub async fn run_tasks(
     .buffer_unordered(conc);
 
     let mut first_err: Option<anyhow::Error> = None;
-    while let Some(result) = stream.next().await {
-        if let Err(err) = result {
-            if progress.is_cancelled() {
-                first_err = Some(err);
+    // 取消不能只靠任务自己返回错误：所有并发请求都卡在网络上时，
+    // 主循环永远等不到结果。这里用 select 监听取消标志，一旦取消就
+    // 跳出并丢弃 stream，正在进行的请求随之被打断。
+    loop {
+        tokio::select! {
+            biased;
+            _ = wait_cancel(&progress) => {
+                first_err = Some(anyhow!("下载已取消"));
                 break;
             }
-            if first_err.is_none() {
-                first_err = Some(err);
+            next = stream.next() => {
+                match next {
+                    Some(Ok(())) => {}
+                    Some(Err(err)) => {
+                        if progress.is_cancelled() {
+                            first_err = Some(err);
+                            break;
+                        }
+                        if first_err.is_none() {
+                            first_err = Some(err);
+                        }
+                    }
+                    None => break,
+                }
             }
         }
     }
+    drop(stream);
 
     progress.active.store(false, Ordering::Relaxed);
     emit_now(app, &progress);

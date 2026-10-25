@@ -478,8 +478,12 @@ onMounted(() => {
   transition: max-height 420ms var(--ease-out-expo);
 }
 
+/* 展开态：内容在动态卡片内部滚动，超出部分不再被外层裁掉 */
 .news__body--open {
-  max-height: 30000px;
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+  overflow-y: auto;
 }
 
 .news__body-inner {

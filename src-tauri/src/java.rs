@@ -177,7 +177,7 @@ pub fn detect(cfg: &Config) -> Vec<JavaInfo> {
         }
     }
 
-    let runtime_root = config::runtime_dir();
+    let runtime_root = cfg.java_runtime_root();
     if let Ok(entries) = std::fs::read_dir(&runtime_root) {
         for entry in entries.flatten() {
             let candidate = entry.path().join("bin").join("java.exe");
@@ -259,7 +259,7 @@ pub async fn install_runtime(
     progress.set_message(format!("正在下载 Java {major} 运行时…"));
     let manifest: RuntimeManifest =
         download::get_json(&client, &manifest_url, cfg.use_mirror()).await?;
-    let install_dir = config::runtime_dir().join(&component);
+    let install_dir = cfg.java_runtime_root().join(&component);
     tokio::fs::create_dir_all(&install_dir).await?;
 
     let mut tasks: Vec<FileTask> = Vec::new();

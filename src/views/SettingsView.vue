@@ -44,6 +44,7 @@ const form = reactive<Config>({
   update_url: "",
   update_mode: "notify",
   java_path: null,
+  java_install_dir: null,
   memory_mb: 4096,
   memory_auto: true,
   memory_mode: "auto",
@@ -105,6 +106,7 @@ const autoSaveKeys: (keyof Config)[] = [
   "update_url",
   "update_mode",
   "java_path",
+  "java_install_dir",
   "memory_mb",
   "memory_auto",
   "memory_mode",
@@ -409,6 +411,11 @@ const updateSource = computed<string>({
 async function chooseDir() {
   const dir = await pickDirectory();
   if (dir) form.game_dir = dir;
+}
+
+async function chooseJavaDir() {
+  const dir = await pickDirectory("选择 Java 安装位置");
+  if (dir) form.java_install_dir = dir;
 }
 
 const gameDirs = ref<GameDirEntry[]>([]);
@@ -915,10 +922,35 @@ function useAutoJava() {
 
       <div class="divider" />
 
+      <div class="setting">
+        <div class="setting__label">
+          <strong>Java 安装位置</strong>
+          <span>下载的运行时保存到这里，留空则使用启动器数据目录</span>
+        </div>
+        <div class="setting__control">
+          <div class="row">
+            <span class="muted small path-hint">
+              {{ form.java_install_dir || "默认（启动器数据目录）" }}
+            </span>
+            <WoodButton variant="soft" size="sm" @click="chooseJavaDir">
+              选择目录
+            </WoodButton>
+            <IconButton
+              v-if="form.java_install_dir"
+              icon="trash"
+              label="恢复默认位置"
+              variant="danger-quiet"
+              :size="34"
+              @click="form.java_install_dir = null"
+            />
+          </div>
+        </div>
+      </div>
+
       <div class="setting setting--last">
         <div class="setting__label">
           <strong>下载官方 Java 运行时</strong>
-          <span>由 Mojang 提供，安装到启动器数据目录，不影响系统环境</span>
+          <span>由 Mojang 提供，不影响系统环境</span>
         </div>
         <div class="setting__control">
           <div class="row">
@@ -1969,6 +2001,16 @@ function useAutoJava() {
 
 .java-actions {
   justify-content: space-between;
+}
+
+/* 自定义路径可能很长，截断显示避免撑破设置行 */
+.path-hint {
+  display: inline-block;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
 }
 
 .java-progress {

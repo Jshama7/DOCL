@@ -120,6 +120,7 @@ export interface Config {
   update_url: string;
   update_mode: string;
   java_path: string | null;
+  java_install_dir: string | null;
   memory_mb: number;
   memory_auto: boolean;
   memory_mode: string;

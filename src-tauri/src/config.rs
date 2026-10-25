@@ -32,6 +32,8 @@ pub struct Config {
     pub update_mode: String,
     /// 手动指定的 java.exe
     pub java_path: Option<String>,
+    /// 启动器下载 Java 时的安装根目录，留空表示用内置 runtime 目录
+    pub java_install_dir: Option<String>,
     /// 最大内存（MB）
     pub memory_mb: u32,
     /// 自动按系统内存推荐分配
@@ -89,6 +91,7 @@ impl Default for Config {
             update_url: "https://cdn.jsdelivr.net/gh/dawo4/DOCL@main/update.json".into(),
             update_mode: "notify".into(),
             java_path: None,
+            java_install_dir: None,
             memory_mb: 4096,
             memory_auto: true,
             memory_mode: "auto".into(),
@@ -238,6 +241,14 @@ impl Config {
 
     pub fn use_mirror(&self) -> bool {
         self.download_source != "official"
+    }
+
+    /// Java 运行时的根目录：优先用用户指定的路径，否则回落到内置 runtime。
+    pub fn java_runtime_root(&self) -> PathBuf {
+        match self.java_install_dir.as_deref().map(str::trim) {
+            Some(dir) if !dir.is_empty() => PathBuf::from(dir),
+            _ => runtime_dir(),
+        }
     }
 
     pub fn launch_dir(&self, version_id: &str) -> PathBuf {

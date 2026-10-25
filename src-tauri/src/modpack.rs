@@ -1343,7 +1343,14 @@ pub async fn import(
                         Ok(pair) => Ok(Some(pair)),
                         Err(err) => {
                             if required {
-                                Err(err)
+                                // 带上 ID，失败时用户能定位到具体文件
+                                let text = err.to_string();
+                                let reason = if text.contains("403") {
+                                    "CurseForge 拒绝访问，作者可能已限制第三方下载".to_string()
+                                } else {
+                                    text
+                                };
+                                Err(anyhow!("{project_id}/{file_id}：{reason}"))
                             } else {
                                 Ok(None)
                             }
@@ -1351,7 +1358,8 @@ pub async fn import(
                     }
                 }
             }))
-            .buffer_unordered(8);
+            // 请求过快会让 curse.tools 回源被限流并返回 403，这里压低并发
+            .buffer_unordered(3);
             let mut resolved = 0usize;
             while let Some(result) = stream.next().await {
                 results.push(result);

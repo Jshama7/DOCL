@@ -463,7 +463,9 @@ export async function importModpack(
         : `已导入 ${result.display_name}`
     );
     if (result.failed.length) {
-      store.lastJobError = result.failed.slice(0, 5).join("；");
+      const shown = result.failed.slice(0, 5).join("；");
+      store.lastJobError =
+        result.failed.length > 5 ? `${shown} 等 ${result.failed.length} 个` : shown;
     }
     return result;
   } catch (err) {

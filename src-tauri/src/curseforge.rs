@@ -402,6 +402,9 @@ pub async fn files(
     Ok(files)
 }
 
+/// 读取文件详情并取出下载直链。
+/// curse.tools 是缓存代理，冷条目会回源官方 API，并发偏高时容易收到 403，
+/// 因此对 403/429/超时做退避重试。
 pub async fn file_download(
     client: &reqwest::Client,
     mod_id: i64,
@@ -411,9 +414,38 @@ pub async fn file_download(
     struct CfFileResponse {
         data: CfFile,
     }
+
     let url = format!("{BASE}/mods/{mod_id}/files/{file_id}");
-    let response: CfFileResponse = download::get_json(client, &url, false).await?;
-    let file = response.data;
+    let mut fetched: Option<CfFile> = None;
+    let mut last_error: Option<anyhow::Error> = None;
+    for attempt in 0..4u32 {
+        match download::get_json::<CfFileResponse>(client, &url, false).await {
+            Ok(response) => {
+                fetched = Some(response.data);
+                break;
+            }
+            Err(err) => {
+                let text = err.to_string();
+                let retriable = text.contains("403")
+                    || text.contains("429")
+                    || text.contains("timeout")
+                    || text.contains("timed out")
+                    || text.contains("超时");
+                last_error = Some(err);
+                if !retriable || attempt == 3 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(700 * (1 << attempt))).await;
+            }
+        }
+    }
+    let file = match fetched {
+        Some(file) => file,
+        None => {
+            return Err(last_error.unwrap_or_else(|| anyhow!("获取文件 {file_id} 信息失败")));
+        }
+    };
+
     let download_url = file
         .download_url
         .filter(|url| !url.trim().is_empty())

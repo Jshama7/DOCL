@@ -690,6 +690,40 @@ pub fn natives_dir(cfg: &Config, version_id: &str) -> PathBuf {
     resolve_version_dir(cfg, version_id).join("natives")
 }
 
+/// 启动前的本地库自愈：PCL 等外部启动器导入的实例没有 natives 目录，
+/// 这里按版本清单补建目录并解压本地库；新版清单没有 natives jar，空目录即可。
+pub fn ensure_natives(cfg: &Config, version_id: &str, detail: &VersionDetail) -> Result<()> {
+    let natives_dir = natives_dir(cfg, version_id);
+    std::fs::create_dir_all(&natives_dir)?;
+    for sub in ["java", "jna", "lwjgl", "netty"] {
+        std::fs::create_dir_all(natives_dir.join(sub))?;
+    }
+    let game_root = cfg.game_root();
+    for lib in &detail.libraries {
+        if !rules_allow(lib.rules.as_ref()) || !library_is_native(lib) {
+            continue;
+        }
+        let Some((_, path)) = library_native_download(lib) else {
+            continue;
+        };
+        if path.is_empty() {
+            continue;
+        }
+        let jar = game_root.join("libraries").join(path.replace('/', "\\"));
+        if !jar.exists() {
+            continue;
+        }
+        let exclude = lib
+            .extract
+            .as_ref()
+            .and_then(|e| e.exclude.clone())
+            .unwrap_or_else(|| vec!["META-INF/".to_string()]);
+        extract_natives(&jar, &natives_dir, &exclude)
+            .with_context(|| format!("解压本地库失败：{}", jar.display()))?;
+    }
+    Ok(())
+}
+
 /* ---------- 模组加载器 ---------- */
 
 #[derive(Debug, Clone, Serialize)]

@@ -156,7 +156,8 @@ pub fn build(
 
     let natives_dir = install::natives_dir(cfg, version_id);
     if !natives_dir.exists() {
-        bail!("本地库尚未解压，请重新安装该版本");
+        // PCL 等外部启动器导入的实例没走过安装流程，这里按需补建并解压本地库
+        install::ensure_natives(cfg, version_id, &merged.detail)?;
     }
 
     let required = detail.required_java();

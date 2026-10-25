@@ -368,8 +368,8 @@ function clearBackground() {
 }
 
 const sourceOptions = [
-  { value: "auto", label: "自动（优先镜像）" },
-  { value: "mirror", label: "仅 BMClAPI 镜像" },
+  { value: "auto", label: "自动（按来源智能选择）" },
+  { value: "mirror", label: "仅加速镜像" },
   { value: "official", label: "仅官方源" },
 ];
 
@@ -1302,7 +1302,7 @@ function useAutoJava() {
       <div class="setting">
         <div class="setting__label">
           <strong>下载源</strong>
-          <span>镜像失败时会自动回退到官方源</span>
+          <span>自动模式按来源选择：Modrinth 走镜像，其余优先官方；失败会自动回退</span>
         </div>
         <div class="setting__control">
           <WoodSelect v-model="form.download_source" :options="sourceOptions" />

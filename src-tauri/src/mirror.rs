@@ -68,6 +68,13 @@ pub fn rewrite(url: &str) -> String {
     url.to_string()
 }
 
+/// 该地址是否应该镜像优先。
+/// Modrinth CDN 在国内多数网络直接不可达，必须镜像优先；
+/// CurseForge 的 forgecdn 国内可直连且通常比镜像快，官方优先。
+pub fn prefer_mirror_first(url: &str) -> bool {
+    url.starts_with("https://cdn.modrinth.com/")
+}
+
 pub fn official(url: &str) -> String {
     if let Some(rest) = url.strip_prefix(MIRROR) {
         // 还原为官方地址；多数资源可直接用官方主机

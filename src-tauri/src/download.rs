@@ -359,6 +359,13 @@ pub fn set_speed_limit(bytes_per_sec: u64) {
     SPEED_LIMIT.store(bytes_per_sec, Ordering::Relaxed);
 }
 
+/// 用户是否强制「仅镜像」：此时不看智能排序，全部镜像优先
+static FORCE_MIRROR: AtomicBool = AtomicBool::new(false);
+
+pub fn set_force_mirror(value: bool) {
+    FORCE_MIRROR.store(value, Ordering::Relaxed);
+}
+
 /// 滑动 1 秒窗口的简单限速：所有并发任务共享同一个配额。
 /// 超出配额时挂起等待到下一窗口，保证平均速率不超过限制。
 async fn throttle(bytes: u64) {
@@ -515,7 +522,12 @@ async fn download_one(
     let mirror_url = mirror::rewrite(&task.url);
     let official_url = task.url.clone();
     let mirror_healthy = use_mirror && mirror_failures.load(Ordering::Relaxed) < 4;
-    let order = if mirror_healthy {
+    // 智能排序：Modrinth CDN 国内多数网络不可达，镜像优先；
+    // CurseForge 等官方源通常更快，官方优先，慢了再由慢速降级切走。
+    // 用户显式选「仅镜像」时不排序，一律镜像优先。
+    let mirror_first = mirror_healthy
+        && (FORCE_MIRROR.load(Ordering::Relaxed) || mirror::prefer_mirror_first(&task.url));
+    let order = if mirror_first {
         [mirror_url, official_url]
     } else {
         [official_url, mirror_url]
@@ -526,7 +538,7 @@ async fn download_one(
         if progress.is_cancelled() {
             bail!("下载已取消");
         }
-        let uses_mirror = if mirror_healthy { attempt % 2 == 0 } else { attempt % 2 == 1 };
+        let uses_mirror = if mirror_first { attempt % 2 == 0 } else { attempt % 2 == 1 };
         let url = &order[attempt % 2];
         // 只有镜像才做慢速判定：官方已经是最后手段，慢也只能继续
         match fetch_to_file(client, url, task, progress, uses_mirror).await {

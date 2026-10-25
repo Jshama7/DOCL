@@ -52,6 +52,8 @@ pub fn run() {
     let cfg = config::load();
     // 恢复上次的下载限速设置
     download::set_speed_limit(cfg.speed_limit as u64 * 1024 * 1024);
+    // 「仅镜像」时强制镜像优先，其余走按主机的智能排序
+    download::set_force_mirror(cfg.download_source == "mirror");
     let accounts = auth::load_accounts();
     lan::start();
 

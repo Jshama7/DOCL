@@ -1,6 +1,6 @@
 {
-  "version": "1.5.2",
-  "url": "https://github.com/dawo4/DOCL/releases/download/v1.5.2/DOCL_1.5.2_x64-setup.exe",
-  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.5.2/DOCL_1.5.2_portable.zip",
-  "notes": "动态栏版本日志全面汉化（含中文 Wiki 正文），下载支持全局限速与更高并发，修复 PCL 导入实例启动误报。"
+  "version": "1.5.3",
+  "url": "https://github.com/dawo4/DOCL/releases/download/v1.5.3/DOCL_1.5.3_x64-setup.exe",
+  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.5.3/DOCL_1.5.3_portable.zip",
+  "notes": "CurseForge 全接口接入国内镜像并智能选源，Forge 1.12 改原生安装不再卡境外源，Java 运行时支持删除。"
 }

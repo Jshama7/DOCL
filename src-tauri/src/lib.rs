@@ -170,6 +170,7 @@ pub fn run() {
             commands::ms_login_begin,
             commands::detect_java,
             commands::install_java,
+            commands::delete_java,
             commands::launch_version,
             commands::launch_server,
             commands::lan_rooms,

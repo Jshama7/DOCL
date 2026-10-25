@@ -724,6 +724,23 @@ function useAutoJava() {
   form.java_path = null;
   notify("已改为自动选择 Java");
 }
+
+/// 删除启动器下载的运行时（系统安装的 Java 不提供删除，避免误删）
+async function removeJava(path: string) {
+  const ok = await confirm("确定删除这个 Java 运行时？删除后需要重新下载才能使用。", {
+    title: "删除 Java 运行时",
+    kind: "warning",
+  });
+  if (!ok) return;
+  try {
+    await api.deleteJava(path);
+    if (form.java_path === path) form.java_path = null;
+    await refreshJava();
+    notify("已删除该 Java 运行时");
+  } catch (err) {
+    notify(`删除失败：${String(err)}`, "err");
+  }
+}
 </script>
 
 <template>
@@ -889,12 +906,15 @@ function useAutoJava() {
       </p>
 
       <div class="java-list">
-        <button
+        <div
           v-for="java in store.javaList"
           :key="java.path"
           class="java-item"
           :class="{ 'java-item--active': form.java_path === java.path }"
+          role="button"
+          tabindex="0"
           @click="form.java_path = java.path"
+          @keydown.enter="form.java_path = java.path"
         >
           <span class="java-item__major display">Java {{ java.major }}</span>
           <span class="java-item__path mono">{{ java.path }}</span>
@@ -905,7 +925,15 @@ function useAutoJava() {
             class="java-item__check"
           />
           <span class="tag">{{ java.source }}</span>
-        </button>
+          <IconButton
+            v-if="java.source === '启动器运行时'"
+            icon="trash"
+            label="删除这个运行时"
+            variant="danger-quiet"
+            :size="30"
+            @click.stop="removeJava(java.path)"
+          />
+        </div>
         <div v-if="!store.javaList.length" class="java-empty">
           未检测到 Java。可以在下方直接下载官方运行时。
         </div>
@@ -1946,6 +1974,7 @@ function useAutoJava() {
   text-align: left;
   position: relative;
   overflow: hidden;
+  cursor: pointer;
   transition: transform var(--dur-2) var(--ease-out-expo),
     border-color var(--dur-2) ease, box-shadow var(--dur-2) ease;
 }

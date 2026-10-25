@@ -791,6 +791,7 @@ export const api = {
   msLoginBegin: () => invoke<DeviceCode>("ms_login_begin"),
   detectJava: () => invoke<JavaInfo[]>("detect_java"),
   installJava: (major: number) => invoke<JavaInfo>("install_java", { major }),
+  deleteJava: (path: string) => invoke<boolean>("delete_java", { path }),
   launchVersion: (versionId: string) => invoke<number>("launch_version", { versionId }),
   launchServer: (versionId: string, address: string) =>
     invoke<number>("launch_server", { versionId, address }),

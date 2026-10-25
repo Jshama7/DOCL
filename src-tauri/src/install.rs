@@ -1400,7 +1400,9 @@ async fn install_forge_like(
     let out_task = tokio::spawn(read_stream(stdout, progress.clone(), tail.clone()));
     let err_task = tokio::spawn(read_err(stderr, progress.clone(), tail.clone()));
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
+    let started = std::time::Instant::now();
+    let deadline = started + std::time::Duration::from_secs(900);
+    let mut last_tick = started;
     let status = loop {
         if let Some(status) = child.try_wait()? {
             break status;
@@ -1418,6 +1420,16 @@ async fn install_forge_like(
             let _ = out_task.await;
             let _ = err_task.await;
             bail!("{loader} 安装器运行超过 15 分钟，已停止");
+        }
+        // 安装器首次运行要下载依赖且几乎不打印进度，定期刷新已用时间，
+        // 避免界面长时间静止被当成卡死
+        if last_tick.elapsed() >= std::time::Duration::from_secs(10) {
+            last_tick = std::time::Instant::now();
+            progress.set_detail(format!(
+                "安装器运行中，已用 {} 秒…",
+                started.elapsed().as_secs()
+            ));
+            download::emit_now(app, &progress);
         }
         tokio::time::sleep(std::time::Duration::from_millis(400)).await;
     };

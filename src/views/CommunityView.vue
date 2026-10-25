@@ -347,11 +347,13 @@ const parentOptions = computed(() =>
     .filter((item) => !item.dependency)
     .map((item) => ({ value: item.id, label: item.id }))
 );
-const instanceOptions = computed(() =>
-  store.installed
+const instanceOptions = computed(() => [
+  // 允许只浏览搜索结果，不绑定任何实例
+  { value: "", label: "不指定（仅浏览）" },
+  ...store.installed
     .filter((item) => !item.dependency)
-    .map((v) => ({ value: v.id, label: v.id }))
-);
+    .map((v) => ({ value: v.id, label: v.id })),
+]);
 const versionOptions = computed(() => [
   {
     value: "instance",
@@ -963,7 +965,7 @@ async function confirmImport() {
             导入时自动创建
           </span>
           <WoodSelect
-            v-else-if="instanceOptions.length"
+            v-else-if="store.installed.length"
             v-model="instanceId"
             :options="instanceOptions"
           />

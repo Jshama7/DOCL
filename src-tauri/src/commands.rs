@@ -1436,6 +1436,38 @@ pub async fn install_java(
     }
 }
 
+/// 删除启动器下载的 Java 运行时。
+/// 只允许删运行时目录内的组件，系统/PATH/手动指定的 Java 一律拒绝，避免误删。
+#[tauri::command]
+pub async fn delete_java(state: State<'_, AppState>, path: String) -> CmdResult<bool> {
+    let root = state.config.lock().unwrap().java_runtime_root();
+    let exe = std::path::PathBuf::from(&path);
+    let target = exe
+        .parent()
+        .and_then(|bin| bin.parent())
+        .map(|dir| dir.to_path_buf())
+        .ok_or_else(|| "无效的 Java 路径".to_string())?;
+
+    let canonical_root = std::fs::canonicalize(&root).unwrap_or(root);
+    let canonical_target = std::fs::canonicalize(&target)
+        .map_err(|_| "Java 目录不存在或无法访问".to_string())?;
+    if canonical_target == canonical_root || !canonical_target.starts_with(&canonical_root) {
+        return Err("只能删除启动器下载的 Java 运行时".to_string());
+    }
+
+    tokio::fs::remove_dir_all(&canonical_target)
+        .await
+        .map_err(|e| format!("删除失败：{e}"))?;
+
+    // 手动指定的正是被删的这个时回退到自动选择
+    let mut cfg = state.config.lock().unwrap();
+    if cfg.java_path.as_deref() == Some(path.as_str()) {
+        cfg.java_path = None;
+        let _ = config::save(&cfg);
+    }
+    Ok(true)
+}
+
 async fn resolve_account(app: &AppHandle, state: &AppState, cfg: &Config) -> Account {
     let accounts = state.accounts.lock().unwrap().clone();
     let selected = cfg

@@ -69,10 +69,13 @@ pub fn rewrite(url: &str) -> String {
 }
 
 /// 该地址是否应该镜像优先。
-/// Modrinth CDN 在国内多数网络直接不可达，必须镜像优先；
-/// CurseForge 的 forgecdn 国内可直连且通常比镜像快，官方优先。
+/// 只有 CurseForge 的 forgecdn 官方通常更快（实测 1.6MB/s vs 镜像 0.6~2MB/s），改为官方优先；
+/// BMCLAPI 覆盖的 maven / Mojang 资源官方在国内常常几乎不通（forge maven 实测 1KB/s），
+/// Modrinth CDN 也经常连不上，这些都必须镜像优先。
 pub fn prefer_mirror_first(url: &str) -> bool {
-    url.starts_with("https://cdn.modrinth.com/")
+    !(url.starts_with("https://edge.forgecdn.net/")
+        || url.starts_with("https://mediafilez.forgecdn.net/")
+        || url.starts_with("https://media.forgecdn.net/"))
 }
 
 pub fn official(url: &str) -> String {

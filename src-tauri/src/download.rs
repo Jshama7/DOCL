@@ -455,7 +455,7 @@ async fn fetch_to_file(
             .fetch_add(chunk.len() as u64, Ordering::Relaxed);
         throttle(chunk.len() as u64).await;
 
-        // 镜像慢到不可用时提前放弃，交给上层换源（用户主动限速时不判定，否则必然误切）
+        // 下载源慢到不可用时提前放弃，交给上层换源（用户主动限速时不判定，否则必然误切）
         if allow_slow_bail && !probed {
             probe_bytes += chunk.len() as u64;
             let elapsed = probe_start.elapsed();
@@ -472,7 +472,7 @@ async fn fetch_to_file(
                         .bytes_done
                         .fetch_sub(probe_bytes, Ordering::Relaxed);
                     bail!(
-                        "镜像速度过慢（{} KB/s）：{}，换源重试",
+                        "下载源速度过慢（{} KB/s）：{}，换源重试",
                         (speed / 1024.0) as u64,
                         task.label
                     );
@@ -540,8 +540,9 @@ async fn download_one(
         }
         let uses_mirror = if mirror_first { attempt % 2 == 0 } else { attempt % 2 == 1 };
         let url = &order[attempt % 2];
-        // 只有镜像才做慢速判定：官方已经是最后手段，慢也只能继续
-        match fetch_to_file(client, url, task, progress, uses_mirror).await {
+        // 前两次尝试都允许因过慢切源，最后一次只求下完，避免两个源都慢时直接失败
+        let allow_slow_bail = attempt < 2;
+        match fetch_to_file(client, url, task, progress, allow_slow_bail).await {
             Ok(()) => {
                 progress.files_done.fetch_add(1, Ordering::Relaxed);
                 return Ok(());

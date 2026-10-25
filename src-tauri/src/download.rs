@@ -1,6 +1,6 @@
 use crate::mirror;
 use anyhow::{anyhow, bail, Context, Result};
-use futures::StreamExt;
+use futures::stream::{FuturesUnordered, StreamExt};
 use serde::Serialize;
 use sha1::{Digest, Sha1};
 use std::path::PathBuf;
@@ -239,26 +239,95 @@ pub async fn get_json<T: serde::de::DeserializeOwned>(
     serde_json::from_slice(&bytes).context("解析 JSON 失败")
 }
 
-/// 取消感知的单文件请求：用于资源索引这类大 JSON，
-/// 用户点取消时立刻返回，不必等满整轮 45 秒超时。
-pub async fn get_bytes_cancellable(
-    client: &reqwest::Client,
-    url: &str,
-    use_mirror: bool,
-    progress: &Arc<ProgressState>,
-) -> Result<Vec<u8>> {
-    tokio::select! {
-        biased;
-        _ = wait_cancel(progress) => bail!("下载已取消"),
-        result = get_bytes(client, url, use_mirror) => result,
-    }
-}
-
 /// 等待取消标志被置位，供 select 分支使用
 async fn wait_cancel(progress: &Arc<ProgressState>) {
     while !progress.is_cancelled() {
         tokio::time::sleep(Duration::from_millis(80)).await;
     }
+}
+
+/// 取消标志存在时才等待，否则永不返回（select 分支保持静默）。
+async fn wait_cancel_opt(progress: Option<&Arc<ProgressState>>) {
+    match progress {
+        Some(progress) => wait_cancel(progress).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// 竞速用的单次请求：不重试、不走候选列表，避免与竞速层叠加放大请求量。
+async fn get_bytes_once(client: &reqwest::Client, url: String) -> Result<Vec<u8>> {
+    let resp = client
+        .get(&url)
+        .timeout(Duration::from_secs(30))
+        .send()
+        .await
+        .with_context(|| format!("请求失败：{url}"))?;
+    if !resp.status().is_success() {
+        bail!("HTTP {}", resp.status());
+    }
+    Ok(resp.bytes().await.context("读取响应失败")?.to_vec())
+}
+
+/// 竞速请求：先发一路，超过 `spawn_delay_ms` 没回再补下一路（轮流走镜像/官方），
+/// 谁先成功用谁。只用于版本清单、资源索引这类关键小请求；大文件竞速会成倍浪费带宽。
+/// 补位间隔要按体积给：小 JSON 250ms，几 MB 的索引应放宽，否则正常网络也会补位。
+pub async fn get_bytes_race(
+    client: &reqwest::Client,
+    url: &str,
+    use_mirror: bool,
+    progress: Option<&Arc<ProgressState>>,
+    lanes: usize,
+    spawn_delay_ms: u64,
+) -> Result<Vec<u8>> {
+    let lanes = lanes.clamp(1, 4);
+    let mirror_url = mirror::rewrite(url);
+    let ordered = if use_mirror {
+        vec![mirror_url, url.to_string()]
+    } else {
+        vec![url.to_string(), mirror_url]
+    };
+    let mut seen = std::collections::HashSet::new();
+    let targets: Vec<String> = ordered.into_iter().filter(|c| seen.insert(c.clone())).collect();
+
+    let mut pending = FuturesUnordered::new();
+    let mut started = 0usize;
+    let mut last_err: Option<anyhow::Error> = None;
+
+    loop {
+        if started < lanes {
+            let target = targets[started % targets.len()].clone();
+            pending.push(get_bytes_once(client, target));
+            started += 1;
+        }
+        if pending.is_empty() {
+            break;
+        }
+        let can_spawn = started < lanes;
+        tokio::select! {
+            biased;
+            _ = wait_cancel_opt(progress) => bail!("下载已取消"),
+            result = pending.next() => {
+                match result {
+                    Some(Ok(bytes)) => return Ok(bytes),
+                    Some(Err(err)) => last_err = Some(err),
+                    None => {}
+                }
+            }
+            _ = tokio::time::sleep(Duration::from_millis(spawn_delay_ms)), if can_spawn => {}
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow!("网络请求失败：{url}")))
+}
+
+/// 竞速获取并解析 JSON。
+pub async fn get_json_race<T: serde::de::DeserializeOwned>(
+    client: &reqwest::Client,
+    url: &str,
+    use_mirror: bool,
+    progress: Option<&Arc<ProgressState>>,
+) -> Result<T> {
+    let bytes = get_bytes_race(client, url, use_mirror, progress, 3, 250).await?;
+    serde_json::from_slice(&bytes).context("解析 JSON 失败")
 }
 
 /* ---------- 全局限速 ---------- */

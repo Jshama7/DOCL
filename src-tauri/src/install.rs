@@ -28,7 +28,8 @@ pub struct InstalledVersion {
 }
 
 pub async fn fetch_manifest(client: &reqwest::Client, use_mirror: bool) -> Result<VersionManifest> {
-    download::get_json(client, MANIFEST_URL, use_mirror).await
+    // 版本清单是版本页和安装的入口，用竞速请求避免偶发卡死
+    download::get_json_race(client, MANIFEST_URL, use_mirror, None).await
 }
 
 pub fn list_installed(cfg: &Config) -> Vec<InstalledVersion> {
@@ -396,8 +397,17 @@ pub async fn install_version(
     // 2) 资源索引与资源文件
     if let Some(index_ref) = &detail.asset_index {
         progress.set_message("正在获取资源索引…");
-        let raw = download::get_bytes_cancellable(client, &index_ref.url, use_mirror, &progress)
-            .await?;
+        // 索引体积大且是后续全部下载的前置，卡在这里最常见，用竞速请求；
+        // 补位放宽到 1.5 秒，避免正常网络下白白多下一份
+        let raw = download::get_bytes_race(
+            client,
+            &index_ref.url,
+            use_mirror,
+            Some(&progress),
+            3,
+            1500,
+        )
+        .await?;
         let index: AssetIndexFile =
             serde_json::from_slice(&raw).context("解析资源索引失败")?;
         let index_path = game_root

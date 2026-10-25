@@ -547,7 +547,7 @@ fn prettify_wiki_extract(text: &str) -> String {
     lines.join("\n")
 }
 
-/// 拉取中文 Wiki 版本页的纯文本汉化内容（TextExtracts 接口）。
+/// 拉取中文 Wiki 版本页的纯文本汉化内容（TextExtracts 接口），失败自动重试一次。
 async fn wiki_extract(client: &reqwest::Client, title: &str) -> Option<String> {
     #[derive(Deserialize)]
     struct WikiExtractQuery {
@@ -560,30 +560,52 @@ async fn wiki_extract(client: &reqwest::Client, title: &str) -> Option<String> {
         extract: Option<String>,
     }
 
-    let response = client
-        .get(WIKI_API)
-        .query(&[
-            ("action", "query"),
-            ("prop", "extracts"),
-            ("explaintext", "1"),
-            ("exsectionformat", "wiki"),
-            ("titles", title),
-            ("format", "json"),
-            ("formatversion", "2"),
-        ])
-        .timeout(Duration::from_secs(8))
-        .send()
-        .await
-        .ok()?;
-    let parsed: WikiExtractQuery = response.json().await.ok()?;
-    parsed
-        .pages
-        .into_iter()
-        .find_map(|page| page.extract)
-        .filter(|text| !text.trim().is_empty())
+    for attempt in 0..2 {
+        let response = client
+            .get(WIKI_API)
+            .query(&[
+                ("action", "query"),
+                ("prop", "extracts"),
+                ("explaintext", "1"),
+                ("exsectionformat", "wiki"),
+                ("titles", title),
+                ("format", "json"),
+                ("formatversion", "2"),
+            ])
+            .timeout(Duration::from_secs(12))
+            .send()
+            .await;
+        let result = match response {
+            Ok(value) => match value.json::<WikiExtractQuery>().await {
+                Ok(parsed) => parsed
+                    .pages
+                    .into_iter()
+                    .find_map(|page| page.extract)
+                    .filter(|text| !text.trim().is_empty()),
+                Err(err) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[news] 中文 Wiki 响应解析失败（第 {} 次）: {err}", attempt + 1);
+                    None
+                }
+            },
+            Err(err) => {
+                #[cfg(debug_assertions)]
+                eprintln!("[news] 中文 Wiki 请求失败（第 {} 次）: {err}", attempt + 1);
+                None
+            }
+        };
+        if result.is_some() {
+            return result;
+        }
+        if attempt == 0 {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+        }
+    }
+    None
 }
 
 /// 拉取单条版本更新日志正文；若提供 Wiki 标题则把中文 Wiki 汉化介绍放在正文前面。
+/// 中英文两路请求并行执行，任一路失败都不影响另一路。
 pub async fn article(
     client: &reqwest::Client,
     path: &str,
@@ -593,29 +615,42 @@ pub async fn article(
     if !relative.starts_with("javaPatchNotes/") || relative.contains("..") {
         bail!("无效的更新日志路径");
     }
-    let detail: PatchDetail = client
-        .get(format!("{BASE}/v2/{relative}"))
-        .timeout(Duration::from_secs(8))
-        .send()
-        .await
-        .context("请求更新日志失败")?
-        .error_for_status()?
-        .json()
-        .await
-        .context("解析更新日志失败")?;
-    let english = html_to_text(&detail.body);
-    if english.trim().is_empty() {
-        bail!("更新日志正文为空");
-    }
+
+    let english = async {
+        let detail: PatchDetail = client
+            .get(format!("{BASE}/v2/{relative}"))
+            .timeout(Duration::from_secs(8))
+            .send()
+            .await
+            .context("请求更新日志失败")?
+            .error_for_status()?
+            .json()
+            .await
+            .context("解析更新日志失败")?;
+        let text = html_to_text(&detail.body);
+        if text.trim().is_empty() {
+            bail!("更新日志正文为空");
+        }
+        Ok(text)
+    };
+
+    let wiki = async {
+        let title = wiki_title.map(str::trim).filter(|title| !title.is_empty());
+        match title {
+            Some(title) => wiki_extract(client, title).await,
+            None => None,
+        }
+    };
+
+    let (english, wiki) = tokio::join!(english, wiki);
+    let english = english?;
 
     let mut combined = String::new();
-    if let Some(title) = wiki_title.map(str::trim).filter(|title| !title.is_empty()) {
-        if let Some(wiki) = wiki_extract(client, title).await {
-            let pretty = prettify_wiki_extract(&wiki);
-            if !pretty.is_empty() {
-                combined.push_str(&pretty);
-                combined.push_str("\n\n——— 以下为 Mojang 官方英文原文 ———\n\n");
-            }
+    if let Some(wiki) = wiki {
+        let pretty = prettify_wiki_extract(&wiki);
+        if !pretty.is_empty() {
+            combined.push_str(&pretty);
+            combined.push_str("\n\n——— 以下为 Mojang 官方英文原文 ———\n\n");
         }
     }
     combined.push_str(&english);

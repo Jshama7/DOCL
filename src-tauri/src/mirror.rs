@@ -59,6 +59,11 @@ const HOST_MAPPINGS: &[(&str, &str)] = &[
 ];
 
 pub fn rewrite(url: &str) -> String {
+    // BMCLAPI 不代理 Java 运行时索引：会 302 到一个连不上的地址，实测挂满 25 秒。
+    // 官方源本身 0.36 秒就能返回，保持原样。
+    if url.contains("/v1/products/java-runtime/") {
+        return url.to_string();
+    }
     for (from, to) in HOST_MAPPINGS {
         if let Some(rest) = url.strip_prefix(from) {
             return format!("{to}{rest}");

@@ -256,6 +256,49 @@ async fn wait_cancel(progress: &Arc<ProgressState>) {
     }
 }
 
+/* ---------- 全局限速 ---------- */
+
+/// 全局下载限速（字节/秒），0 表示不限速；由设置页通过 set_speed_limit 更新
+static SPEED_LIMIT: AtomicU64 = AtomicU64::new(0);
+static WINDOW_BYTES: AtomicU64 = AtomicU64::new(0);
+static WINDOW_START: Mutex<Option<Instant>> = Mutex::new(None);
+
+pub fn set_speed_limit(bytes_per_sec: u64) {
+    SPEED_LIMIT.store(bytes_per_sec, Ordering::Relaxed);
+}
+
+/// 滑动 1 秒窗口的简单限速：所有并发任务共享同一个配额。
+/// 超出配额时挂起等待到下一窗口，保证平均速率不超过限制。
+async fn throttle(bytes: u64) {
+    let limit = SPEED_LIMIT.load(Ordering::Relaxed);
+    if limit == 0 {
+        return;
+    }
+    loop {
+        let now = Instant::now();
+        let window_start = {
+            let mut guard = WINDOW_START.lock().unwrap();
+            match *guard {
+                Some(start) if now.duration_since(start).as_millis() < 1000 => start,
+                _ => {
+                    *guard = Some(now);
+                    WINDOW_BYTES.store(0, Ordering::Relaxed);
+                    now
+                }
+            }
+        };
+        let elapsed = now.duration_since(window_start).as_millis() as u64;
+        let used = WINDOW_BYTES.fetch_add(bytes, Ordering::Relaxed) + bytes;
+        if used <= limit {
+            return;
+        }
+        // 配额不足：退回记账，睡到本窗口结束再试
+        WINDOW_BYTES.fetch_sub(bytes, Ordering::Relaxed);
+        let remain_ms = 1000u64.saturating_sub(elapsed).max(10);
+        tokio::time::sleep(Duration::from_millis(remain_ms)).await;
+    }
+}
+
 async fn fetch_to_file(
     client: &reqwest::Client,
     url: &str,
@@ -297,6 +340,7 @@ async fn fetch_to_file(
         progress
             .bytes_done
             .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        throttle(chunk.len() as u64).await;
     }
     file.flush().await?;
     drop(file);
@@ -393,7 +437,7 @@ pub async fn run_tasks(
     start_ticker(app.clone(), progress.clone());
     emit_now(app, &progress);
 
-    let conc = concurrency.clamp(1, 32);
+    let conc = concurrency.clamp(1, 64);
     let mirror_failures = Arc::new(AtomicU64::new(0));
     let mut stream = futures::stream::iter(tasks.into_iter().map(|task| {
         let client = client.clone();

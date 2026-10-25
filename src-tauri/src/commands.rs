@@ -115,6 +115,8 @@ pub fn save_config(
 ) -> CmdResult<Config> {
     let mut config = config;
     config.sync_game_dirs();
+    // 限速设置立即生效（字节/秒；0 = 不限）
+    download::set_speed_limit(config.speed_limit as u64 * 1024 * 1024);
     // 毛玻璃开关变化时实时应用；系统不支持则回滚为关闭并照常保存，
     // 返回回滚后的配置让前端把开关弹回去
     if config.window_vibrancy != state.config.lock().unwrap().window_vibrancy {

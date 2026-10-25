@@ -56,6 +56,8 @@ pub struct Config {
     /// auto / official / mirror
     pub download_source: String,
     pub concurrency: u32,
+    /// 全局下载限速（MiB/s），0 表示不限速
+    pub speed_limit: u32,
     pub animations: bool,
     pub version_isolation: bool,
     pub selected_version: Option<String>,
@@ -100,7 +102,8 @@ impl Default for Config {
             window_height: 720,
             fullscreen: false,
             download_source: "auto".into(),
-            concurrency: 8,
+            concurrency: 16,
+            speed_limit: 0,
             animations: true,
             version_isolation: true,
             selected_version: None,

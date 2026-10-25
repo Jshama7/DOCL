@@ -5,6 +5,8 @@ mod config;
 mod crash;
 mod curseforge;
 mod download;
+
+use download::set_speed_limit;
 mod dropzone;
 mod forge_native;
 mod hall;
@@ -49,6 +51,8 @@ pub fn run() {
         }
     }
     let cfg = config::load();
+    // 恢复上次的下载限速设置
+    download::set_speed_limit(cfg.speed_limit as u64 * 1024 * 1024);
     let accounts = auth::load_accounts();
     lan::start();
 

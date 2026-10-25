@@ -134,6 +134,8 @@ export interface Config {
   fullscreen: boolean;
   download_source: string;
   concurrency: number;
+  /// 全局下载限速（MiB/s），0 表示不限速
+  speed_limit: number;
   animations: boolean;
   version_isolation: boolean;
   selected_version: string | null;

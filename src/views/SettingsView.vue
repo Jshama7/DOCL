@@ -57,7 +57,8 @@ const form = reactive<Config>({
   window_height: 720,
   fullscreen: false,
   download_source: "auto",
-  concurrency: 8,
+  concurrency: 16,
+  speed_limit: 0,
   animations: true,
   version_isolation: true,
   selected_version: null,
@@ -118,6 +119,7 @@ const autoSaveKeys: (keyof Config)[] = [
   "fullscreen",
   "download_source",
   "concurrency",
+  "speed_limit",
   "version_isolation",
   "window_vibrancy",
 ];
@@ -1274,13 +1276,22 @@ function useAutoJava() {
           <WoodSelect v-model="form.download_source" :options="sourceOptions" />
         </div>
       </div>
-      <div class="setting setting--last">
+      <div class="setting">
         <div class="setting__label">
           <strong>并发下载数</strong>
           <span>当前 {{ form.concurrency }}；网络不稳定时建议降低</span>
         </div>
         <div class="setting__control setting__control--wide">
-          <WoodSlider v-model="form.concurrency" :min="1" :max="16" :step="1" />
+          <WoodSlider v-model="form.concurrency" :min="1" :max="64" :step="1" />
+        </div>
+      </div>
+      <div class="setting setting--last">
+        <div class="setting__label">
+          <strong>速度限制</strong>
+          <span>{{ form.speed_limit ? `上限 ${form.speed_limit} MiB/s` : "不限速" }}</span>
+        </div>
+        <div class="setting__control setting__control--wide">
+          <WoodSlider v-model="form.speed_limit" :min="0" :max="64" :step="4" />
         </div>
       </div>
     </section>

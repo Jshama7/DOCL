@@ -6,7 +6,6 @@ mod crash;
 mod curseforge;
 mod download;
 
-use download::set_speed_limit;
 mod dropzone;
 mod forge_native;
 mod hall;

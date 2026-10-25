@@ -1400,7 +1400,7 @@ pub async fn import(
                     app,
                     client,
                     tasks,
-                    cfg.concurrency.clamp(1, 32) as usize,
+                    (cfg.concurrency as usize).clamp(1, download::MAX_CONCURRENCY),
                     cfg.use_mirror(),
                     progress.clone(),
                 )
@@ -1502,7 +1502,7 @@ pub async fn import(
                     app,
                     client,
                     tasks,
-                    cfg.concurrency.clamp(1, 32) as usize,
+                    (cfg.concurrency as usize).clamp(1, download::MAX_CONCURRENCY),
                     cfg.use_mirror(),
                     progress.clone(),
                 )

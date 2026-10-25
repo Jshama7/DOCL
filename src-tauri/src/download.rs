@@ -423,6 +423,10 @@ async fn download_one(
     Err(last_err.unwrap_or_else(|| anyhow!("下载失败：{}", task.label)))
 }
 
+/// 下载任务并发上限。设置页滑条、各调用点都必须引用它，
+/// 避免像整合包那样各自硬编码成 32 导致上限不一致。
+pub const MAX_CONCURRENCY: usize = 64;
+
 pub async fn run_tasks(
     app: &AppHandle,
     client: &reqwest::Client,
@@ -446,7 +450,7 @@ pub async fn run_tasks(
     start_ticker(app.clone(), progress.clone());
     emit_now(app, &progress);
 
-    let conc = concurrency.clamp(1, 64);
+    let conc = concurrency.clamp(1, MAX_CONCURRENCY);
     let mirror_failures = Arc::new(AtomicU64::new(0));
     let mut stream = futures::stream::iter(tasks.into_iter().map(|task| {
         let client = client.clone();

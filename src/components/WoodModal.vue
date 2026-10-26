@@ -2,7 +2,10 @@
 import { onBeforeUnmount, onMounted } from "vue";
 import AppIcon from "./AppIcon.vue";
 
-withDefaults(defineProps<{ title: string; width?: number }>(), { width: 460 });
+withDefaults(defineProps<{ title: string; width?: number; zIndex?: number }>(), {
+  width: 460,
+  zIndex: 80,
+});
 const emit = defineEmits<{ (e: "close"): void }>();
 
 function onKey(event: KeyboardEvent) {
@@ -15,7 +18,7 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 
 <template>
   <teleport to="body">
-    <div class="overlay" @mousedown.self="$emit('close')">
+    <div class="overlay" :style="{ zIndex }" @mousedown.self="$emit('close')">
       <div class="modal" :style="{ width: `${width}px` }">
         <span class="modal__accent" />
         <header class="modal__head">

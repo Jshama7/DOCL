@@ -129,6 +129,7 @@ onMounted(() => {
     v-if="store.crashOpen"
     title="崩溃分析"
     :width="600"
+    :z-index="110"
     @close="close"
   >
     <div v-if="loading" class="crash-loading">

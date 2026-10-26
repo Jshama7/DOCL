@@ -1291,7 +1291,10 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <p v-if="selectedServerLoader !== 'vanilla'" class="muted small mp-hint">
+          <p v-if="selectedServerLoader === 'quilt'" class="muted small mp-hint">
+            Quilt 服务端暂未支持，请改用 Fabric / Forge / NeoForge。
+          </p>
+          <p v-else-if="selectedServerLoader !== 'vanilla'" class="muted small mp-hint">
             当前选择的是 {{ loaderLabels[selectedServerLoader] ?? selectedServerLoader }} 版本，首次开服会运行加载器安装器，耗时取决于网络。
           </p>
 

@@ -1677,7 +1677,9 @@ fn read_serverpack_manifest(dir: &Path) -> (String, String, String) {
     {
         "neoforge" => "neoforge",
         "forge" => "forge",
-        "fabric" | "quilt" => "fabric",
+        // Quilt 不能当 Fabric 装，否则会漏掉 Quilt Loader 直接起不来
+        "fabric" => "fabric",
+        "quilt" => "quilt",
         _ => "",
     };
     // NeoForge 的 modloaderVersion 可能已含 MC 版本（26.1.2.116），也可能带 1.21.1- 前缀
@@ -1787,7 +1789,9 @@ pub fn import_pack(
         loader = match value.as_str() {
             "neoforge" => "neoforge".into(),
             "forge" => "forge".into(),
-            "fabric" | "quilt" => "fabric".into(),
+            // Quilt 不能当 Fabric 装，保留原值由开服流程给出明确提示
+            "fabric" => "fabric".into(),
+            "quilt" => "quilt".into(),
             other => other.to_string(),
         };
     }
@@ -2168,6 +2172,17 @@ mod tests {
         assert_eq!(
             read_serverpack_manifest(&dir),
             ("1.20.1".into(), "forge".into(), "47.2.0".into())
+        );
+
+        // Quilt 不能映射成 Fabric，否则会装错加载器
+        std::fs::write(
+            dir.join("manifest.json"),
+            r#"{"minecraftVersion":"1.20.1","modloader":"Quilt","modloaderVersion":"0.23.1"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_serverpack_manifest(&dir),
+            ("1.20.1".into(), "quilt".into(), "0.23.1".into())
         );
 
         let _ = std::fs::remove_dir_all(&dir);

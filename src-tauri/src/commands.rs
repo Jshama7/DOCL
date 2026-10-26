@@ -1753,9 +1753,13 @@ pub async fn server_pack_import(
 }
 
 #[tauri::command]
-pub fn server_pack_remove(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+pub async fn server_pack_remove(state: State<'_, AppState>, id: String) -> CmdResult<()> {
     let cfg = state.config.lock().unwrap().clone();
-    server::remove_pack(&cfg, &id).map_err(err)
+    // 服务端包可能有几百 MB，删除放到阻塞线程池，避免卡住界面
+    tokio::task::spawn_blocking(move || server::remove_pack(&cfg, &id))
+        .await
+        .map_err(|e| format!("删除服务端包失败：{e}"))?
+        .map_err(err)
 }
 
 #[tauri::command]

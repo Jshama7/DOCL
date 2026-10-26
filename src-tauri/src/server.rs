@@ -249,6 +249,56 @@ fn server_dir(cfg: &Config, version_id: &str) -> PathBuf {
         .join(safe_id(version_id))
 }
 
+/// 服务端整合包实例：把实例目录里的模组、配置等复制到服务端目录，
+/// 已有文件不覆盖（保留玩家改过的配置）。
+fn sync_instance_payload(cfg: &Config, version_id: &str, dir: &Path) -> Result<()> {
+    if crate::instance::get(cfg, version_id).category != "modpack" {
+        return Ok(());
+    }
+    let src = cfg.game_root().join("versions").join(safe_id(version_id));
+    if !src.is_dir() {
+        return Ok(());
+    }
+    // 客户端专属目录与版本文件不复制到服务端目录
+    const SKIP_DIRS: &[&str] = &[
+        "versions",
+        "saves",
+        "logs",
+        "crash-reports",
+        "screenshots",
+        "natives",
+        "shaderpacks",
+        "resourcepacks",
+    ];
+    fn walk(from: &Path, to: &Path, skip: &[&str], top: bool) -> Result<()> {
+        for entry in std::fs::read_dir(from)?.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let target = to.join(&name);
+            if path.is_dir() {
+                if skip.iter().any(|item| item.eq_ignore_ascii_case(&name)) {
+                    continue;
+                }
+                std::fs::create_dir_all(&target)?;
+                walk(&path, &target, skip, false)?;
+                continue;
+            }
+            // 顶层 <id>.json / <id>.jar 是启动器用的版本文件
+            if top && (name.to_lowercase().ends_with(".json") || name.to_lowercase().ends_with(".jar")) {
+                continue;
+            }
+            if target.exists() {
+                continue;
+            }
+            if let Err(e) = std::fs::copy(&path, &target) {
+                eprintln!("复制服务端内容失败：{} {e}", path.display());
+            }
+        }
+        Ok(())
+    }
+    walk(&src, dir, SKIP_DIRS, true)
+}
+
 fn pick_port(preferred: u16) -> u16 {
     let start = if preferred == 0 { 25565 } else { preferred };
     for offset in 0..20u16 {
@@ -768,6 +818,8 @@ pub async fn start(
 
     let dir = server_dir(cfg, version_id);
     std::fs::create_dir_all(&dir)?;
+    // 服务端整合包：先把实例内容同步过来，再准备启动文件
+    sync_instance_payload(cfg, version_id, &dir)?;
     let log: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
     {
         let mut lines = log.lock().unwrap();

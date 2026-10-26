@@ -284,6 +284,8 @@ const importForm = reactive({
   loaderVersion: "",
   parentVersion: "",
   optional: false,
+  /// 安装为服务端：按清单跳过仅客户端文件
+  server: false,
 });
 
 const label = computed(() => CLASS_LABELS[props.kind] ?? "资源");
@@ -429,14 +431,8 @@ onMounted(async () => {
     store.installed.some((v) => v.id === preset.instanceId)
       ? preset.instanceId
       : "";
-  instanceId.value =
-    props.kind === "modpacks"
-      ? ""
-      : fromPreset ||
-        (store.config?.selected_version &&
-        store.installed.some((v) => v.id === store.config?.selected_version)
-          ? store.config.selected_version
-          : store.installed[0]?.id ?? "");
+  // 默认不绑定实例（仅浏览），仅当从实例页带 preset 进入时才预选
+  instanceId.value = props.kind === "modpacks" ? "" : fromPreset;
   if (instanceId.value) {
     versionMode.value = "instance";
   } else if (preset?.gameVersion) {
@@ -550,6 +546,17 @@ async function search(reset = true) {
   loading.value = false;
 }
 
+/// 项目中文名（PCL 内置百科式的中文名，这里用在线接口补）
+const zhNames = ref<Record<string, { name: string; summary: string }>>({});
+
+function displayName(project: CfProject) {
+  return zhNames.value[`${project.source}-${project.id}`]?.name || project.name;
+}
+
+function displaySummary(project: CfProject) {
+  return zhNames.value[`${project.source}-${project.id}`]?.summary || project.summary;
+}
+
 async function fetchBucket(key: SourceKey, offset: number) {
   const version = queryGameVersion.value;
   const selected = category.value;
@@ -588,6 +595,26 @@ async function fetchBucket(key: SourceKey, offset: number) {
       done: result.items.length === 0 || items.length >= result.total,
     },
   };
+  void loadTranslations(result.items);
+}
+
+async function loadTranslations(list: CfProject[]) {
+  if (!list.length) return;
+  // 同一来源一次请求，两个来源分别取
+  for (const source of ["curseforge", "modrinth"] as const) {
+    const ids = list.filter((item) => item.source === source).map((item) => item.id);
+    if (!ids.length) continue;
+    try {
+      const map = await api.projectTranslations(source, ids);
+      const next = { ...zhNames.value };
+      for (const [id, value] of Object.entries(map)) {
+        if (value.name) next[`${source}-${id}`] = value;
+      }
+      zhNames.value = next;
+    } catch {
+      // 翻译失败保持英文原名
+    }
+  }
 }
 
 function resetSearch() {
@@ -630,6 +657,7 @@ function openProject(project: CfProject) {
   files.value = [];
   filesError.value = "";
   depFile.value = null;
+  void loadTranslations([project]);
   loadFiles(project);
 }
 
@@ -759,6 +787,7 @@ async function openPreview(path: string, fromTemp: boolean) {
         ? preview.detected_parent
         : installedIds[0] ?? "";
     importForm.optional = false;
+    importForm.server = false;
     showImport.value = true;
   } catch (err) {
     notify(`读取整合包失败：${String(err)}`, "err");
@@ -815,6 +844,7 @@ interface PackImportJob {
     loader_version: string | null;
     parent_version: string | null;
     install_optional: boolean;
+    server: boolean;
   };
 }
 
@@ -854,7 +884,11 @@ async function runPackImport(job: PackImportJob) {
   const result = await importModpack(path!, options, preview.name);
   if (result) {
     if (fromTemp) api.modpackTempRemove(path!).catch(() => {});
-    notify(`${preview.name} 导入完成，已加入版本列表`);
+    notify(
+      options.server
+        ? `${preview.name} 服务端已就绪，可在联机页一键开服`
+        : `${preview.name} 导入完成，已加入版本列表`
+    );
   }
 }
 
@@ -880,7 +914,38 @@ async function installPack(project: CfProject, file: CfFileView) {
   importForm.loaderVersion = "";
   importForm.parentVersion = "";
   importForm.optional = false;
+  importForm.server = false;
   showImport.value = true;
+}
+
+/// 一键下载配套服务端包：先取直链，再走服务端安装表单
+async function installServerPack(file: CfFileView) {
+  const fileId = file.server_pack_file_id;
+  if (!active.value || !fileId || inspecting.value || store.installingId) return;
+  inspecting.value = true;
+  try {
+    const link = await api.cfFileLink(active.value.id, fileId);
+    const project = active.value;
+    pendingPack.value = {
+      url: link.url,
+      fileName: link.file_name,
+      title: `${project.name} 服务端`,
+      name: `${project.name} 服务端`,
+      suggestedId: `${project.slug || project.id}-server`,
+      sourceLabel: "CurseForge 服务端整合包",
+    };
+    importForm.name = `${project.name} 服务端`;
+    importForm.id = `${project.slug || project.id}-server`;
+    importForm.loaderVersion = "";
+    importForm.parentVersion = "";
+    importForm.optional = false;
+    importForm.server = true;
+    showImport.value = true;
+  } catch (err) {
+    notify(`获取服务端包失败：${String(err)}`, "err");
+  } finally {
+    inspecting.value = false;
+  }
 }
 
 async function confirmImport() {
@@ -907,6 +972,7 @@ async function confirmImport() {
       loader_version: importForm.loaderVersion.trim() || null,
       parent_version: importForm.parentVersion || null,
       install_optional: importForm.optional,
+      server: importForm.server,
     },
   };
   showImport.value = false;
@@ -1021,7 +1087,7 @@ async function confirmImport() {
         <img v-if="active.logo_url" class="cf-detail__logo" :src="active.logo_url" alt="" />
         <div class="cf-detail__text">
           <div class="cf-detail__title-row">
-            <h2 class="cf-detail__title">{{ active.name }}</h2>
+            <h2 class="cf-detail__title">{{ displayName(active) }}</h2>
             <span class="tag">{{ sourceLabel(active.source) }}</span>
             <span
               v-for="category in active.categories.slice(0, 3)"
@@ -1035,7 +1101,7 @@ async function confirmImport() {
             {{ active.author || "未知作者" }} · {{ compactNumber(active.download_count) }} 次下载
             <template v-if="active.updated"> · {{ updatedLabel(active.updated) }}</template>
           </p>
-          <p class="muted small cf-detail__summary">{{ active.summary }}</p>
+          <p class="muted small cf-detail__summary">{{ displaySummary(active) }}</p>
           <div class="cf-detail__links">
             <button
               v-for="link in projectLinks"
@@ -1103,6 +1169,16 @@ async function confirmImport() {
             <span v-if="releaseTag(file.release_type)" class="tag">
               {{ releaseTag(file.release_type) }}
             </span>
+            <span v-if="file.is_server_pack" class="tag tag--grass">服务端</span>
+            <button
+              v-if="kind === 'modpacks' && file.server_pack_file_id"
+              class="cf-file__deps"
+              title="下载该整合包配套的服务端包"
+              :disabled="inspecting || !!store.installingId"
+              @click="installServerPack(file)"
+            >
+              下载服务端
+            </button>
             <button
               v-if="file.dependencies.length"
               class="cf-file__deps"
@@ -1151,14 +1227,14 @@ async function confirmImport() {
                     :key="dep.id"
                     type="button"
                     class="cf-dep"
-                    :title="`查看 ${dep.name}`"
+                    :title="`查看 ${displayName(dep)}`"
                     @click="openProject(dep)"
                   >
                     <img v-if="dep.logo_url" :src="dep.logo_url" alt="" class="cf-dep__logo" />
                     <span v-else class="cf-dep__logo cf-dep__logo--empty" />
                     <div class="cf-dep__text">
-                      <strong>{{ dep.name }}</strong>
-                      <span>{{ dep.summary }}</span>
+                      <strong>{{ displayName(dep) }}</strong>
+                      <span>{{ displaySummary(dep) }}</span>
                     </div>
                     <span class="tag">
                       {{ dep.source === "modrinth" ? "Modrinth" : "CurseForge" }}
@@ -1219,7 +1295,13 @@ async function confirmImport() {
 
           <div class="cf-row__body">
             <div class="cf-row__title">
-              <strong class="cf-row__name">{{ project.name }}</strong>
+              <strong class="cf-row__name">{{ displayName(project) }}</strong>
+              <span
+                v-if="displayName(project) !== project.name"
+                class="cf-row__origin muted small"
+              >
+                {{ project.name }}
+              </span>
               <span class="cf-row__source">{{ sourceLabel(project.source) }}</span>
               <span
                 v-for="category in project.categories.slice(0, 2)"
@@ -1229,7 +1311,7 @@ async function confirmImport() {
                 {{ zhCategory(category) }}
               </span>
             </div>
-            <p class="cf-row__summary">{{ project.summary }}</p>
+            <p class="cf-row__summary">{{ displaySummary(project) }}</p>
           </div>
 
           <div class="cf-row__meta">
@@ -1350,6 +1432,14 @@ async function confirmImport() {
                   <span>清单中标记为可选的 Mod，体积可能较大</span>
                 </div>
                 <WoodToggle v-model="importForm.optional" />
+              </div>
+
+              <div v-if="pendingPack || packPreview?.format !== 'generic'" class="pack-toggle">
+                <div>
+                  <strong>安装为服务端</strong>
+                  <span>跳过仅客户端可用的 Mod，装好后可在联机页一键开服</span>
+                </div>
+                <WoodToggle v-model="importForm.server" />
               </div>
 
               <ul v-if="packPreview?.warnings.length" class="pack-warnings">
@@ -1552,6 +1642,16 @@ async function confirmImport() {
   align-items: center;
   gap: 7px;
   min-width: 0;
+}
+
+.cf-row__origin {
+  min-width: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  opacity: 0.75;
 }
 
 .cf-row__name {

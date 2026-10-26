@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::download::{self, FileTask, ProgressState};
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
@@ -87,6 +87,12 @@ struct CfFile {
     game_versions: Vec<String>,
     #[serde(default)]
     release_type: i32,
+    /// 该文件本身是服务端整合包
+    #[serde(default)]
+    is_server_pack: bool,
+    /// 对应服务端包的文件 ID（客户端包指向配套服务端）
+    #[serde(default)]
+    server_pack_file_id: Option<i64>,
     #[serde(default)]
     dependencies: Vec<CfDependency>,
 }
@@ -214,6 +220,10 @@ pub struct CfFileView {
     pub download_url: Option<String>,
     pub game_versions: Vec<String>,
     pub release_type: i32,
+    /// 该文件本身是服务端整合包
+    pub is_server_pack: bool,
+    /// 对应服务端包的文件 ID，可据此一键下载服务端
+    pub server_pack_file_id: Option<String>,
     /// 必需前置的项目 ID，供界面显示「N 项前置」
     pub dependencies: Vec<String>,
 }
@@ -432,6 +442,11 @@ pub async fn files(
             download_url: file.download_url,
             game_versions: file.game_versions,
             release_type: file.release_type,
+            is_server_pack: file.is_server_pack,
+            server_pack_file_id: file
+                .server_pack_file_id
+                .filter(|value| *value > 0)
+                .map(|value| value.to_string()),
             dependencies: file
                 .dependencies
                 .into_iter()
@@ -487,6 +502,25 @@ pub async fn file_download(
         file_name
     };
     Ok((download_url, name))
+}
+
+#[derive(Debug, Serialize)]
+pub struct FileLink {
+    pub url: String,
+    pub file_name: String,
+}
+
+/// 前端一键下载服务端包时使用：按项目 + 文件 ID 取直链。
+pub async fn file_link(
+    client: &reqwest::Client,
+    mod_id: &str,
+    file_id: &str,
+    prefer_mirror: bool,
+) -> Result<FileLink> {
+    let mod_id: i64 = mod_id.parse().context("项目 ID 无效")?;
+    let file_id: i64 = file_id.parse().context("文件 ID 无效")?;
+    let (url, file_name) = file_download(client, mod_id, file_id, prefer_mirror).await?;
+    Ok(FileLink { url, file_name })
 }
 
 #[derive(Debug, Serialize)]

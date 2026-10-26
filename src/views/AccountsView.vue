@@ -15,6 +15,7 @@ import {
   loadSelectedSkin,
   notify,
   refreshAccounts,
+  refreshConfig,
   removeAccount,
   selectAccount,
   selectedAccount,
@@ -26,6 +27,60 @@ const confirmId = ref<string | null>(null);
 /// 添加账户弹窗：type 选择 → 离线表单，正版直接走微软登录
 const addOpen = ref(false);
 const offlineOpen = ref(false);
+
+/// 第三方皮肤站（authlib-injector）登录
+const thirdOpen = ref(false);
+const thirdRoot = ref("https://littleskin.cn/api/yggdrasil");
+const thirdUser = ref("");
+const thirdPass = ref("");
+const thirdBusy = ref(false);
+const thirdServerName = ref("");
+
+/// 常用皮肤站预设，点一下填入地址
+const thirdPresets = [
+  { label: "LittleSkin", root: "https://littleskin.cn/api/yggdrasil" },
+];
+
+async function checkThirdServer() {
+  if (!thirdRoot.value.trim()) {
+    notify("请填写认证服务器地址", "err");
+    return;
+  }
+  try {
+    const meta = await api.authlibMeta(thirdRoot.value.trim());
+    thirdRoot.value = meta.root;
+    thirdServerName.value = meta.name;
+    notify(`已连接：${meta.name}`);
+  } catch (err) {
+    thirdServerName.value = "";
+    notify(String(err), "err");
+  }
+}
+
+async function loginThird() {
+  if (thirdBusy.value) return;
+  if (!thirdRoot.value.trim() || !thirdUser.value.trim() || !thirdPass.value) {
+    notify("请填写服务器地址、邮箱与密码", "err");
+    return;
+  }
+  thirdBusy.value = true;
+  try {
+    const account = await api.authlibLogin(
+      thirdRoot.value.trim(),
+      thirdUser.value.trim(),
+      thirdPass.value
+    );
+    await refreshAccounts();
+    await refreshConfig();
+    thirdOpen.value = false;
+    thirdPass.value = "";
+    notify(`已登录 ${account.name}`);
+  } catch (err) {
+    notify(String(err), "err");
+  } finally {
+    thirdBusy.value = false;
+  }
+}
 
 const loginVisible = computed(() => store.msLogin !== null);
 const code = computed(() => store.msLogin?.code ?? null);
@@ -69,10 +124,12 @@ function addOffline() {
   notify(`已添加离线账号 ${value}`);
 }
 
-function pickAccountType(kind: "offline" | "microsoft") {
+function pickAccountType(kind: "offline" | "microsoft" | "authlib") {
   addOpen.value = false;
   if (kind === "offline") {
     offlineOpen.value = true;
+  } else if (kind === "authlib") {
+    thirdOpen.value = true;
   } else {
     beginMsLogin();
   }
@@ -217,7 +274,13 @@ onMounted(() => {
             <span class="acc-row__body">
               <span class="acc-row__name">{{ account.name }}</span>
               <span class="acc-row__meta mono">
-                {{ account.kind === "microsoft" ? "MSA" : "OFFLINE" }} ·
+                {{
+                  account.kind === "microsoft"
+                    ? "MSA"
+                    : account.kind === "authlib"
+                      ? "SKIN"
+                      : "OFFLINE"
+                }} ·
                 {{ shortUuid(account.uuid) }}
               </span>
             </span>
@@ -248,7 +311,13 @@ onMounted(() => {
           </div>
           <div class="acc-detail__tags">
             <span class="tag" :class="{ 'tag--grass': selectedAccount.kind === 'microsoft' }">
-              {{ selectedAccount.kind === "microsoft" ? "微软账号" : "离线账号" }}
+              {{
+                selectedAccount.kind === "microsoft"
+                  ? "微软账号"
+                  : selectedAccount.kind === "authlib"
+                    ? "第三方账号"
+                    : "离线账号"
+              }}
             </span>
             <span class="tag">{{ skinSourceLabel }}</span>
           </div>
@@ -315,6 +384,54 @@ onMounted(() => {
           <span>通过 Microsoft 账户登录并获取皮肤头像。</span>
         </span>
       </button>
+      <button class="add-type" @click="pickAccountType('authlib')">
+        <AppIcon name="globe" :size="22" />
+        <span class="add-type__body">
+          <b>第三方账号</b>
+          <span>LittleSkin 等皮肤站，用邮箱密码登录。</span>
+        </span>
+      </button>
+    </WoodModal>
+
+    <WoodModal v-if="thirdOpen" title="第三方账号" :width="460" @close="thirdOpen = false">
+      <p class="offline-hint muted">
+        通过 authlib-injector 接入皮肤站，登录后启动游戏会自动带上认证参数。
+      </p>
+      <div class="third-presets">
+        <button
+          v-for="preset in thirdPresets"
+          :key="preset.root"
+          class="third-preset"
+          :class="{ 'third-preset--active': thirdRoot === preset.root }"
+          @click="thirdRoot = preset.root"
+        >
+          {{ preset.label }}
+        </button>
+      </div>
+      <label class="offline-field">
+        <span class="offline-field__label">认证服务器</span>
+        <div class="third-server">
+          <WoodInput v-model="thirdRoot" mono placeholder="https://example.com/api/yggdrasil" />
+          <WoodButton variant="ghost" @click="checkThirdServer">校验</WoodButton>
+        </div>
+        <span v-if="thirdServerName" class="offline-field__hint muted small">
+          已连接 {{ thirdServerName }}
+        </span>
+      </label>
+      <label class="offline-field">
+        <span class="offline-field__label">邮箱</span>
+        <WoodInput v-model="thirdUser" placeholder="登录皮肤站用的邮箱" />
+      </label>
+      <label class="offline-field">
+        <span class="offline-field__label">密码</span>
+        <WoodInput v-model="thirdPass" type="password" placeholder="皮肤站密码" @keyup.enter="loginThird" />
+      </label>
+      <div class="offline-actions">
+        <WoodButton variant="ghost" @click="thirdOpen = false">取消</WoodButton>
+        <WoodButton variant="primary" sheen :disabled="thirdBusy" @click="loginThird">
+          {{ thirdBusy ? "登录中…" : "登录" }}
+        </WoodButton>
+      </div>
     </WoodModal>
 
     <WoodModal v-if="offlineOpen" title="离线账户" :width="440" @close="offlineOpen = false">
@@ -559,6 +676,55 @@ onMounted(() => {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 18px;
+}
+
+/* ---------- 第三方皮肤站 ---------- */
+
+.offline-field + .offline-field {
+  margin-top: 12px;
+}
+
+.offline-field__hint {
+  font-size: 11.5px;
+}
+
+.third-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.third-preset {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-2);
+  color: var(--walnut);
+  font-size: 12px;
+  font-weight: 700;
+  transition: border-color var(--dur-1) ease, background var(--dur-1) ease;
+}
+
+.third-preset:hover {
+  border-color: var(--moss);
+}
+
+.third-preset--active {
+  border-color: var(--moss);
+  background: var(--moss-soft);
+  color: var(--moss);
+}
+
+.third-server {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.third-server > :first-child {
+  flex: 1;
+  min-width: 0;
 }
 
 .acc-detail {

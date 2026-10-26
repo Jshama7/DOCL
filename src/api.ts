@@ -143,6 +143,10 @@ export interface Config {
   selected_account: string | null;
   theme: string;
   background_image: string | null;
+  /// 背景图文件夹：设置后每次启动从中随机选一张（与 background_image 互斥）
+  background_dir: string | null;
+  /// 背景适应方式：cover / contain / stretch / center
+  background_fit: string;
   background_blur: number;
   glass_opacity: number;
   glass_blur: number;
@@ -333,6 +337,17 @@ export interface InstanceFile {
   is_dir: boolean;
 }
 
+export interface InstanceModMeta {
+  file_name: string;
+  name: string;
+  project_id: string;
+  /// modrinth / curseforge
+  source: string;
+  logo_url: string;
+  website_url: string;
+  version_number: string;
+}
+
 export interface InstancePaths {
   version: string;
   mods: string;
@@ -408,6 +423,8 @@ export interface PackPreview {
   files: PackFilePreview[];
   warnings: string[];
   suggested_id: string;
+  /// 服务端安装时会跳过的仅客户端文件数
+  server_skips: number;
 }
 
 export interface ModpackImportOptions {
@@ -416,6 +433,8 @@ export interface ModpackImportOptions {
   loader_version?: string | null;
   parent_version?: string | null;
   install_optional?: boolean;
+  /// 安装为服务端：按清单跳过仅客户端文件
+  server?: boolean;
 }
 
 export interface ModpackImportResult {
@@ -514,6 +533,10 @@ export interface CfFileView {
   download_url: string | null;
   game_versions: string[];
   release_type: number;
+  /// 该文件本身是服务端整合包
+  is_server_pack: boolean;
+  /// 配套服务端包的文件 ID，可一键下载
+  server_pack_file_id: string | null;
   /// 必需前置的项目 ID
   dependencies: string[];
 }
@@ -552,6 +575,14 @@ export interface AccountView {
   uuid: string;
   skin_path: string | null;
   skin_model: string;
+  /// 第三方认证（authlib-injector）的 API 根
+  authlib_url: string | null;
+}
+
+export interface AuthlibMeta {
+  root: string;
+  name: string;
+  homepage: string;
 }
 
 export interface AccountSkin {
@@ -640,6 +671,8 @@ export const api = {
     invoke<void>("instance_open_content", { versionId, kind, name }),
   instanceThumb: (versionId: string, kind: string, name: string) =>
     invoke<string | null>("instance_thumb", { versionId, kind, name }),
+  instanceModMeta: (versionId: string) =>
+    invoke<InstanceModMeta[]>("instance_mod_meta", { versionId }),
   instanceImportFiles: (versionId: string, kind: string, paths: string[]) =>
     invoke<number>("instance_import_files", { versionId, kind, paths }),
   instanceImportMods: (versionId: string, paths: string[]) =>
@@ -749,15 +782,25 @@ export const api = {
       gameVersion: gameVersion ?? null,
       loader: loader ?? null,
     }),
+  cfFileLink: (projectId: string, fileId: string) =>
+    invoke<{ url: string; file_name: string }>("cf_file_link", { projectId, fileId }),
   cfInstallFile: (versionId: string, kind: string, url: string, fileName: string) =>
     invoke<InstallOutcome>("cf_install_file", { versionId, kind, url, fileName }),
   contentProjects: (source: string, ids: string[]) =>
     invoke<CfProject[]>("content_projects", { source, ids }),
+  projectTranslations: (source: string, ids: string[]) =>
+    invoke<Record<string, { name: string; summary: string }>>("project_translations", {
+      source,
+      ids,
+    }),
   deleteVersion: (versionId: string) => invoke<string[]>("delete_version", { versionId }),
   defaultSkin: () => invoke<string>("default_skin"),
   defaultSkins: () => invoke<DefaultSkin[]>("default_skins"),
   getAccounts: () => invoke<AccountView[]>("get_accounts"),
   createOfflineAccount: (name: string) => invoke<AccountView>("create_offline_account", { name }),
+  authlibMeta: (root: string) => invoke<AuthlibMeta>("authlib_meta", { root }),
+  authlibLogin: (root: string, username: string, password: string) =>
+    invoke<AccountView>("authlib_login", { root, username, password }),
   removeAccount: (id: string) => invoke<void>("remove_account", { id }),
   selectAccount: (id: string) => invoke<void>("select_account", { id }),
   getAccountSkin: (accountId: string) =>
@@ -819,6 +862,8 @@ export const api = {
     invoke<BackgroundInfo>("import_background", { path }),
   backgroundDataUrl: (path: string) =>
     invoke<string>("background_data_url", { path }),
+  pickBackgroundRandom: (dir: string) =>
+    invoke<string | null>("pick_background_random", { dir }),
 };
 
 export function onInstallProgress(cb: (p: ProgressSnapshot) => void): Promise<UnlistenFn> {

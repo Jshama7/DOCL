@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, markRaw, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import type { CSSProperties } from "vue";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import TitleBar from "./components/TitleBar.vue";
 import DownloadCenter from "./components/DownloadCenter.vue";
@@ -219,6 +220,20 @@ const appStyle = computed(
     }) as Record<string, string>
 );
 
+/// 背景适应方式：cover 铺满裁剪 / contain 完整显示 / stretch 拉伸 / center 原始大小
+const bgFitStyle = computed<CSSProperties>(() => {
+  switch (store.config?.background_fit) {
+    case "contain":
+      return { objectFit: "contain", transform: "none" };
+    case "stretch":
+      return { objectFit: "fill", transform: "none" };
+    case "center":
+      return { objectFit: "none", transform: "none" };
+    default:
+      return { objectFit: "cover" };
+  }
+});
+
 /// 毛玻璃模式下让页面背景透出，配合系统 Acrylic 看到桌面
 watch(
   () => store.config?.window_vibrancy,
@@ -254,7 +269,12 @@ const currentView = computed(() => views[store.page as Page]);
       :class="store.backgroundPreset ? `wallpaper--${store.backgroundPreset}` : ''"
       aria-hidden="true"
     >
-      <img v-if="store.backgroundUrl" :src="store.backgroundUrl" alt="" />
+      <img
+        v-if="store.backgroundUrl"
+        :src="store.backgroundUrl"
+        :style="bgFitStyle"
+        alt=""
+      />
       <span v-else class="wallpaper__builtin" />
       <span class="wallpaper__tint" />
       <span class="wallpaper__dim" />

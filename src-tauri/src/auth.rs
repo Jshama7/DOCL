@@ -23,6 +23,8 @@ pub struct Account {
     pub expires_at: u64,
     pub skin_path: Option<String>,
     pub skin_model: String,
+    /// 第三方认证（authlib-injector）的 Yggdrasil API 根
+    pub authlib_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -33,6 +35,8 @@ pub struct AccountView {
     pub uuid: String,
     pub skin_path: Option<String>,
     pub skin_model: String,
+    /// 第三方认证的 API 根，前端用于展示服务名
+    pub authlib_url: Option<String>,
 }
 
 impl From<&Account> for AccountView {
@@ -44,6 +48,7 @@ impl From<&Account> for AccountView {
             uuid: a.uuid.clone(),
             skin_path: a.skin_path.clone(),
             skin_model: a.skin_model.clone(),
+            authlib_url: a.authlib_url.clone(),
         }
     }
 }
@@ -65,6 +70,8 @@ struct StoredAccount {
     skin_path: Option<String>,
     #[serde(default = "default_skin_model")]
     skin_model: String,
+    #[serde(default)]
+    authlib_url: Option<String>,
 }
 
 #[derive(Serialize, Clone)]
@@ -177,6 +184,7 @@ pub fn create_offline(name: &str) -> Result<Account> {
         expires_at: u64::MAX,
         skin_path: None,
         skin_model: "classic".into(),
+        authlib_url: None,
     })
 }
 
@@ -202,6 +210,7 @@ pub fn load_accounts() -> Vec<Account> {
                 expires_at: s.expires_at,
                 skin_path: s.skin_path,
                 skin_model: s.skin_model,
+                authlib_url: s.authlib_url,
             })
         })
         .collect()
@@ -228,6 +237,7 @@ pub fn save_accounts(accounts: &[Account]) -> Result<()> {
             expires_at: a.expires_at,
             skin_path: a.skin_path.clone(),
             skin_model: a.skin_model.clone(),
+            authlib_url: a.authlib_url.clone(),
         })
         .collect();
     std::fs::create_dir_all(config::data_dir())?;
@@ -433,6 +443,7 @@ pub async fn refresh(client: &reqwest::Client, account: &Account) -> Result<Acco
         expires_at: now_secs() + expires_in,
         skin_path: account.skin_path.clone(),
         skin_model: account.skin_model.clone(),
+        authlib_url: None,
     })
 }
 
@@ -459,6 +470,7 @@ pub async fn poll_device_login(
         expires_at: now_secs() + mc_expires,
         skin_path: None,
         skin_model: "classic".into(),
+        authlib_url: None,
     };
     let mut accounts = load_accounts();
     accounts.retain(|a| a.id != account.id);

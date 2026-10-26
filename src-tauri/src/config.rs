@@ -67,6 +67,10 @@ pub struct Config {
     /// paper / celadon / terracotta / moon / nocturne / sakura / ocean / lavender / graphite
     pub theme: String,
     pub background_image: Option<String>,
+    /// 背景图文件夹：设置后每次启动从中随机选一张（与 background_image 互斥）
+    pub background_dir: Option<String>,
+    /// 背景适应方式：cover（铺满裁剪）/ contain（完整显示）/ stretch（拉伸）/ center（原始大小）
+    pub background_fit: String,
     pub background_blur: u32,
     pub glass_opacity: u32,
     pub glass_blur: u32,
@@ -113,6 +117,8 @@ impl Default for Config {
             selected_account: None,
             theme: "paper".into(),
             background_image: Some("builtin:forest".into()),
+            background_dir: None,
+            background_fit: "cover".into(),
             background_blur: 4,
             glass_opacity: 62,
             glass_blur: 18,

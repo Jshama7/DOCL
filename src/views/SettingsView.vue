@@ -32,6 +32,7 @@ import {
   refreshJava,
   refreshVersions,
   saveConfig,
+  shuffleBackground,
   startupUpdate,
   store,
 } from "../store";
@@ -66,6 +67,8 @@ const form = reactive<Config>({
   selected_account: null,
   theme: "paper",
   background_image: null,
+  background_dir: null,
+  background_fit: "cover",
   background_blur: 18,
   glass_opacity: 78,
   glass_blur: 14,
@@ -95,6 +98,8 @@ const autoSaveKeys: (keyof Config)[] = [
   "game_dir",
   "theme",
   "background_image",
+  "background_dir",
+  "background_fit",
   "background_blur",
   "glass_blur",
   "glass_opacity",
@@ -343,16 +348,36 @@ async function chooseBackground() {
     const info = await api.importBackground(path);
     store.backgroundPreset = "";
     store.backgroundUrl = info.data_url;
+    // 单图与文件夹互斥，设置单图时清掉文件夹
+    form.background_dir = null;
     form.background_image = info.path;
+    await runAutoSave();
     notify("背景已应用并自动保存");
   } catch (err) {
     notify(`设置背景失败：${String(err)}`, "err");
   }
 }
 
+async function chooseBackgroundDir() {
+  const dir = await pickDirectory("选择背景图文件夹");
+  if (!dir) return;
+  form.background_dir = dir;
+  form.background_image = null;
+  await runAutoSave();
+  await loadBackground();
+  notify("背景文件夹已应用，每次启动随机一张");
+}
+
+function clearBackgroundDir() {
+  form.background_dir = null;
+  void runAutoSave().then(loadBackground);
+  notify("已移除背景文件夹");
+}
+
 function previewBuiltin(name: string) {
   store.backgroundPreset = name;
   store.backgroundUrl = "";
+  form.background_dir = null;
   form.background_image = `builtin:${name}`;
   // 旧默认值偏保守，首次选择内置底图时切到更能看出磨砂质感的一组参数
   if (form.background_blur === 18) form.background_blur = 4;
@@ -363,9 +388,18 @@ function previewBuiltin(name: string) {
 function clearBackground() {
   store.backgroundUrl = "";
   store.backgroundPreset = "";
+  form.background_dir = null;
   form.background_image = null;
   notify("已移除背景");
 }
+
+/// 背景适应方式选项（cover 为默认铺满裁剪）
+const fitOptions = [
+  { value: "cover", label: "铺满裁剪" },
+  { value: "contain", label: "完整显示" },
+  { value: "stretch", label: "拉伸铺满" },
+  { value: "center", label: "原始大小" },
+];
 
 const sourceOptions = [
   { value: "auto", label: "自动（按来源智能选择）" },
@@ -1088,6 +1122,54 @@ async function removeJava(path: string) {
               :disabled="!form.background_image"
               @click="clearBackground"
             />
+          </div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>背景图文件夹</strong>
+          <span>每次启动从文件夹随机挑一张，优先于上方单图</span>
+        </div>
+        <div class="setting__control">
+          <div class="row">
+            <span class="muted small">{{ form.background_dir ? "已设置" : "未设置" }}</span>
+            <IconButton icon="folder" label="选择背景文件夹" :size="34" @click="chooseBackgroundDir" />
+            <IconButton
+              icon="refresh"
+              label="换一张"
+              :size="34"
+              :disabled="!form.background_dir"
+              @click="shuffleBackground"
+            />
+            <IconButton
+              icon="trash"
+              label="移除背景文件夹"
+              variant="danger-quiet"
+              :size="34"
+              :disabled="!form.background_dir"
+              @click="clearBackgroundDir"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="setting">
+        <div class="setting__label">
+          <strong>背景适应</strong>
+          <span>图片与窗口的适配方式</span>
+        </div>
+        <div class="setting__control">
+          <div class="bg-presets">
+            <button
+              v-for="fit in fitOptions"
+              :key="fit.value"
+              class="bg-chip"
+              :class="{ 'bg-chip--active': (form.background_fit || 'cover') === fit.value }"
+              @click="form.background_fit = fit.value"
+            >
+              {{ fit.label }}
+            </button>
           </div>
         </div>
       </div>

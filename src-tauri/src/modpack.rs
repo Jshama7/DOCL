@@ -39,6 +39,8 @@ pub struct PackPreview {
     pub files: Vec<PackFilePreview>,
     pub warnings: Vec<String>,
     pub suggested_id: String,
+    /// 服务端安装时会跳过的仅客户端文件数（Modrinth env.server）
+    pub server_skips: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -53,6 +55,9 @@ pub struct ImportOptions {
     pub parent_version: Option<String>,
     #[serde(default)]
     pub install_optional: bool,
+    /// 安装为服务端：跳过仅客户端可用的文件
+    #[serde(default)]
+    pub server: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -141,6 +146,8 @@ struct MrHashes {
 struct MrEnv {
     #[serde(default)]
     client: String,
+    #[serde(default)]
+    server: String,
 }
 
 /* ---------- 内部解析结果 ---------- */
@@ -231,7 +238,7 @@ fn detect_loader(id: &str) -> (String, Option<String>) {
     ("vanilla".into(), None)
 }
 
-fn parse_pack(path: &str) -> Result<ParsedPack> {
+fn parse_pack(path: &str, server: bool) -> Result<ParsedPack> {
     let mut archive = open_zip(path)?;
     let names = zip_names(&mut archive);
     let zip_name = Path::new(path)
@@ -292,6 +299,7 @@ fn parse_pack(path: &str) -> Result<ParsedPack> {
                 files,
                 warnings,
                 suggested_id,
+                server_skips: 0,
             },
             source: SourceData::Curse {
                 game_version: manifest.minecraft.version,
@@ -336,21 +344,35 @@ fn parse_pack(path: &str) -> Result<ParsedPack> {
         }
         let mut files = Vec::new();
         let mut tasks = Vec::new();
+        // 服务端安装时会被跳过的仅客户端文件数，预览里提示给用户
+        let server_skips = index
+            .files
+            .iter()
+            .filter(|file| {
+                file.env
+                    .as_ref()
+                    .map(|env| env.server == "unsupported")
+                    .unwrap_or(false)
+            })
+            .count() as u32;
         for file in index.files {
-            if file
-                .env
-                .as_ref()
-                .map(|env| env.client == "unsupported")
-                .unwrap_or(false)
-            {
+            let env_client = file.env.as_ref().map(|env| env.client.clone()).unwrap_or_default();
+            let env_server = file.env.as_ref().map(|env| env.server.clone()).unwrap_or_default();
+            // 按目标端跳过不可用文件：客户端装跳 client-only，服务端装跳 server-only
+            let unsupported = if server {
+                env_server == "unsupported"
+            } else {
+                env_client == "unsupported"
+            };
+            if unsupported {
                 continue;
             }
             let url = file.downloads.first().cloned().unwrap_or_default();
-            let optional = file
-                .env
-                .as_ref()
-                .map(|env| env.client == "optional")
-                .unwrap_or(false);
+            let optional = if server {
+                env_server == "optional"
+            } else {
+                env_client == "optional"
+            };
             if files.len() < 40 {
                 files.push(PackFilePreview {
                     path: file.path.clone(),
@@ -386,6 +408,7 @@ fn parse_pack(path: &str) -> Result<ParsedPack> {
                 files,
                 warnings,
                 suggested_id,
+                server_skips,
             },
             source: SourceData::Modrinth {
                 game_version,
@@ -447,6 +470,7 @@ fn parse_pack(path: &str) -> Result<ParsedPack> {
             files: Vec::new(),
             warnings,
             suggested_id: slugify(&display_name),
+            server_skips: 0,
         },
         source: SourceData::Generic {
             prefix,
@@ -456,7 +480,7 @@ fn parse_pack(path: &str) -> Result<ParsedPack> {
 }
 
 pub fn inspect(path: &str) -> Result<PackPreview> {
-    Ok(parse_pack(path)?.preview)
+    Ok(parse_pack(path, false)?.preview)
 }
 
 /* ---------- 在线下载 ---------- */
@@ -1252,7 +1276,7 @@ pub async fn import(
     progress: Arc<ProgressState>,
 ) -> Result<ImportResult> {
     download::begin_stage(app, &progress, "正在解析整合包…");
-    let parsed = parse_pack(path)?;
+    let parsed = parse_pack(path, options.server)?;
     let preview = &parsed.preview;
 
     let display_name = options

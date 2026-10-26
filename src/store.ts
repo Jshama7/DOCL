@@ -247,6 +247,18 @@ export function applyTheme(theme?: string | null) {
 }
 
 export async function loadBackground() {
+  // 文件夹模式优先：每次启动随机挑一张（PCL 式）
+  const dir = store.config?.background_dir;
+  if (dir) {
+    store.backgroundPreset = "";
+    try {
+      const picked = await api.pickBackgroundRandom(dir);
+      store.backgroundUrl = picked ? await api.backgroundDataUrl(picked) : "";
+    } catch {
+      store.backgroundUrl = "";
+    }
+    return;
+  }
   const path = store.config?.background_image;
   if (!path) {
     store.backgroundUrl = "";
@@ -263,6 +275,19 @@ export async function loadBackground() {
     store.backgroundUrl = await api.backgroundDataUrl(path);
   } catch {
     store.backgroundUrl = "";
+  }
+}
+
+/// 背景文件夹模式下「换一张」：重新随机挑选一张
+export async function shuffleBackground() {
+  const dir = store.config?.background_dir;
+  if (!dir) return;
+  try {
+    const picked = await api.pickBackgroundRandom(dir);
+    store.backgroundUrl = picked ? await api.backgroundDataUrl(picked) : "";
+    notify("已换一张背景");
+  } catch (err) {
+    notify(`换背景失败：${String(err)}`, "err");
   }
 }
 

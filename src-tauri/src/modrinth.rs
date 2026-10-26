@@ -258,6 +258,8 @@ pub async fn files(
                 "alpha" => 3,
                 _ => 1,
             },
+            is_server_pack: false,
+            server_pack_file_id: None,
             dependencies: version
                 .dependencies
                 .into_iter()

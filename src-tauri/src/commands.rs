@@ -1,4 +1,7 @@
 use crate::auth::{self, Account, AccountView, DeviceCode};
+use crate::authlib;
+use crate::modmeta;
+use crate::translate;
 use crate::appupdate;
 use crate::config::{self, Config};
 use crate::crash;
@@ -613,6 +616,18 @@ pub fn instance_thumb(
     instance::thumb(&cfg, &version_id, &kind, &name).map_err(err)
 }
 
+/// 识别实例里已安装模组的来源（图标 + 项目链接），识别不到的不返回。
+#[tauri::command]
+pub async fn instance_mod_meta(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<Vec<modmeta::ModMeta>> {
+    let cfg = state.config.lock().unwrap().clone();
+    modmeta::lookup(&state.client, &cfg, &version_id)
+        .await
+        .map_err(err)
+}
+
 #[tauri::command]
 pub fn instance_open_content(
     state: State<'_, AppState>,
@@ -1047,6 +1062,37 @@ pub async fn content_projects(
     }
 }
 
+/// 取整合包配套服务端包的下载直链，供「下载服务端」一键使用。
+#[tauri::command]
+pub async fn cf_file_link(
+    state: State<'_, AppState>,
+    project_id: String,
+    file_id: String,
+) -> CmdResult<curseforge::FileLink> {
+    let prefer_mirror = state.config.lock().unwrap().download_source != "official";
+    curseforge::file_link(&state.client, &project_id, &file_id, prefer_mirror)
+        .await
+        .map_err(err)
+}
+
+/// 取一批项目的中文名（CurseForge / Modrinth），失败时前端保持英文原名。
+#[tauri::command]
+pub async fn project_translations(
+    state: State<'_, AppState>,
+    source: String,
+    ids: Vec<String>,
+) -> CmdResult<std::collections::HashMap<String, translate::TranslatedProject>> {
+    if ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let source = if source == "modrinth" {
+        "modrinth"
+    } else {
+        "curseforge"
+    };
+    Ok(translate::batch(&state.client, source, &ids).await)
+}
+
 #[tauri::command]
 pub async fn cf_install_file(
     app: AppHandle,
@@ -1112,6 +1158,57 @@ pub fn create_offline_account(
     name: String,
 ) -> CmdResult<AccountView> {
     let mut account = auth::create_offline(&name).map_err(err)?;
+    if let Ok((path, model)) = skins::install_default(&account.id, &account.id) {
+        account.skin_path = Some(path.to_string_lossy().to_string());
+        account.skin_model = model;
+    }
+    {
+        let mut accounts = state.accounts.lock().unwrap();
+        accounts.retain(|a| a.id != account.id);
+        accounts.push(account.clone());
+        auth::save_accounts(&accounts).map_err(err)?;
+    }
+    {
+        let mut cfg = state.config.lock().unwrap();
+        cfg.selected_account = Some(account.id.clone());
+        config::save(&cfg).map_err(err)?;
+    }
+    Ok(AccountView::from(&account))
+}
+
+/// 读取第三方皮肤站元数据（设置页填地址后校验用）。
+#[tauri::command]
+pub async fn authlib_meta(
+    state: State<'_, AppState>,
+    root: String,
+) -> CmdResult<authlib::ServerMeta> {
+    authlib::meta(&state.client, &root).await.map_err(err)
+}
+
+/// LittleSkin 等第三方皮肤站登录：账号密码换 accessToken，并保存为 authlib 账号。
+#[tauri::command]
+pub async fn authlib_login(
+    state: State<'_, AppState>,
+    root: String,
+    username: String,
+    password: String,
+) -> CmdResult<AccountView> {
+    let login = authlib::authenticate(&state.client, &root, &username, &password)
+        .await
+        .map_err(err)?;
+    let mut account = Account {
+        id: format!("authlib-{}-{}", login.uuid, root.trim()),
+        kind: "authlib".into(),
+        name: login.name,
+        uuid: login.uuid,
+        access_token: login.access_token,
+        refresh_token: login.client_token,
+        expires_at: u64::MAX,
+        skin_path: None,
+        skin_model: "classic".into(),
+        authlib_url: Some(root.trim().trim_end_matches('/').to_string()),
+    };
+    // 复用离线皮肤的默认脸，避免列表里出现空白头像
     if let Ok((path, model)) = skins::install_default(&account.id, &account.id) {
         account.skin_path = Some(path.to_string_lossy().to_string());
         account.skin_model = model;
@@ -1478,6 +1575,53 @@ async fn resolve_account(app: &AppHandle, state: &AppState, cfg: &Config) -> Acc
         .unwrap_or_else(|| auth::create_offline("Steve").unwrap());
 
     let mut account: Account = selected;
+    if account.kind == "authlib" {
+        // 第三方皮肤站：先续期，再预热 authlib-injector
+        if let Some(root) = account.authlib_url.clone() {
+            match authlib::refresh(
+                &state.client,
+                &root,
+                &account.access_token,
+                &account.refresh_token,
+            )
+            .await
+            {
+                Ok(login) => {
+                    account.name = login.name;
+                    account.uuid = login.uuid;
+                    account.access_token = login.access_token;
+                    account.refresh_token = login.client_token;
+                    let mut list = state.accounts.lock().unwrap();
+                    if let Some(slot) = list.iter_mut().find(|a| a.id == account.id) {
+                        *slot = account.clone();
+                    }
+                    let _ = auth::save_accounts(&list);
+                }
+                Err(e) => {
+                    let _ = app.emit(
+                        "game-log",
+                        launch::LogLine {
+                            stream: "system".into(),
+                            line: format!(
+                                "第三方账号续期失败：{e}。若进服被踢，请到账号页重新登录。"
+                            ),
+                        },
+                    );
+                }
+            }
+        }
+        authlib::prepare(&state.client, &account).await;
+        if authlib::injector_path().is_none() {
+            let _ = app.emit(
+                "game-log",
+                launch::LogLine {
+                    stream: "system".into(),
+                    line: "未能下载 authlib-injector，第三方登录可能无法生效".into(),
+                },
+            );
+        }
+        return account;
+    }
     if account.kind == "microsoft" {
         match auth::refresh(&state.client, &account).await {
             Ok(refreshed) => {
@@ -1714,4 +1858,25 @@ pub fn import_background(path: String) -> CmdResult<BackgroundInfo> {
 #[tauri::command]
 pub fn background_data_url(path: String) -> CmdResult<String> {
     encode_background(std::path::Path::new(&path))
+}
+
+/// 从文件夹随机挑一张背景图，返回可直接编码的路径（PCL 式：每次启动换一张）。
+#[tauri::command]
+pub fn pick_background_random(dir: String) -> CmdResult<Option<String>> {
+    let entries = std::fs::read_dir(&dir)
+        .map_err(|e| format!("无法读取背景文件夹：{e}"))?;
+    let images: Vec<std::path::PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && image_mime(path).is_some())
+        .collect();
+    if images.is_empty() {
+        return Ok(None);
+    }
+    // 用当前纳秒对长度取模选图：足够随机且不引入额外依赖
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as usize ^ d.as_secs() as usize)
+        .unwrap_or(0);
+    Ok(Some(images[nanos % images.len()].to_string_lossy().to_string()))
 }

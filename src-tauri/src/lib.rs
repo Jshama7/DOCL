@@ -1,4 +1,5 @@
 mod auth;
+mod authlib;
 mod appupdate;
 mod commands;
 mod config;
@@ -17,6 +18,7 @@ mod lan;
 mod launch;
 mod mirror;
 mod modpack;
+mod modmeta;
 mod moddeps;
 mod modrinth;
 mod models;
@@ -27,6 +29,7 @@ mod server;
 mod skins;
 mod system;
 mod terracotta;
+mod translate;
 mod update;
 mod vibrancy;
 
@@ -122,6 +125,7 @@ pub fn run() {
             commands::instance_toggle_file,
             commands::instance_delete_file,
             commands::instance_thumb,
+            commands::instance_mod_meta,
             commands::instance_open_content,
             commands::instance_import_files,
             commands::drop_inspect,
@@ -145,6 +149,8 @@ pub fn run() {
             commands::modrinth_search,
             commands::modrinth_files,
             commands::content_projects,
+            commands::project_translations,
+            commands::cf_file_link,
             commands::cf_install_file,
             commands::default_skin,
             commands::default_skins,
@@ -168,6 +174,8 @@ pub fn run() {
             commands::account_capes,
             commands::cape_set_active,
             commands::ms_login_begin,
+            commands::authlib_meta,
+            commands::authlib_login,
             commands::detect_java,
             commands::install_java,
             commands::delete_java,
@@ -192,6 +200,7 @@ pub fn run() {
             commands::kill_game,
             commands::import_background,
             commands::background_data_url,
+            commands::pick_background_random,
         ])
         .build(tauri::generate_context!())
         .expect("构建启动器失败");

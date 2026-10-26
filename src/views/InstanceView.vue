@@ -11,6 +11,7 @@ import {
   type InstanceFile,
   type InstanceInfo,
   type InstanceMeta,
+  type InstanceModMeta,
   type InstancePaths,
   type ModUpdate,
   type ModUpdateReport,
@@ -542,12 +543,42 @@ async function loadFiles() {
   try {
     files.value = await api.instanceFiles(store.instanceId, contentKind.value);
     void loadThumbs();
+    void loadModMetas();
   } catch (err) {
     notify(`读取文件失败：${String(err)}`, "err");
     files.value = [];
   } finally {
     filesLoading.value = false;
   }
+}
+
+/// 已识别来源的模组：文件名（去 .disabled、小写）→ 项目信息
+const modMetas = ref<Record<string, InstanceModMeta>>({});
+
+async function loadModMetas() {
+  if (!store.instanceId || contentKind.value !== "mods") return;
+  const versionId = store.instanceId;
+  try {
+    const list = await api.instanceModMeta(versionId);
+    if (store.instanceId !== versionId) return;
+    const map: Record<string, InstanceModMeta> = {};
+    for (const item of list) {
+      map[item.file_name.toLowerCase()] = item;
+    }
+    modMetas.value = map;
+  } catch {
+    // 识别失败不影响模组列表
+  }
+}
+
+function modMetaOf(file: InstanceFile) {
+  if (contentKind.value !== "mods") return undefined;
+  return modMetas.value[file.name.replace(/\.disabled$/i, "").toLowerCase()];
+}
+
+function openModSource(file: InstanceFile) {
+  const meta = modMetaOf(file);
+  if (meta?.website_url) openExternal(meta.website_url);
 }
 
 const thumbs = reactive<Record<string, string>>({});
@@ -1603,7 +1634,20 @@ function launch() {
           </div>
           <div v-else class="file-list">
             <div v-for="file in filteredFiles" :key="file.name" class="file-row">
-              <span v-if="thumbOf(file)" class="file-row__thumb">
+              <span
+                v-if="modMetaOf(file)"
+                class="file-row__thumb file-row__thumb--mod"
+                :title="modMetaOf(file)?.name ?? ''"
+              >
+                <img
+                  v-if="modMetaOf(file)?.logo_url"
+                  :src="modMetaOf(file)?.logo_url"
+                  alt=""
+                  loading="lazy"
+                />
+                <AppIcon v-else name="package" :size="16" />
+              </span>
+              <span v-else-if="thumbOf(file)" class="file-row__thumb">
                 <img :src="thumbOf(file)" alt="" loading="lazy" />
               </span>
               <span v-else class="file-row__icon">
@@ -1616,9 +1660,23 @@ function launch() {
                 </span>
                 <span class="file-row__meta mono">
                   {{ file.is_dir && !file.size ? "文件夹" : formatBytes(file.size) }}
+                  <template v-if="modMetaOf(file)">
+                    · {{ modMetaOf(file)?.source === "modrinth" ? "Modrinth" : "CurseForge" }}
+                    <template v-if="modMetaOf(file)?.version_number">
+                      {{ modMetaOf(file)?.version_number }}
+                    </template>
+                  </template>
                   · {{ formatDate(new Date(file.modified * 1000).toISOString()) }}
                 </span>
               </div>
+              <IconButton
+                v-if="modMetaOf(file)?.website_url"
+                icon="external"
+                label="打开来源页面"
+                variant="ghost"
+                :size="30"
+                @click="openModSource(file)"
+              />
               <IconButton
                 v-if="tab === 'mods' || tab === 'resourcepacks' || tab === 'shaderpacks'"
                 :icon="file.enabled ? 'check' : 'close'"
@@ -2432,6 +2490,19 @@ function launch() {
   height: 100%;
   object-fit: cover;
   image-rendering: pixelated;
+}
+
+/* Mod 图标来自项目页，保持原色不做像素化放大 */
+.file-row__thumb--mod {
+  display: grid;
+  place-items: center;
+  color: var(--walnut);
+  background: var(--panel);
+}
+
+.file-row__thumb--mod img {
+  object-fit: contain;
+  image-rendering: auto;
 }
 
 .shot-grid {

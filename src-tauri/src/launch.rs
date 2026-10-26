@@ -235,10 +235,10 @@ pub fn build(
     vars.insert("auth_session", account.access_token.clone());
     vars.insert(
         "user_type",
-        if account.kind == "microsoft" {
-            "msa".into()
-        } else {
-            "legacy".into()
+        match account.kind.as_str() {
+            "microsoft" => "msa".into(),
+            "authlib" => "mojang".into(),
+            _ => "legacy".into(),
         },
     );
     vars.insert(
@@ -298,6 +298,12 @@ pub fn build(
     // Java 24 起 sun.misc.Unsafe 内存访问默认告警/拒绝，LWJGL 需要显式放行
     if !cfg.disable_lwjgl_unsafe && java.major >= 24 {
         combined_jvm.push("--sun-misc-unsafe-memory-access=allow".into());
+    }
+    // 第三方皮肤站（LittleSkin 等）：把认证端点指向该站点
+    if let (Some(root), Some(jar)) = (account.authlib_url.as_deref(), crate::authlib::injector_path()) {
+        combined_jvm.push(format!("-javaagent:{}={root}", jar.display()));
+        combined_jvm.push("-Dauthlibinjector.side=client".into());
+        combined_jvm.push("-Dauthlibinjector.noShowServerName".into());
     }
     combined_jvm.extend(jvm_args);
     for custom in split_args(&cfg.java_args) {

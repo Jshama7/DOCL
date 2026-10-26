@@ -629,8 +629,28 @@ async fn run_installer(
         }
     }
     if !output.status.success() {
+        // 安装器失败时只会打一行“There was an error…”，把原因带进错误信息方便排查
+        let hint = text
+            .lines()
+            .rev()
+            .map(str::trim)
+            .find(|line| {
+                let lower = line.to_lowercase();
+                lower.contains("error")
+                    || lower.contains("failed")
+                    || lower.contains("exception")
+                    || lower.contains("timeout")
+            })
+            .map(|line| line.chars().take(160).collect::<String>())
+            .unwrap_or_default();
+        if hint.is_empty() {
+            bail!(
+                "加载器安装器退出码：{}",
+                output.status.code().unwrap_or(-1)
+            );
+        }
         bail!(
-            "加载器安装器退出码：{}",
+            "加载器安装器退出码：{}（{hint}）",
             output.status.code().unwrap_or(-1)
         );
     }
@@ -790,24 +810,32 @@ async fn prepare_forge_like(
             "--installServer".to_string(),
             dir.to_string_lossy().to_string(),
         ];
-        if cfg.use_mirror() {
+        // BMCLAPI 的 maven 镜像没有 net.neoforged（实测 403），
+        // 给 NeoForge 安装器传 --mirror 只会让每个依赖先失败再回退，白等一轮。
+        let use_mirror = cfg.use_mirror() && info.loader == "forge";
+        if use_mirror {
             args.push("--mirror".into());
             args.push("https://bmclapi2.bangbang93.com/maven".into());
         }
-        if let Err(first) = run_installer(java, &installer, &args, dir, log).await {
-            // 旧版安装器（如 Forge 1.12）可能不认识 --mirror，去掉后重试一次
-            if cfg.use_mirror() {
-                if let Ok(mut lines) = log.lock() {
-                    lines.push_back("带镜像参数的安装失败，改用官方源重试…".into());
-                }
-                let retry = vec![
-                    "--installServer".to_string(),
-                    dir.to_string_lossy().to_string(),
-                ];
-                run_installer(java, &installer, &retry, dir, log).await?;
-            } else {
-                return Err(first);
+        let retry_args = vec![
+            "--installServer".to_string(),
+            dir.to_string_lossy().to_string(),
+        ];
+        let first = if use_mirror {
+            run_installer(java, &installer, &args, dir, log).await
+        } else {
+            run_installer(java, &installer, &retry_args, dir, log).await
+        };
+        if first.is_err() {
+            if let Ok(mut lines) = log.lock() {
+                lines.push_back(if use_mirror {
+                    "带镜像参数的安装失败，改用官方源重试…".into()
+                } else {
+                    "安装器失败，重试一次（已下载的依赖会跳过）…".into()
+                });
             }
+            // 换源 / 网络抖动都可能让安装器中断，重跑会跳过已下载的依赖
+            run_installer(java, &installer, &retry_args, dir, log).await?;
         }
     }
 
@@ -1231,6 +1259,10 @@ fn find_version(text: &str) -> Option<String> {
 fn java_major_for(game_version: &str) -> u32 {
     let mut parts = game_version.split('.');
     let major = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(1);
+    // 2026 年起版本号改为年份（26.1.2），官方清单要求 Java 25
+    if major >= 26 {
+        return 25;
+    }
     if major >= 21 {
         return 21;
     }
@@ -1328,23 +1360,88 @@ fn detect_pack_loader(dir: &Path) -> String {
     "vanilla".into()
 }
 
+/// 现代版本号（如 26.1.2）：首段 20~99。
+/// 注意 NeoForge 自身版本（21.1.66）也长这样，调用方需要先排除加载器文件名。
+fn find_modern_version(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    while index + 2 < bytes.len() {
+        if bytes[index].is_ascii_digit() && (index == 0 || !bytes[index - 1].is_ascii_digit()) {
+            let rest = &text[index..];
+            let mut end = 0usize;
+            let mut dots = 0usize;
+            for (offset, ch) in rest.char_indices() {
+                if ch.is_ascii_digit() {
+                    end = offset + ch.len_utf8();
+                } else if ch == '.' && dots < 2 {
+                    dots += 1;
+                    end = offset + 1;
+                } else {
+                    break;
+                }
+            }
+            let candidate = rest[..end].trim_end_matches('.');
+            let major = candidate
+                .split('.')
+                .next()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0);
+            if (20..=99).contains(&major) && candidate.len() >= 3 {
+                return Some(candidate.to_string());
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
 fn guess_pack_game_version(dir: &Path) -> String {
+    let files: Vec<String> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+
     // 根目录文件名（forge-1.12.2-14.23.5.2860.jar、paper-1.20.1-196.jar）
-    if let Ok(entries) = std::fs::read_dir(dir) {
+    for name in &files {
+        if let Some(value) = find_version(name) {
+            return value;
+        }
+    }
+    // 现代版本号（26.1.2）：跳过加载器文件，避免把 NeoForge 21.1.66 当成 MC 版本
+    for name in &files {
+        let lower = name.to_lowercase();
+        if lower.contains("forge") || lower.contains("fabric") || lower.contains("installer") {
+            continue;
+        }
+        if let Some(value) = find_modern_version(&lower) {
+            return value;
+        }
+    }
+    // libraries 下的加载器目录（minecraftforge/forge/1.12.2-14.23.5.2860）
+    if let Ok(entries) = std::fs::read_dir(dir.join("libraries").join("minecraftforge").join("forge"))
+    {
         for entry in entries.flatten() {
             if let Some(value) = find_version(&entry.file_name().to_string_lossy()) {
                 return value;
             }
         }
     }
-    // libraries 下的加载器目录（libraries/net/minecraftforge/forge/1.12.2-14.23.5.2860）
-    for group in ["minecraftforge/forge", "neoforged/neoforge"] {
-        let path = dir.join("libraries").join(group);
-        if let Ok(entries) = std::fs::read_dir(&path) {
-            for entry in entries.flatten() {
-                if let Some(value) = find_version(&entry.file_name().to_string_lossy()) {
-                    return value;
-                }
+    // NeoForge 目录名是加载器版本：21.1.66 → MC 1.21.1（新版本号规则不适用，交给调用方提示）
+    if let Ok(entries) = std::fs::read_dir(dir.join("libraries").join("neoforged").join("neoforge")) {
+        for entry in entries.flatten() {
+            let version = entry.file_name().to_string_lossy().to_string();
+            let mut parts = version.split('.');
+            let major = parts
+                .next()
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(0);
+            if (20..=25).contains(&major) {
+                let minor = parts.next().unwrap_or("0");
+                return format!("1.{major}.{minor}");
             }
         }
     }
@@ -1555,8 +1652,59 @@ fn extract_zip_into(archive: &str, dest: &Path) -> Result<()> {
     Ok(())
 }
 
+/// ServerPackCreator 生成的 manifest.json 带有精确版本信息，例如
+/// `{"minecraftVersion":"26.1.2","modloader":"NeoForge","modloaderVersion":"26.1.2.116"}`。
+/// 本地导入时文件元数据不可用，靠它才知道 26.x 这类新版本号。
+fn read_serverpack_manifest(dir: &Path) -> (String, String, String) {
+    let Ok(text) = std::fs::read_to_string(dir.join("manifest.json")) else {
+        return (String::new(), String::new(), String::new());
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return (String::new(), String::new(), String::new());
+    };
+    let game = json
+        .get("minecraftVersion")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let loader = match json
+        .get("modloader")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_lowercase()
+        .as_str()
+    {
+        "neoforge" => "neoforge",
+        "forge" => "forge",
+        "fabric" | "quilt" => "fabric",
+        _ => "",
+    };
+    // NeoForge 的 modloaderVersion 可能已含 MC 版本（26.1.2.116），也可能带 1.21.1- 前缀
+    let mut version = json
+        .get("modloaderVersion")
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if !game.is_empty() {
+        if let Some(rest) = version.strip_prefix(&format!("{game}-")) {
+            version = rest.to_string();
+        }
+    }
+    (game, loader.to_string(), version)
+}
+
 /// 导入服务端整合包：解压到 docl-servers/<slug>，记录启动所需的元信息。
-pub fn import_pack(cfg: &Config, archive: &str, name: &str, slug: &str) -> Result<ServerPack> {
+/// `hint_game` / `hint_loader` 来自源站文件元数据（在线下载时最准确），优先于包内推断。
+pub fn import_pack(
+    cfg: &Config,
+    archive: &str,
+    name: &str,
+    slug: &str,
+    hint_game: Option<&str>,
+    hint_loader: Option<&str>,
+) -> Result<ServerPack> {
     let stem = Path::new(archive)
         .file_stem()
         .map(|value| value.to_string_lossy().to_string())
@@ -1614,12 +1762,41 @@ pub fn import_pack(cfg: &Config, archive: &str, name: &str, slug: &str) -> Resul
             loader = inferred_loader;
         }
         loader_version = inferred_version;
-        if game_version.is_empty() || loader == "vanilla" {
-            bail!(
-                "没有找到服务端启动文件，也无法从 mods 推断游戏版本与加载器；\
-                 请确认这是服务端整合包，或先手动安装对应加载器的服务端"
-            );
-        }
+    }
+
+    // ServerPackCreator 的 manifest.json 最精确（本地导入也能拿到 26.x 与加载器版本）
+    let (manifest_game, manifest_loader, manifest_version) = read_serverpack_manifest(&root);
+    if !manifest_game.is_empty() {
+        game_version = manifest_game;
+    }
+    if !manifest_loader.is_empty() {
+        loader = manifest_loader;
+    }
+    if !manifest_version.is_empty() {
+        loader_version = manifest_version;
+    }
+
+    // 源站元数据优先（例如 26.1.2 这种新版本号无法从文件名稳定推断）
+    if let Some(value) = hint_game.map(str::trim).filter(|value| !value.is_empty()) {
+        game_version = value.to_string();
+    }
+    if let Some(value) = hint_loader
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+    {
+        loader = match value.as_str() {
+            "neoforge" => "neoforge".into(),
+            "forge" => "forge".into(),
+            "fabric" | "quilt" => "fabric".into(),
+            other => other.to_string(),
+        };
+    }
+
+    if !launch_ready && (game_version.is_empty() || loader == "vanilla") {
+        bail!(
+            "没有找到服务端启动文件，也无法从 mods 推断游戏版本与加载器；\
+             请确认这是服务端整合包，或先手动安装对应加载器的服务端"
+        );
     }
 
     let java_major = if game_version.is_empty() {
@@ -1791,6 +1968,32 @@ pub async fn start_pack(
 mod tests {
     use super::*;
 
+    /// 联网测试会写入真实的 server-packs.json，结束后恢复，避免污染本机服务端列表。
+    struct PacksGuard {
+        original: Option<Vec<u8>>,
+    }
+
+    impl PacksGuard {
+        fn new() -> Self {
+            Self {
+                original: std::fs::read(packs_path()).ok(),
+            }
+        }
+    }
+
+    impl Drop for PacksGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(bytes) => {
+                    let _ = std::fs::write(packs_path(), bytes);
+                }
+                None => {
+                    let _ = std::fs::remove_file(packs_path());
+                }
+            }
+        }
+    }
+
     #[test]
     fn merge_properties_and_escape_motd() {
         let dir = std::env::temp_dir().join(format!("docl-server-test-{}", std::process::id()));
@@ -1856,6 +2059,8 @@ mod tests {
         assert_eq!(java_major_for("1.20.4"), 17);
         assert_eq!(java_major_for("1.20.5"), 21);
         assert_eq!(java_major_for("1.21.1"), 21);
+        // 2026 年起改为年份版本号，官方清单要求 Java 25
+        assert_eq!(java_major_for("26.1.2"), 25);
 
         match detect_pack_launch(&dir) {
             Some(LaunchMode::Jar(path)) => {
@@ -1888,6 +2093,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn live_import_real_server_pack() {
+        let _guard = PacksGuard::new();
         let client = crate::http::client();
         // RLCraft（项目 285109）的配套服务端包
         let (url, file_name) = crate::curseforge::file_download(&client, 285109, 4612990, true)
@@ -1912,13 +2118,161 @@ mod tests {
         let mut cfg = crate::config::Config::default();
         cfg.game_dir = root.to_string_lossy().to_string();
 
-        let pack = import_pack(&cfg, &archive.to_string_lossy(), "RLCraft 服务端", "rlcraft-server")
-            .expect("导入服务端包失败");
+        let pack = import_pack(
+            &cfg,
+            &archive.to_string_lossy(),
+            "RLCraft 服务端",
+            "rlcraft-server",
+            None,
+            None,
+        )
+        .expect("导入服务端包失败");
         println!("{pack:?}");
         assert!(!pack.game_version.is_empty(), "未识别出游戏版本");
         assert_eq!(pack.loader, "forge");
         // RLCraft 的 server pack 只有 mods/config，需要开服时自动安装 Forge
         assert!(pack.needs_install, "应标记为需要安装服务端");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn reads_serverpackcreator_manifest() {
+        let dir = std::env::temp_dir().join(format!("docl-spc-manifest-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        std::fs::write(
+            dir.join("manifest.json"),
+            r#"{"minecraftVersion":"26.1.2","modloader":"NeoForge","modloaderVersion":"26.1.2.116"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_serverpack_manifest(&dir),
+            ("26.1.2".into(), "neoforge".into(), "26.1.2.116".into())
+        );
+
+        // 旧格式：modloaderVersion 带 MC 版本前缀
+        std::fs::write(
+            dir.join("manifest.json"),
+            r#"{"minecraftVersion":"1.20.1","modloader":"Forge","modloaderVersion":"1.20.1-47.2.0"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            read_serverpack_manifest(&dir),
+            ("1.20.1".into(), "forge".into(), "47.2.0".into())
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 联网实测：高版本（MC 26.1.2 / NeoForge）服务端整合包。
+    /// cargo test --lib server::tests::live_import_modern_server_pack -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_import_modern_server_pack() {
+        let _guard = PacksGuard::new();
+        let client = crate::http::client();
+        // BMC6（项目 1634429）的配套服务端包，manifest 记录 MC 26.1.2 / NeoForge
+        let (url, file_name) = crate::curseforge::file_download(&client, 1634429, 9167839, true)
+            .await
+            .expect("获取服务端包直链失败");
+        println!("下载 {file_name} <- {url}");
+        let bytes = crate::download::get_bytes(&client, &url, true)
+            .await
+            .expect("下载服务端包失败");
+        println!("大小 {} MB", bytes.len() / 1024 / 1024);
+        assert!(bytes.len() > 50 * 1024 * 1024);
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("docl-serverpack-modern-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join(&file_name);
+        std::fs::write(&archive, &bytes).unwrap();
+
+        let mut cfg = crate::config::Config::default();
+        cfg.game_dir = root.to_string_lossy().to_string();
+
+        // 本地导入场景：不给 hint，完全靠包内 manifest.json 推断
+        let pack = import_pack(
+            &cfg,
+            &archive.to_string_lossy(),
+            "BMC6 服务端",
+            "bmc6-server",
+            None,
+            None,
+        )
+        .expect("导入高版本服务端包失败");
+        println!("{pack:?}");
+
+        assert_eq!(pack.game_version, "26.1.2");
+        assert_eq!(pack.loader, "neoforge");
+        assert_eq!(pack.loader_version, "26.1.2.116");
+        assert_eq!(pack.java_major, 25);
+        // 该包只有 mods/config，需要开服时自动安装 NeoForge
+        assert!(pack.needs_install, "应标记为需要安装服务端");
+
+        // 高版本的加载器列表必须能查到（NeoForge 从 26.1.2 起版本号跟 MC 对齐）
+        let versions = crate::install::loader_versions(&client, &cfg, "26.1.2", "neoforge")
+            .await
+            .expect("查询 NeoForge 版本失败");
+        println!("NeoForge 版本数：{}", versions.len());
+        assert!(
+            versions.iter().any(|item| item.version.starts_with("26.1.2.")),
+            "没有查到适配 26.1.2 的 NeoForge"
+        );
+
+        // 有 Java 25 时把自动安装也跑完，确认能生成启动文件
+        let java = crate::java::detect(&cfg)
+            .into_iter()
+            .find(|info| info.major >= 25)
+            .map(|info| info.path)
+            .or_else(|| {
+                ["D:\\java25\\bin\\java.exe"]
+                    .into_iter()
+                    .find(|path| Path::new(path).exists())
+                    .map(str::to_string)
+            });
+        let Some(java) = java else {
+            println!("本机没有 Java 25，跳过自动安装");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        };
+        println!("使用 Java：{java}");
+
+        let log: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let installed = install_loader_server(
+            &client,
+            &cfg,
+            &java,
+            Path::new(&pack.dir),
+            &pack,
+            &log,
+        )
+        .await;
+        for line in log.lock().unwrap().iter() {
+            println!("[log] {line}");
+        }
+        if let Err(err) = installed {
+            // 安装器要从 maven.neoforged.net 拉依赖，部分网络下 DNS 会被污染，
+            // 这里不把外部网络问题当成代码回归。
+            println!("自动安装失败（外网依赖站不可达）：{err}");
+            let _ = std::fs::remove_dir_all(&root);
+            return;
+        }
+        assert!(
+            detect_pack_launch(Path::new(&pack.dir)).is_some(),
+            "安装后仍未找到启动文件"
+        );
+        assert!(
+            Path::new(&pack.dir)
+                .join("libraries/net/neoforged")
+                .is_dir(),
+            "缺少 NeoForge 依赖库"
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

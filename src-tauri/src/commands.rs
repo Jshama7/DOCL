@@ -1732,13 +1732,24 @@ pub async fn server_pack_import(
     path: String,
     name: String,
     slug: String,
+    game_version: Option<String>,
+    loader: Option<String>,
 ) -> CmdResult<server::ServerPack> {
     let cfg = state.config.lock().unwrap().clone();
     // 解压可能是几百 MB，放到阻塞线程池，避免卡住界面
-    tokio::task::spawn_blocking(move || server::import_pack(&cfg, &path, &name, &slug))
-        .await
-        .map_err(|e| format!("导入服务端包失败：{e}"))?
-        .map_err(err)
+    tokio::task::spawn_blocking(move || {
+        server::import_pack(
+            &cfg,
+            &path,
+            &name,
+            &slug,
+            game_version.as_deref(),
+            loader.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("导入服务端包失败：{e}"))?
+    .map_err(err)
 }
 
 #[tauri::command]

@@ -949,12 +949,28 @@ async function installPack(project: CfProject, file: CfFileView) {
   showImport.value = true;
 }
 
+/// 从源站文件元数据提取游戏版本与加载器，作为服务端包导入的提示
+function packHints(file: CfFileView) {
+  const mc = file.game_versions.find((value) => /^\d+\.\d+(\.\d+)?$/.test(value)) ?? "";
+  const lower = file.game_versions.map((value) => value.toLowerCase());
+  const loader = lower.includes("neoforge")
+    ? "neoforge"
+    : lower.includes("forge")
+      ? "forge"
+      : lower.includes("fabric")
+        ? "fabric"
+        : "";
+  return { mc, loader };
+}
+
 /// 下载服务端包并导入到服务端目录，成功后联机页可直接开服
 async function importServerArchive(
   url: string,
   fileName: string,
   title: string,
-  slug: string
+  slug: string,
+  gameVersion = "",
+  loader = ""
 ) {
   const path = await downloadModpack(url, fileName, title);
   if (!path) return;
@@ -962,7 +978,13 @@ async function importServerArchive(
   store.installingId = `服务端 · ${title}`;
   notify(`正在解压 ${title}…`);
   try {
-    const pack = await api.serverPackImport(path, title, slug);
+    const pack = await api.serverPackImport(
+      path,
+      title,
+      slug,
+      gameVersion || null,
+      loader || null
+    );
     notify(
       pack.needs_install
         ? `${pack.name} 已导入；首次开服会自动安装 ${pack.loader}（需下载依赖）`
@@ -982,11 +1004,14 @@ async function installServerPack(file: CfFileView) {
   inspecting.value = true;
   try {
     const link = await api.cfFileLink(project.id, fileId);
+    const hints = packHints(file);
     await importServerArchive(
       link.url,
       link.file_name,
       `${project.name} 服务端`,
-      `${project.slug || project.id}-server`
+      `${project.slug || project.id}-server`,
+      hints.mc,
+      hints.loader
     );
   } catch (err) {
     notify(`下载服务端失败：${String(err)}`, "err");
@@ -1001,11 +1026,14 @@ async function importServerFile(file: CfFileView) {
   const project = active.value;
   inspecting.value = true;
   try {
+    const hints = packHints(file);
     await importServerArchive(
       file.download_url,
       file.file_name,
       `${project.name} 服务端`,
-      `${project.slug || project.id}-server`
+      `${project.slug || project.id}-server`,
+      hints.mc,
+      hints.loader
     );
   } catch (err) {
     notify(`导入服务端失败：${String(err)}`, "err");
@@ -1021,7 +1049,13 @@ async function importLocalAsServer() {
   if (!preview || !path || store.installingId) return;
   store.installingId = `服务端 · ${preview.name}`;
   try {
-    const pack = await api.serverPackImport(path, preview.name, preview.suggested_id);
+    const pack = await api.serverPackImport(
+      path,
+      preview.name,
+      preview.suggested_id,
+      null,
+      null
+    );
     showImport.value = false;
     notify(
       pack.needs_install

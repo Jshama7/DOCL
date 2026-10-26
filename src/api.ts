@@ -895,8 +895,20 @@ export const api = {
   serverStatus: () => invoke<ServerSnapshot | null>("server_status"),
   serverStart: (versionId: string, options: ServerOptions) =>
     invoke<ServerSnapshot>("server_start", { versionId, options }),
-  serverPackImport: (path: string, name: string, slug: string) =>
-    invoke<ServerPack>("server_pack_import", { path, name, slug }),
+  serverPackImport: (
+    path: string,
+    name: string,
+    slug: string,
+    gameVersion?: string | null,
+    loader?: string | null
+  ) =>
+    invoke<ServerPack>("server_pack_import", {
+      path,
+      name,
+      slug,
+      gameVersion: gameVersion ?? null,
+      loader: loader ?? null,
+    }),
   serverPackRemove: (id: string) => invoke<void>("server_pack_remove", { id }),
   serverCommand: (command: string) => invoke<void>("server_command", { command }),
   serverStop: () => invoke<void>("server_stop"),

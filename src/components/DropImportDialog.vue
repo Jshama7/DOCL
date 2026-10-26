@@ -168,7 +168,9 @@ async function importServerPacks() {
         const result = await api.serverPackImport(
           pack.path,
           preview?.name || pack.file_name,
-          preview?.suggested_id || ""
+          preview?.suggested_id || "",
+          null,
+          null
         );
         done.push(result.name);
         if (result.needs_install) needsInstall = true;

@@ -250,10 +250,15 @@ pub async fn ensure_injector(client: &reqwest::Client) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(crate::config::data_dir())?;
 
-    let mut version = "1.2.5".to_string();
-    if let Ok(bytes) =
-        crate::download::get_bytes(client, "https://authlib-injector.yushi.moe/artifact/latest.json", false)
-            .await
+    let mut version = "1.2.8".to_string();
+    // latest.json 里 artifact 路径用的是 build_number，直接优先用它的 download_url
+    let mut candidates: Vec<String> = Vec::new();
+    if let Ok(bytes) = crate::download::get_bytes(
+        client,
+        "https://authlib-injector.yushi.moe/artifact/latest.json",
+        false,
+    )
+    .await
     {
         if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
             if let Some(value) = json.get("version").and_then(|value| value.as_str()) {
@@ -261,16 +266,24 @@ pub async fn ensure_injector(client: &reqwest::Client) -> Result<PathBuf> {
                     version = value.to_string();
                 }
             }
+            if let Some(url) = json.get("download_url").and_then(|value| value.as_str()) {
+                if url.starts_with("https://") {
+                    candidates.push(url.to_string());
+                }
+            }
+            if let Some(build) = json.get("build_number").and_then(|value| value.as_i64()) {
+                candidates.push(format!(
+                    "https://authlib-injector.yushi.moe/artifact/{build}/authlib-injector-{version}.jar"
+                ));
+            }
         }
     }
-
-    let candidates = [
-        format!("https://authlib-injector.yushi.moe/artifact/{version}/authlib-injector-{version}.jar"),
-        format!(
-            "https://github.com/yushijinhun/authlib-injector/releases/download/v{version}/authlib-injector-{version}.jar"
-        ),
+    candidates.push(format!(
+        "https://github.com/yushijinhun/authlib-injector/releases/download/v{version}/authlib-injector-{version}.jar"
+    ));
+    candidates.push(
         "https://authlib-injector.yushi.moe/artifact/latest/authlib-injector.jar".to_string(),
-    ];
+    );
     let mut last = String::new();
     for url in candidates {
         match crate::download::get_bytes(client, &url, false).await {

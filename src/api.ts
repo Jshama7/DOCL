@@ -49,6 +49,18 @@ export interface ServerVersionOption {
   game_version: string;
   java_major: number;
   loader: string;
+  /// 服务端整合包的显示名；普通版本为空
+  name: string;
+}
+
+export interface ServerPack {
+  id: string;
+  name: string;
+  dir: string;
+  game_version: string;
+  java_major: number;
+  loader: string;
+  imported_at: number;
 }
 
 export interface ServerOptions {
@@ -425,6 +437,8 @@ export interface PackPreview {
   suggested_id: string;
   /// 服务端安装时会跳过的仅客户端文件数
   server_skips: number;
+  /// 压缩包特征更像服务端整合包
+  server_like: boolean;
 }
 
 export interface ModpackImportOptions {
@@ -789,7 +803,7 @@ export const api = {
   contentProjects: (source: string, ids: string[]) =>
     invoke<CfProject[]>("content_projects", { source, ids }),
   projectTranslations: (source: string, ids: string[]) =>
-    invoke<Record<string, { name: string; summary: string }>>("project_translations", {
+    invoke<Record<string, { summary: string }>>("project_translations", {
       source,
       ids,
     }),
@@ -844,6 +858,9 @@ export const api = {
   serverStatus: () => invoke<ServerSnapshot | null>("server_status"),
   serverStart: (versionId: string, options: ServerOptions) =>
     invoke<ServerSnapshot>("server_start", { versionId, options }),
+  serverPackImport: (path: string, name: string, slug: string) =>
+    invoke<ServerPack>("server_pack_import", { path, name, slug }),
+  serverPackRemove: (id: string) => invoke<void>("server_pack_remove", { id }),
   serverCommand: (command: string) => invoke<void>("server_command", { command }),
   serverStop: () => invoke<void>("server_stop"),
   terracottaPrepare: () => invoke<TcStatus>("terracotta_prepare"),

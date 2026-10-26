@@ -1197,7 +1197,7 @@ pub async fn authlib_login(
         .await
         .map_err(err)?;
     let mut account = Account {
-        id: format!("authlib-{}-{}", login.uuid, root.trim()),
+        id: format!("authlib-{}", login.uuid),
         kind: "authlib".into(),
         name: login.name,
         uuid: login.uuid,
@@ -1694,12 +1694,42 @@ pub fn server_status() -> Option<server::ServerSnapshot> {
 }
 
 #[tauri::command]
+pub async fn server_pack_import(
+    state: State<'_, AppState>,
+    path: String,
+    name: String,
+    slug: String,
+) -> CmdResult<server::ServerPack> {
+    let cfg = state.config.lock().unwrap().clone();
+    // 解压可能是几百 MB，放到阻塞线程池，避免卡住界面
+    tokio::task::spawn_blocking(move || server::import_pack(&cfg, &path, &name, &slug))
+        .await
+        .map_err(|e| format!("导入服务端包失败：{e}"))?
+        .map_err(err)
+}
+
+#[tauri::command]
+pub fn server_pack_remove(state: State<'_, AppState>, id: String) -> CmdResult<()> {
+    let cfg = state.config.lock().unwrap().clone();
+    server::remove_pack(&cfg, &id).map_err(err)
+}
+
+#[tauri::command]
 pub async fn server_start(
     state: State<'_, AppState>,
     version_id: String,
     options: server::ServerOptions,
 ) -> CmdResult<server::ServerSnapshot> {
     let cfg = instance::apply(&state.config.lock().unwrap().clone(), &version_id);
+    // 服务端整合包按解压目录直接启动
+    if server::load_packs()
+        .iter()
+        .any(|pack| pack.id == version_id)
+    {
+        return server::start_pack(&cfg, &version_id, &options)
+            .await
+            .map_err(err);
+    }
     server::start(&state.client, &cfg, &version_id, &options)
         .await
         .map_err(err)
@@ -1868,7 +1898,14 @@ pub fn pick_background_random(dir: String) -> CmdResult<Option<String>> {
     let images: Vec<std::path::PathBuf> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| path.is_file() && image_mime(path).is_some())
+        .filter(|path| {
+            // 超过 24 MB 的图片编码会失败，直接排除，避免随机到它就变成空白背景
+            path.is_file()
+                && image_mime(path).is_some()
+                && std::fs::metadata(path)
+                    .map(|meta| meta.len() <= 24 * 1024 * 1024)
+                    .unwrap_or(false)
+        })
         .collect();
     if images.is_empty() {
         return Ok(None);

@@ -105,18 +105,26 @@ const loaderLabels: Record<string, string> = {
   forge: "Forge",
   neoforge: "NeoForge",
   quilt: "Quilt",
+  paper: "Paper",
 };
 
 const serverVersionOptions = computed(() =>
   serverVersions.value.map((item) => ({
     value: item.id,
-    label: `${item.game_version} · ${loaderLabels[item.loader] ?? item.loader} · Java ${item.java_major}`,
+    label: `${item.name ? `${item.name} · ` : ""}${item.game_version || "未知版本"} · ${
+      loaderLabels[item.loader] ?? item.loader
+    } · Java ${item.java_major}`,
   }))
 );
 
 const selectedServerLoader = computed(
   () => serverVersions.value.find((item) => item.id === serverVersionId.value)?.loader ?? "vanilla"
 );
+
+/// 服务端整合包显示导入时记录的名称，普通版本直接显示版本 ID
+function serverVersionLabel(id: string) {
+  return serverVersions.value.find((item) => item.id === id)?.name || id;
+}
 
 const serverUptime = computed(() => {
   if (!serverStatus.value) return "";
@@ -1123,7 +1131,7 @@ onBeforeUnmount(() => {
               </div>
             </div>
             <span class="muted small">
-              {{ serverStatus.version_id }} ·
+              {{ serverVersionLabel(serverStatus.version_id) }} ·
               {{ loaderLabels[serverStatus.loader] ?? serverStatus.loader }} ·
               {{ serverUptime }}
             </span>

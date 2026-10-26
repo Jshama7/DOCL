@@ -104,10 +104,18 @@ struct CfFingerprintItem {
     file: Option<CfFingerprintFile>,
 }
 
+#[derive(Deserialize, Default)]
+struct CfFingerprintData {
+    #[serde(default, rename = "exactMatches")]
+    exact_matches: Vec<CfFingerprintItem>,
+    #[serde(default, rename = "partialMatches")]
+    partial_matches: Vec<CfFingerprintItem>,
+}
+
 #[derive(Deserialize)]
 struct CfFingerprintResponse {
     #[serde(default)]
-    data: Vec<CfFingerprintItem>,
+    data: CfFingerprintData,
 }
 
 #[derive(Deserialize)]
@@ -158,6 +166,15 @@ pub async fn lookup(
         return Ok(Vec::new());
     }
 
+    // 按目录内容签名缓存：切换页面或启用/禁用文件后才重新扫描
+    let signature = dir_signature(&dir);
+    let cache_key = dir.to_string_lossy().to_string();
+    if let Some((cached, value)) = mod_cache().lock().unwrap().get(&cache_key) {
+        if *cached == signature {
+            return Ok(value.clone());
+        }
+    }
+
     // 本地文件 → (sha1, fingerprint)
     let mut local: Vec<(String, String, u32)> = Vec::new();
     for entry in std::fs::read_dir(&dir)?.flatten() {
@@ -200,41 +217,42 @@ pub async fn lookup(
             .filter(|id| !id.is_empty())
             .collect();
         if !ids.is_empty() {
-            if let Ok(projects) = post_json::<Vec<MrProject>>(
-                client,
-                &format!("{MR_BASE}/projects"),
-                &serde_json::json!({ "ids": ids }),
-            )
-            .await
-            {
-                let by_id: HashMap<String, MrProject> = projects
-                    .into_iter()
-                    .map(|project| (project.id.clone(), project))
-                    .collect();
-                for (file_name, sha1, _) in &local {
-                    let Some(version) = map.get(sha1) else {
-                        continue;
-                    };
-                    let Some(project) = by_id.get(&version.project_id) else {
-                        continue;
-                    };
-                    let key = base_name(file_name);
-                    result.insert(
-                        key.clone(),
-                        ModMeta {
-                            file_name: key,
-                            name: project.title.clone(),
-                            project_id: project.id.clone(),
-                            source: "modrinth".into(),
-                            logo_url: project.icon_url.clone().unwrap_or_default(),
-                            website_url: if project.slug.is_empty() {
-                                format!("https://modrinth.com/project/{}", project.id)
-                            } else {
-                                format!("https://modrinth.com/mod/{}", project.slug)
+            // Modrinth 的 /projects 只支持 GET + ids 查询参数，POST 会 404
+            if let Ok(mut url) = reqwest::Url::parse(&format!("{MR_BASE}/projects")) {
+                let ids_json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
+                url.query_pairs_mut().append_pair("ids", &ids_json);
+                if let Ok(projects) =
+                    crate::download::get_json::<Vec<MrProject>>(client, url.as_str(), false).await
+                {
+                    let by_id: HashMap<String, MrProject> = projects
+                        .into_iter()
+                        .map(|project| (project.id.clone(), project))
+                        .collect();
+                    for (file_name, sha1, _) in &local {
+                        let Some(version) = map.get(sha1) else {
+                            continue;
+                        };
+                        let Some(project) = by_id.get(&version.project_id) else {
+                            continue;
+                        };
+                        let key = base_name(file_name);
+                        result.insert(
+                            key.clone(),
+                            ModMeta {
+                                file_name: key,
+                                name: project.title.clone(),
+                                project_id: project.id.clone(),
+                                source: "modrinth".into(),
+                                logo_url: project.icon_url.clone().unwrap_or_default(),
+                                website_url: if project.slug.is_empty() {
+                                    format!("https://modrinth.com/project/{}", project.id)
+                                } else {
+                                    format!("https://modrinth.com/mod/{}", project.slug)
+                                },
+                                version_number: version.version_number.clone(),
                             },
-                            version_number: version.version_number.clone(),
-                        },
-                    );
+                        );
+                    }
                 }
             }
         }
@@ -254,7 +272,12 @@ pub async fn lookup(
             let body = serde_json::json!({ "fingerprints": fingerprints });
             match post_json::<CfFingerprintResponse>(client, &url, &body).await {
                 Ok(response) => {
-                    for item in response.data {
+                    for item in response
+                        .data
+                        .exact_matches
+                        .into_iter()
+                        .chain(response.data.partial_matches)
+                    {
                         let Some(file) = item.file else { continue };
                         if file.mod_id > 0 && !file.file_name.is_empty() {
                             matched.push((file.file_name, file.mod_id));
@@ -322,7 +345,38 @@ pub async fn lookup(
         }
     }
 
-    Ok(result.into_values().collect())
+    let values: Vec<ModMeta> = result.into_values().collect();
+    mod_cache()
+        .lock()
+        .unwrap()
+        .insert(cache_key, (signature, values.clone()));
+    Ok(values)
+}
+
+fn mod_cache() -> &'static std::sync::Mutex<HashMap<String, (u64, Vec<ModMeta>)>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, (u64, Vec<ModMeta>)>>> =
+        std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+}
+
+/// 目录内容签名：文件名 + 大小 + 修改时间，任一变化都会让缓存失效。
+fn dir_signature(dir: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            entry.file_name().to_string_lossy().hash(&mut hasher);
+            if let Ok(meta) = entry.metadata() {
+                meta.len().hash(&mut hasher);
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                        duration.as_secs().hash(&mut hasher);
+                    }
+                }
+            }
+        }
+    }
+    hasher.finish()
 }
 
 fn read_bytes(path: &Path) -> Result<Vec<u8>> {

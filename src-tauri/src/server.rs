@@ -22,6 +22,8 @@ pub struct ServerVersionOption {
     pub game_version: String,
     pub java_major: u32,
     pub loader: String,
+    /// 服务端整合包的显示名；普通版本为空
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -502,6 +504,20 @@ pub fn versions(cfg: &Config) -> Vec<ServerVersionOption> {
             game_version,
             java_major: merged.detail.required_java(),
             loader,
+            name: String::new(),
+        });
+    }
+    // 已导入的服务端整合包：直接从解压目录启动
+    for pack in load_packs() {
+        if !Path::new(&pack.dir).is_dir() {
+            continue;
+        }
+        result.push(ServerVersionOption {
+            id: pack.id,
+            game_version: pack.game_version,
+            java_major: pack.java_major,
+            loader: pack.loader,
+            name: pack.name,
         });
     }
     result
@@ -860,14 +876,40 @@ pub async fn start(
         other => bail!("{other} 服务端暂未支持"),
     };
 
+    spawn_server(
+        cfg,
+        &dir,
+        &java,
+        &mode,
+        options,
+        version_id,
+        &game_version,
+        &loader,
+        log,
+    )
+}
+
+/// 真正拉起服务端进程：写 eula / server.properties、启动 Java、接管日志与状态。
+#[allow(clippy::too_many_arguments)]
+fn spawn_server(
+    cfg: &Config,
+    dir: &Path,
+    java: &crate::java::JavaInfo,
+    mode: &LaunchMode,
+    options: &ServerOptions,
+    version_id: &str,
+    game_version: &str,
+    loader: &str,
+    log: Arc<Mutex<VecDeque<String>>>,
+) -> Result<ServerSnapshot> {
     std::fs::write(dir.join("eula.txt"), "eula=true\n")?;
     let port = pick_port(options.port);
-    update_properties(&dir, options, port)?;
+    update_properties(dir, options, port)?;
 
     let memory = launch::effective_memory_mb(cfg);
     let mut command = Command::new(&java.path);
     command
-        .current_dir(&dir)
+        .current_dir(dir)
         .arg(format!("-Xmx{memory}M"))
         .arg(format!("-Xms{}M", (memory / 2).clamp(256, 2048)))
         .arg("-XX:+UseG1GC")
@@ -881,12 +923,12 @@ pub async fn start(
     }
     match &mode {
         LaunchMode::Jar(path) => {
-            let relative = path.strip_prefix(&dir).unwrap_or(path);
+            let relative = path.strip_prefix(dir).unwrap_or(path);
             command.arg("-jar").arg(relative).arg("nogui");
         }
         LaunchMode::Args(files) => {
             for file in files {
-                let relative = file.strip_prefix(&dir).unwrap_or(file);
+                let relative = file.strip_prefix(dir).unwrap_or(file);
                 command.arg(format!("@{}", relative.display()));
             }
             command.arg("nogui");
@@ -949,23 +991,23 @@ pub async fn start(
 
     let runtime = ServerRuntime {
         version_id: version_id.to_string(),
-        game_version,
+        game_version: game_version.to_string(),
         pid,
         port,
         lan_address: format!("{}:{port}", lan_ip()),
         local_address: format!("127.0.0.1:{port}"),
         started_at: now_secs(),
-        dir: dir.clone(),
-        java: java.path,
+        dir: dir.to_path_buf(),
+        java: java.path.clone(),
         log,
         stdin: stdin_slot,
         online,
         alive,
         attached: false,
-        loader,
+        loader: loader.to_string(),
     };
     let snapshot = runtime.snapshot();
-    save_persisted(&snapshot, &dir)?;
+    save_persisted(&snapshot, dir)?;
     *slot().lock().unwrap() = Some(runtime);
     Ok(snapshot)
 }
@@ -1075,6 +1117,366 @@ pub fn stop() -> Result<()> {
     }
 }
 
+/* ---------- 服务端整合包：解压到独立目录后直接启动 ---------- */
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerPack {
+    /// 形如 pack:<slug>，与已安装版本 ID 区分
+    pub id: String,
+    pub name: String,
+    pub dir: String,
+    pub game_version: String,
+    pub java_major: u32,
+    pub loader: String,
+    pub imported_at: u64,
+}
+
+fn packs_path() -> PathBuf {
+    crate::config::data_dir().join("server-packs.json")
+}
+
+pub fn load_packs() -> Vec<ServerPack> {
+    std::fs::read(packs_path())
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default()
+}
+
+fn save_packs(packs: &[ServerPack]) -> Result<()> {
+    std::fs::create_dir_all(crate::config::data_dir())?;
+    std::fs::write(packs_path(), serde_json::to_vec_pretty(packs)?)?;
+    Ok(())
+}
+
+fn pack_slug(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if ch == '-' || ch == '_' {
+            out.push(ch);
+        } else if ch.is_whitespace() || ch == '.' {
+            out.push('-');
+        }
+    }
+    let trimmed = out.trim_matches('-').to_string();
+    if trimmed.is_empty() {
+        format!("pack-{}", now_secs())
+    } else {
+        trimmed.chars().take(40).collect()
+    }
+}
+
+/// 从文件名里找形如 1.12.2 / 1.21 的 Minecraft 版本。
+fn find_version(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i + 2 < bytes.len() {
+        if bytes[i] == b'1' && bytes[i + 1] == b'.' && (i == 0 || !bytes[i - 1].is_ascii_digit()) {
+            let rest = &text[i..];
+            let mut end = 0usize;
+            let mut dots = 0usize;
+            for (offset, ch) in rest.char_indices() {
+                if ch.is_ascii_digit() {
+                    end = offset + ch.len_utf8();
+                } else if ch == '.' && dots < 2 {
+                    dots += 1;
+                    end = offset + 1;
+                } else {
+                    break;
+                }
+            }
+            let candidate = rest[..end].trim_end_matches('.');
+            if candidate.len() >= 3 {
+                return Some(candidate.to_string());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+fn java_major_for(game_version: &str) -> u32 {
+    let mut parts = game_version.split('.');
+    let major = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(1);
+    if major >= 21 {
+        return 21;
+    }
+    if major != 1 {
+        return 17;
+    }
+    let minor = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
+    let patch = parts.next().and_then(|value| value.parse::<u32>().ok()).unwrap_or(0);
+    if minor >= 21 || (minor == 20 && patch >= 5) {
+        21
+    } else if minor >= 18 {
+        17
+    } else if minor == 17 {
+        16
+    } else {
+        8
+    }
+}
+
+fn detect_pack_launch(dir: &Path) -> Option<LaunchMode> {
+    // 1) Forge / NeoForge 1.17+ 的 @win_args.txt 方式
+    if let Some(win_args) = find_win_args(dir) {
+        let mut files = Vec::new();
+        let user_args = dir.join("user_jvm_args.txt");
+        if user_args.exists() {
+            files.push(user_args);
+        }
+        files.push(win_args);
+        return Some(LaunchMode::Args(files));
+    }
+    // 2) 根目录的各个 jar，按常见优先级挑一个
+    let mut jars: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_file() {
+                return None;
+            }
+            let name = entry.file_name().to_string_lossy().to_lowercase();
+            if !name.ends_with(".jar") || name.contains("installer") || name.starts_with("minecraft_server")
+            {
+                return None;
+            }
+            Some((name, path))
+        })
+        .collect();
+    let prefer = [
+        "fabric-server",
+        "forge-",
+        "neoforge-",
+        "paper-",
+        "purpur-",
+        "spigot-",
+        "server.jar",
+    ];
+    for key in prefer {
+        if let Some((_, path)) = jars.iter().find(|(name, _)| name.starts_with(key)) {
+            return Some(LaunchMode::Jar(path.clone()));
+        }
+    }
+    jars.sort_by(|a, b| a.0.cmp(&b.0));
+    jars.into_iter().next().map(|(_, path)| LaunchMode::Jar(path))
+}
+
+fn detect_pack_loader(dir: &Path) -> String {
+    let has = |needle: &str| -> bool {
+        std::fs::read_dir(dir)
+            .map(|entries| {
+                entries.flatten().any(|entry| {
+                    entry
+                        .file_name()
+                        .to_string_lossy()
+                        .to_lowercase()
+                        .contains(needle)
+                })
+            })
+            .unwrap_or(false)
+    };
+    if has("fabric-server") {
+        return "fabric".into();
+    }
+    if dir.join("libraries").join("net").join("neoforged").is_dir() {
+        return "neoforge".into();
+    }
+    if dir.join("libraries").join("net").join("minecraftforge").is_dir() || has("forge-") {
+        return "forge".into();
+    }
+    if dir.join("libraries").join("net").join("fabricmc").is_dir() {
+        return "fabric".into();
+    }
+    if has("paper-") || has("purpur-") || has("spigot-") {
+        return "paper".into();
+    }
+    "vanilla".into()
+}
+
+fn guess_pack_game_version(dir: &Path) -> String {
+    // 根目录文件名（forge-1.12.2-14.23.5.2860.jar、paper-1.20.1-196.jar）
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            if let Some(value) = find_version(&entry.file_name().to_string_lossy()) {
+                return value;
+            }
+        }
+    }
+    // libraries 下的加载器目录（libraries/net/minecraftforge/forge/1.12.2-14.23.5.2860）
+    for group in ["minecraftforge/forge", "neoforged/neoforge"] {
+        let path = dir.join("libraries").join(group);
+        if let Ok(entries) = std::fs::read_dir(&path) {
+            for entry in entries.flatten() {
+                if let Some(value) = find_version(&entry.file_name().to_string_lossy()) {
+                    return value;
+                }
+            }
+        }
+    }
+    String::new()
+}
+
+fn extract_zip_into(archive: &str, dest: &Path) -> Result<()> {
+    let file = std::fs::File::open(archive).with_context(|| format!("无法打开压缩包：{archive}"))?;
+    let mut zip = zip::ZipArchive::new(file).context("压缩包损坏或格式不支持")?;
+    std::fs::create_dir_all(dest)?;
+    for index in 0..zip.len() {
+        let mut entry = zip.by_index(index)?;
+        let Some(relative) = entry.enclosed_name() else {
+            continue;
+        };
+        let target = dest.join(relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&target)?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let mut out = std::fs::File::create(&target)?;
+        std::io::copy(&mut entry, &mut out)?;
+    }
+    Ok(())
+}
+
+/// 导入服务端整合包：解压到 docl-servers/<slug>，记录启动所需的元信息。
+pub fn import_pack(cfg: &Config, archive: &str, name: &str, slug: &str) -> Result<ServerPack> {
+    let stem = Path::new(archive)
+        .file_stem()
+        .map(|value| value.to_string_lossy().to_string())
+        .unwrap_or_else(|| "server-pack".into());
+    let display = if name.trim().is_empty() {
+        stem.clone()
+    } else {
+        name.trim().to_string()
+    };
+    let hint = if slug.trim().is_empty() { display.clone() } else { slug.trim().to_string() };
+    let id = format!("pack:{}", pack_slug(&hint));
+    let dir = server_dir(cfg, &id.trim_start_matches("pack:"));
+
+    // 重复导入时覆盖旧目录，保证与服务端包版本一致
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir).with_context(|| format!("无法清理旧目录：{}", dir.display()))?;
+    }
+    extract_zip_into(archive, &dir)?;
+
+    // 有些包外面多套一层目录，进入该目录
+    let mut root = dir.clone();
+    if detect_pack_launch(&root).is_none() {
+        if let Ok(entries) = std::fs::read_dir(&root) {
+            let children: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.is_dir()
+                        && path
+                            .file_name()
+                            .map(|name| {
+                                let name = name.to_string_lossy();
+                                name != "libraries" && name != "mods"
+                            })
+                            .unwrap_or(false)
+                })
+                .collect();
+            if children.len() == 1 && detect_pack_launch(&children[0]).is_some() {
+                root = children[0].clone();
+            }
+        }
+    }
+
+    if detect_pack_launch(&root).is_none() {
+        bail!("没有找到服务端启动文件（server.jar / fabric-server-launch.jar / Forge win_args.txt）");
+    }
+
+    let game_version = guess_pack_game_version(&root);
+    let loader = detect_pack_loader(&root);
+    let java_major = if game_version.is_empty() {
+        17
+    } else {
+        java_major_for(&game_version)
+    };
+
+    let pack = ServerPack {
+        id,
+        name: display,
+        dir: root.to_string_lossy().to_string(),
+        game_version,
+        java_major,
+        loader,
+        imported_at: now_secs(),
+    };
+    let mut packs = load_packs();
+    packs.retain(|item| item.id != pack.id);
+    packs.push(pack.clone());
+    save_packs(&packs)?;
+    Ok(pack)
+}
+
+pub fn remove_pack(cfg: &Config, id: &str) -> Result<()> {
+    let mut packs = load_packs();
+    if let Some(pack) = packs.iter().find(|item| item.id == id).cloned() {
+        if let Ok(root) = std::fs::canonicalize(&pack.dir) {
+            // 只允许删除 docl-servers 内的目录
+            if let Ok(base) = std::fs::canonicalize(cfg.game_root().join("docl-servers")) {
+                if root.starts_with(base) {
+                    let _ = std::fs::remove_dir_all(&root);
+                }
+            }
+        }
+    }
+    packs.retain(|item| item.id != id);
+    save_packs(&packs)?;
+    Ok(())
+}
+
+pub async fn start_pack(
+    cfg: &Config,
+    id: &str,
+    options: &ServerOptions,
+) -> Result<ServerSnapshot> {
+    if !options.accept_eula {
+        bail!("需要先阅读并同意 Minecraft EULA");
+    }
+    if status().is_some() {
+        bail!("已经有一个本地服务端在运行");
+    }
+    let pack = load_packs()
+        .into_iter()
+        .find(|item| item.id == id)
+        .ok_or_else(|| anyhow!("服务端整合包不存在，请重新导入"))?;
+    let dir = PathBuf::from(&pack.dir);
+    if !dir.is_dir() {
+        bail!("服务端目录不存在：{}", pack.dir);
+    }
+    let mode = detect_pack_launch(&dir)
+        .ok_or_else(|| anyhow!("没有找到可用的服务端启动文件"))?;
+    let java = launch::find_java(cfg, pack.java_major)?;
+
+    let log: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+    {
+        let mut lines = log.lock().unwrap();
+        lines.push_back(format!("服务端整合包：{}", pack.name));
+        if !pack.game_version.is_empty() {
+            lines.push_back(format!("游戏版本：{}", pack.game_version));
+        }
+        lines.push_back(format!("加载器：{}", pack.loader));
+    }
+    spawn_server(
+        cfg,
+        &dir,
+        &java,
+        &mode,
+        options,
+        id,
+        &pack.game_version,
+        &pack.loader,
+        log,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1120,6 +1522,55 @@ mod tests {
     fn ports_are_picked_in_range() {
         let port = pick_port(0);
         assert!(port >= 25565);
+    }
+
+    #[test]
+    fn detect_pack_launch_and_versions() {
+        let dir = std::env::temp_dir().join(format!("docl-pack-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("forge-1.12.2-14.23.5.2860.jar"), b"x").unwrap();
+
+        assert_eq!(
+            find_version("forge-1.12.2-14.23.5.2860.jar").as_deref(),
+            Some("1.12.2")
+        );
+        assert_eq!(find_version("paper-1.20.1-196.jar").as_deref(), Some("1.20.1"));
+        assert_eq!(
+            find_version("minecraft_server.1.21.jar").as_deref(),
+            Some("1.21")
+        );
+        assert_eq!(java_major_for("1.12.2"), 8);
+        assert_eq!(java_major_for("1.16.5"), 8);
+        assert_eq!(java_major_for("1.17.1"), 16);
+        assert_eq!(java_major_for("1.20.4"), 17);
+        assert_eq!(java_major_for("1.20.5"), 21);
+        assert_eq!(java_major_for("1.21.1"), 21);
+
+        match detect_pack_launch(&dir) {
+            Some(LaunchMode::Jar(path)) => {
+                assert!(path.ends_with("forge-1.12.2-14.23.5.2860.jar"))
+            }
+            _ => panic!("未识别到 forge 服务端 jar"),
+        }
+
+        std::fs::write(dir.join("fabric-server-launch.jar"), b"x").unwrap();
+        match detect_pack_launch(&dir) {
+            Some(LaunchMode::Jar(path)) => {
+                assert!(path.to_string_lossy().contains("fabric-server-launch"))
+            }
+            _ => panic!("fabric 服务端 jar 未优先"),
+        }
+
+        let args_dir = dir.join("libraries/net/minecraftforge/forge/1.20.1-47.2.0");
+        std::fs::create_dir_all(&args_dir).unwrap();
+        std::fs::write(args_dir.join("win_args.txt"), b"").unwrap();
+        assert!(matches!(
+            detect_pack_launch(&dir),
+            Some(LaunchMode::Args(_))
+        ));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

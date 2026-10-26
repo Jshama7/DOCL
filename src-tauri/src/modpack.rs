@@ -41,6 +41,8 @@ pub struct PackPreview {
     pub suggested_id: String,
     /// 服务端安装时会跳过的仅客户端文件数（Modrinth env.server）
     pub server_skips: u32,
+    /// 压缩包特征更像服务端整合包（libraries/server.properties，且没有客户端 versions）
+    pub server_like: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -300,6 +302,7 @@ fn parse_pack(path: &str, server: bool) -> Result<ParsedPack> {
                 warnings,
                 suggested_id,
                 server_skips: 0,
+                server_like: false,
             },
             source: SourceData::Curse {
                 game_version: manifest.minecraft.version,
@@ -409,6 +412,7 @@ fn parse_pack(path: &str, server: bool) -> Result<ParsedPack> {
                 warnings,
                 suggested_id,
                 server_skips,
+                server_like: false,
             },
             source: SourceData::Modrinth {
                 game_version,
@@ -455,6 +459,7 @@ fn parse_pack(path: &str, server: bool) -> Result<ParsedPack> {
     }
     let warnings = vec!["通用压缩包没有加载器信息，需要选择父版本".to_string()];
     let display_name = zip_name;
+    let server_like = looks_like_server(&names, &prefix);
     Ok(ParsedPack {
         preview: PackPreview {
             format: "generic".into(),
@@ -471,6 +476,7 @@ fn parse_pack(path: &str, server: bool) -> Result<ParsedPack> {
             warnings,
             suggested_id: slugify(&display_name),
             server_skips: 0,
+            server_like,
         },
         source: SourceData::Generic {
             prefix,
@@ -527,6 +533,39 @@ pub fn temp_remove(path: &str) -> Result<()> {
         std::fs::remove_file(&target)?;
     }
     Ok(())
+}
+
+/// 判断通用压缩包是否更像服务端整合包：客户端整合包不会带 libraries/，
+/// 服务端包通常有 libraries、server.properties、eula.txt 或启动脚本。
+fn looks_like_server(names: &[String], prefix: &str) -> bool {
+    let mut has_libraries = false;
+    let mut has_versions = false;
+    let mut has_server_marker = false;
+    for name in names {
+        let rel = name.strip_prefix(prefix).unwrap_or(name).to_lowercase();
+        if rel.starts_with("libraries/") {
+            has_libraries = true;
+        }
+        if rel.starts_with("versions/") {
+            has_versions = true;
+        }
+        if matches!(
+            rel.as_str(),
+            "server.properties"
+                | "eula.txt"
+                | "start.sh"
+                | "start.bat"
+                | "run.sh"
+                | "run.bat"
+                | "user_jvm_args.txt"
+        ) {
+            has_server_marker = true;
+        }
+    }
+    if has_versions {
+        return false;
+    }
+    has_libraries || has_server_marker
 }
 
 fn generic_prefix(names: &[String]) -> String {

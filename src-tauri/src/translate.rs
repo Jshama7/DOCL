@@ -1,7 +1,8 @@
-//! 项目中文名：借助 MCIM 的翻译接口，把 CurseForge / Modrinth 的英文名补成中文。
+//! 项目中文文案：借助 MCIM 的翻译接口补充中文简介。
 //!
-//! PCL 内置 MC 百科数据库离线匹配；这里改用在线接口，结果带内存缓存，
-//! 取不到就保持原名，不影响列表展示。
+//! 说明：PCL 的「少数模组有中文名」来自它内置的 MC 百科离线数据库；
+//! 该在线接口只翻译项目简介（`translated`），不提供中文项目名，
+//! 因此这里只补简介，名称仍用源站原文。
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -10,7 +11,7 @@ use std::time::Duration;
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct TranslatedProject {
-    pub name: String,
+    /// 中文简介
     pub summary: String,
 }
 
@@ -87,25 +88,14 @@ async fn fetch(
         return None;
     }
     let value: serde_json::Value = resp.json().await.ok()?;
-    let name = extract(&value, &["translated_name", "translatedName", "name", "title"])?;
-    let summary = extract(
-        &value,
-        &[
-            "translated_summary",
-            "translatedSummary",
-            "summary",
-            "description",
-        ],
-    )
-    .unwrap_or_default();
-    let name = name.trim().to_string();
-    if name.is_empty() {
+    // 实际返回：{"modid":238222,"translated":"查看物品和配方","original":"View Items and Recipes"}
+    // translated 是简介（summary）的中文，不是项目名
+    let summary = extract(&value, &["translated"])?;
+    let summary = summary.trim().to_string();
+    if summary.is_empty() {
         return None;
     }
-    Some(TranslatedProject {
-        name,
-        summary: summary.trim().to_string(),
-    })
+    Some(TranslatedProject { summary })
 }
 
 fn extract(value: &serde_json::Value, keys: &[&str]) -> Option<String> {

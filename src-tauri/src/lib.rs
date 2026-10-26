@@ -186,6 +186,8 @@ pub fn run() {
             commands::server_versions,
             commands::server_status,
             commands::server_start,
+            commands::server_pack_import,
+            commands::server_pack_remove,
             commands::server_command,
             commands::server_stop,
             commands::terracotta_prepare,

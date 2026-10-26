@@ -546,11 +546,12 @@ async function search(reset = true) {
   loading.value = false;
 }
 
-/// 项目中文名（PCL 内置百科式的中文名，这里用在线接口补）
-const zhNames = ref<Record<string, { name: string; summary: string }>>({});
+/// 项目中文简介（PCL 式的中文名来自它内置的百科库，在线接口只能补简介）
+const zhNames = ref<Record<string, { summary: string }>>({});
 
+/// 项目名仍用源站原文；保留函数方便以后接入百科名称映射
 function displayName(project: CfProject) {
-  return zhNames.value[`${project.source}-${project.id}`]?.name || project.name;
+  return project.name;
 }
 
 function displaySummary(project: CfProject) {
@@ -608,7 +609,7 @@ async function loadTranslations(list: CfProject[]) {
       const map = await api.projectTranslations(source, ids);
       const next = { ...zhNames.value };
       for (const [id, value] of Object.entries(map)) {
-        if (value.name) next[`${source}-${id}`] = value;
+        if (value.summary) next[`${source}-${id}`] = value;
       }
       zhNames.value = next;
     } catch {
@@ -918,33 +919,81 @@ async function installPack(project: CfProject, file: CfFileView) {
   showImport.value = true;
 }
 
-/// 一键下载配套服务端包：先取直链，再走服务端安装表单
+/// 下载服务端包并导入到服务端目录，成功后联机页可直接开服
+async function importServerArchive(
+  url: string,
+  fileName: string,
+  title: string,
+  slug: string
+) {
+  const path = await downloadModpack(url, fileName, title);
+  if (!path) return;
+  // 解压可能耗时，占用安装标记避免并发任务冲突
+  store.installingId = `服务端 · ${title}`;
+  notify(`正在解压 ${title}…`);
+  try {
+    const pack = await api.serverPackImport(path, title, slug);
+    notify(`${pack.name} 已就绪，可在联机页一键开服`);
+  } finally {
+    store.installingId = null;
+    api.modpackTempRemove(path).catch(() => {});
+  }
+}
+
+/// 一键下载配套服务端包（客户端包 → 指向的服务端包）
 async function installServerPack(file: CfFileView) {
   const fileId = file.server_pack_file_id;
   if (!active.value || !fileId || inspecting.value || store.installingId) return;
+  const project = active.value;
   inspecting.value = true;
   try {
-    const link = await api.cfFileLink(active.value.id, fileId);
-    const project = active.value;
-    pendingPack.value = {
-      url: link.url,
-      fileName: link.file_name,
-      title: `${project.name} 服务端`,
-      name: `${project.name} 服务端`,
-      suggestedId: `${project.slug || project.id}-server`,
-      sourceLabel: "CurseForge 服务端整合包",
-    };
-    importForm.name = `${project.name} 服务端`;
-    importForm.id = `${project.slug || project.id}-server`;
-    importForm.loaderVersion = "";
-    importForm.parentVersion = "";
-    importForm.optional = false;
-    importForm.server = true;
-    showImport.value = true;
+    const link = await api.cfFileLink(project.id, fileId);
+    await importServerArchive(
+      link.url,
+      link.file_name,
+      `${project.name} 服务端`,
+      `${project.slug || project.id}-server`
+    );
   } catch (err) {
-    notify(`获取服务端包失败：${String(err)}`, "err");
+    notify(`下载服务端失败：${String(err)}`, "err");
   } finally {
     inspecting.value = false;
+  }
+}
+
+/// 文件本身就是服务端包（作者单独上传）
+async function importServerFile(file: CfFileView) {
+  if (!active.value || !file.download_url || inspecting.value || store.installingId) return;
+  const project = active.value;
+  inspecting.value = true;
+  try {
+    await importServerArchive(
+      file.download_url,
+      file.file_name,
+      `${project.name} 服务端`,
+      `${project.slug || project.id}-server`
+    );
+  } catch (err) {
+    notify(`导入服务端失败：${String(err)}`, "err");
+  } finally {
+    inspecting.value = false;
+  }
+}
+
+/// 本地服务端整合包：直接解压到服务端目录
+async function importLocalAsServer() {
+  const preview = packPreview.value;
+  const path = packPath.value;
+  if (!preview || !path || store.installingId) return;
+  store.installingId = `服务端 · ${preview.name}`;
+  try {
+    const pack = await api.serverPackImport(path, preview.name, preview.suggested_id);
+    showImport.value = false;
+    notify(`${pack.name} 已就绪，可在联机页一键开服`);
+  } catch (err) {
+    notify(`导入服务端失败：${String(err)}`, "err");
+  } finally {
+    store.installingId = null;
   }
 }
 
@@ -1171,7 +1220,16 @@ async function confirmImport() {
             </span>
             <span v-if="file.is_server_pack" class="tag tag--grass">服务端</span>
             <button
-              v-if="kind === 'modpacks' && file.server_pack_file_id"
+              v-if="kind === 'modpacks' && file.is_server_pack && file.download_url"
+              class="cf-file__deps"
+              title="解压到服务端目录，可在联机页开服"
+              :disabled="inspecting || !!store.installingId"
+              @click="importServerFile(file)"
+            >
+              导入服务端
+            </button>
+            <button
+              v-else-if="kind === 'modpacks' && file.server_pack_file_id"
               class="cf-file__deps"
               title="下载该整合包配套的服务端包"
               :disabled="inspecting || !!store.installingId"
@@ -1191,7 +1249,7 @@ async function confirmImport() {
             <span class="cf-file__size mono">{{ formatBytes(file.size) }}</span>
             <span class="cf-file__date mono">{{ formatDate(file.file_date) }}</span>
             <IconButton
-              v-if="file.download_url && kind === 'modpacks'"
+              v-if="file.download_url && kind === 'modpacks' && !file.is_server_pack"
               icon="download"
               :label="`安装 ${file.name}`"
               variant="soft"
@@ -1296,12 +1354,6 @@ async function confirmImport() {
           <div class="cf-row__body">
             <div class="cf-row__title">
               <strong class="cf-row__name">{{ displayName(project) }}</strong>
-              <span
-                v-if="displayName(project) !== project.name"
-                class="cf-row__origin muted small"
-              >
-                {{ project.name }}
-              </span>
               <span class="cf-row__source">{{ sourceLabel(project.source) }}</span>
               <span
                 v-for="category in project.categories.slice(0, 2)"
@@ -1445,6 +1497,23 @@ async function confirmImport() {
               <ul v-if="packPreview?.warnings.length" class="pack-warnings">
                 <li v-for="warning in packPreview.warnings" :key="warning">{{ warning }}</li>
               </ul>
+
+              <div v-if="packPreview?.server_like" class="pack-server-hint">
+                <div>
+                  <strong>这看起来是服务端整合包</strong>
+                  <span>
+                    直接导入到服务端目录即可开服，不需要选择父版本；装成实例也能玩单机。
+                  </span>
+                </div>
+                <WoodButton
+                  variant="soft"
+                  size="sm"
+                  :disabled="!!store.installingId"
+                  @click="importLocalAsServer"
+                >
+                  导入为服务端
+                </WoodButton>
+              </div>
             </div>
 
             <footer class="pack-modal__foot">
@@ -2172,6 +2241,36 @@ async function confirmImport() {
   background: rgba(var(--accent-rgb), 0.06);
   color: var(--ink-soft);
   font-size: 11.5px;
+  line-height: 1.6;
+}
+
+.pack-server-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid #d3dfc8;
+  border-radius: 4px;
+  background: var(--moss-soft);
+}
+
+.pack-server-hint > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pack-server-hint strong {
+  font-size: 12.5px;
+  color: var(--moss);
+}
+
+.pack-server-hint span {
+  font-size: 11.5px;
+  color: var(--ink-soft);
   line-height: 1.6;
 }
 

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { confirm } from "@tauri-apps/plugin-dialog";
 import {
   api,
   openExternal,
@@ -124,6 +125,35 @@ const selectedServerLoader = computed(
 /// 服务端整合包显示导入时记录的名称，普通版本直接显示版本 ID
 function serverVersionLabel(id: string) {
   return serverVersions.value.find((item) => item.id === id)?.name || id;
+}
+
+/// 下拉里选中的是导入的服务端整合包（而不是已安装的游戏版本）
+const selectedServerIsPack = computed(() => serverVersionId.value.startsWith("pack:"));
+
+/// 删除导入的服务端包：解压目录和导入记录一起清掉
+async function removeServerPack() {
+  if (!selectedServerIsPack.value) return;
+  if (serverBusy.value) {
+    notify("服务端正在准备中，请稍后再删除", "err");
+    return;
+  }
+  if (serverStatus.value?.version_id === serverVersionId.value) {
+    notify("服务端正在运行，请先停止再删除", "err");
+    return;
+  }
+  const label = serverVersionLabel(serverVersionId.value);
+  const ok = await confirm(
+    `将删除服务端包「${label}」的解压目录和导入记录。\n服务端存档、配置也会一并删除，无法恢复。`,
+    { title: "删除服务端包", kind: "warning" }
+  );
+  if (!ok) return;
+  try {
+    await api.serverPackRemove(serverVersionId.value);
+    notify("已删除服务端包");
+    await loadServerVersions();
+  } catch (err) {
+    notify(`删除失败：${String(err)}`, "err");
+  }
 }
 
 const serverUptime = computed(() => {
@@ -1207,7 +1237,17 @@ onBeforeUnmount(() => {
           <div class="mp-form">
             <div class="mp-field">
               <span class="mp-field__label">使用版本</span>
-              <WoodSelect v-model="serverVersionId" :options="serverVersionOptions" />
+              <div class="mp-field__row">
+                <WoodSelect v-model="serverVersionId" :options="serverVersionOptions" />
+                <IconButton
+                  v-if="selectedServerIsPack"
+                  icon="trash"
+                  label="删除服务端包"
+                  variant="danger"
+                  :size="32"
+                  @click="removeServerPack"
+                />
+              </div>
             </div>
             <div class="mp-field">
               <span class="mp-field__label">端口</span>
@@ -1931,6 +1971,22 @@ onBeforeUnmount(() => {
 .mp-field__label {
   font-size: 11.5px;
   color: var(--muted);
+}
+
+.mp-field__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mp-field__row > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.mp-field__row > :last-child {
+  flex-shrink: 0;
 }
 
 .mp-toggles {

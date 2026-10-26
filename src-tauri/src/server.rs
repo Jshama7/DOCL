@@ -1824,6 +1824,13 @@ pub fn import_pack(
 }
 
 pub fn remove_pack(cfg: &Config, id: &str) -> Result<()> {
+    // 运行中的服务端还占着目录，先停止再删，避免删到一半进程报错
+    if status()
+        .map(|snapshot| snapshot.version_id == id)
+        .unwrap_or(false)
+    {
+        bail!("服务端正在运行，请先停止再删除");
+    }
     let mut packs = load_packs();
     if let Some(pack) = packs.iter().find(|item| item.id == id).cloned() {
         if let Ok(root) = std::fs::canonicalize(&pack.dir) {

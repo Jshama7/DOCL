@@ -166,6 +166,8 @@ export interface Config {
   ui_radius: string;
   ui_density: string;
   window_vibrancy: boolean;
+  /// 从 MC 百科补全模组中文名
+  mcmod_names: boolean;
 }
 
 export interface BackgroundInfo {
@@ -807,6 +809,8 @@ export const api = {
       source,
       ids,
     }),
+  mcmodNames: (queries: { key: string; title: string; slug: string }[]) =>
+    invoke<Record<string, { name: string; url: string }>>("mcmod_names", { queries }),
   deleteVersion: (versionId: string) => invoke<string[]>("delete_version", { versionId }),
   defaultSkin: () => invoke<string>("default_skin"),
   defaultSkins: () => invoke<DefaultSkin[]>("default_skins"),

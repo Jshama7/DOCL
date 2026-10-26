@@ -82,6 +82,8 @@ pub struct Config {
     pub ui_density: String,
     /// Windows Acrylic：窗口毛玻璃化，透出桌面实时画面
     pub window_vibrancy: bool,
+    /// 从 MC 百科补全模组中文名（会访问 search.mcmod.cn，已做节流与缓存）
+    pub mcmod_names: bool,
 }
 
 impl Default for Config {
@@ -127,6 +129,7 @@ impl Default for Config {
             ui_density: "normal".into(),
             // 便携版默认透出桌面：配合外带场景的玻璃质感；安装版保持实心
             window_vibrancy: is_portable(),
+            mcmod_names: true,
         }
     }
 }

@@ -17,6 +17,7 @@ mod java;
 mod lan;
 mod launch;
 mod mirror;
+mod mcmod;
 mod modpack;
 mod modmeta;
 mod moddeps;
@@ -150,6 +151,7 @@ pub fn run() {
             commands::modrinth_files,
             commands::content_projects,
             commands::project_translations,
+            commands::mcmod_names,
             commands::cf_file_link,
             commands::cf_install_file,
             commands::default_skin,

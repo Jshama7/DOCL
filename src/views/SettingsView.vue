@@ -76,6 +76,7 @@ const form = reactive<Config>({
   ui_radius: "default",
   ui_density: "normal",
   window_vibrancy: false,
+  mcmod_names: true,
 });
 
 /// 从 store 同步到表单期间要抑制自动保存，避免刚打开页面就写盘。
@@ -129,6 +130,7 @@ const autoSaveKeys: (keyof Config)[] = [
   "speed_limit",
   "version_isolation",
   "window_vibrancy",
+  "mcmod_names",
 ];
 
 let autoTimer: number | undefined;
@@ -1416,6 +1418,15 @@ async function removeJava(path: string) {
         </div>
         <div class="setting__control">
           <WoodSelect v-model="form.download_source" :options="sourceOptions" />
+        </div>
+      </div>
+      <div class="setting">
+        <div class="setting__label">
+          <strong>模组中文名</strong>
+          <span>从 MC 百科补全中文名，结果缓存 30 天；关闭后只显示源站名称</span>
+        </div>
+        <div class="setting__control">
+          <WoodToggle v-model="form.mcmod_names" />
         </div>
       </div>
       <div class="setting">

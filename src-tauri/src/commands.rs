@@ -1,5 +1,6 @@
 use crate::auth::{self, Account, AccountView, DeviceCode};
 use crate::authlib;
+use crate::mcmod;
 use crate::modmeta;
 use crate::translate;
 use crate::appupdate;
@@ -1091,6 +1092,21 @@ pub async fn project_translations(
         "curseforge"
     };
     Ok(translate::batch(&state.client, source, &ids).await)
+}
+
+/// 从 MC 百科补全项目中文名；关闭开关时直接返回空。
+#[tauri::command]
+pub async fn mcmod_names(
+    state: State<'_, AppState>,
+    queries: Vec<mcmod::NameQuery>,
+) -> CmdResult<std::collections::HashMap<String, mcmod::ChineseName>> {
+    if queries.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    if !state.config.lock().unwrap().mcmod_names {
+        return Ok(std::collections::HashMap::new());
+    }
+    Ok(mcmod::batch(&state.client, queries).await)
 }
 
 #[tauri::command]

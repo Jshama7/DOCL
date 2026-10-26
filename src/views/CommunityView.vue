@@ -303,7 +303,9 @@ const projectLinks = computed(() => {
   }
   links.push({
     label: "转到 MC 百科",
-    url: `https://search.mcmod.cn/s?key=${encodeURIComponent(project.name)}&site=mcm&filter=0`,
+    url:
+      mcNames.value[`${project.source}-${project.id}`]?.url ||
+      `https://search.mcmod.cn/s?key=${encodeURIComponent(project.name)}&site=mcm&filter=0`,
   });
   return links;
 });
@@ -546,16 +548,42 @@ async function search(reset = true) {
   loading.value = false;
 }
 
-/// 项目中文简介（PCL 式的中文名来自它内置的百科库，在线接口只能补简介）
+/// 项目中文简介（在线接口只提供简介翻译）
 const zhNames = ref<Record<string, { summary: string }>>({});
 
-/// 项目名仍用源站原文；保留函数方便以后接入百科名称映射
+/// MC 百科中文名：key 为 `source-id`
+const mcNames = ref<Record<string, { name: string; url: string }>>({});
+
 function displayName(project: CfProject) {
-  return project.name;
+  return mcNames.value[`${project.source}-${project.id}`]?.name || project.name;
 }
 
 function displaySummary(project: CfProject) {
   return zhNames.value[`${project.source}-${project.id}`]?.summary || project.summary;
+}
+
+/// 没缓存过的项目去 MC 百科查中文名（后端有节流与 30 天缓存）
+async function loadChineseNames(list: CfProject[]) {
+  if (!list.length) return;
+  const queries: { key: string; title: string; slug: string }[] = [];
+  const queued = new Set<string>();
+  for (const project of list) {
+    const key = `${project.source}-${project.id}`;
+    if (mcNames.value[key] || queued.has(key)) continue;
+    // 源站本身就写中文的不用查
+    if (/[\u4e00-\u9fff]/.test(project.name)) continue;
+    queued.add(key);
+    queries.push({ key, title: project.name, slug: project.slug || "" });
+  }
+  if (!queries.length) return;
+  try {
+    const map = await api.mcmodNames(queries);
+    if (Object.keys(map).length) {
+      mcNames.value = { ...mcNames.value, ...map };
+    }
+  } catch {
+    // 查询失败保持英文名
+  }
 }
 
 async function fetchBucket(key: SourceKey, offset: number) {
@@ -597,6 +625,7 @@ async function fetchBucket(key: SourceKey, offset: number) {
     },
   };
   void loadTranslations(result.items);
+  void loadChineseNames(result.items);
 }
 
 async function loadTranslations(list: CfProject[]) {
@@ -659,6 +688,7 @@ function openProject(project: CfProject) {
   filesError.value = "";
   depFile.value = null;
   void loadTranslations([project]);
+  void loadChineseNames([project]);
   loadFiles(project);
 }
 
@@ -1146,6 +1176,9 @@ async function confirmImport() {
               {{ zhCategory(category) }}
             </span>
           </div>
+          <p v-if="displayName(active) !== active.name" class="muted small cf-detail__origin">
+            {{ active.name }}
+          </p>
           <p class="muted small">
             {{ active.author || "未知作者" }} · {{ compactNumber(active.download_count) }} 次下载
             <template v-if="active.updated"> · {{ updatedLabel(active.updated) }}</template>
@@ -1354,6 +1387,12 @@ async function confirmImport() {
           <div class="cf-row__body">
             <div class="cf-row__title">
               <strong class="cf-row__name">{{ displayName(project) }}</strong>
+              <span
+                v-if="displayName(project) !== project.name"
+                class="cf-row__origin muted small"
+              >
+                {{ project.name }}
+              </span>
               <span class="cf-row__source">{{ sourceLabel(project.source) }}</span>
               <span
                 v-for="category in project.categories.slice(0, 2)"
@@ -1721,6 +1760,12 @@ async function confirmImport() {
   white-space: nowrap;
   font-size: 11.5px;
   opacity: 0.75;
+}
+
+.cf-detail__origin {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  opacity: 0.8;
 }
 
 .cf-row__name {

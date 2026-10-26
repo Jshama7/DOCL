@@ -963,7 +963,11 @@ async function importServerArchive(
   notify(`正在解压 ${title}…`);
   try {
     const pack = await api.serverPackImport(path, title, slug);
-    notify(`${pack.name} 已就绪，可在联机页一键开服`);
+    notify(
+      pack.needs_install
+        ? `${pack.name} 已导入；首次开服会自动安装 ${pack.loader}（需下载依赖）`
+        : `${pack.name} 已就绪，可在联机页一键开服`
+    );
   } finally {
     store.installingId = null;
     api.modpackTempRemove(path).catch(() => {});
@@ -1019,7 +1023,11 @@ async function importLocalAsServer() {
   try {
     const pack = await api.serverPackImport(path, preview.name, preview.suggested_id);
     showImport.value = false;
-    notify(`${pack.name} 已就绪，可在联机页一键开服`);
+    notify(
+      pack.needs_install
+        ? `${pack.name} 已导入；首次开服会自动安装 ${pack.loader}（需下载依赖）`
+        : `${pack.name} 已就绪，可在联机页一键开服`
+    );
   } catch (err) {
     notify(`导入服务端失败：${String(err)}`, "err");
   } finally {

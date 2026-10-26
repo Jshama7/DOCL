@@ -737,22 +737,29 @@ pub fn instance_world_seed(
 }
 
 #[tauri::command]
-pub fn crash_analyze(
+pub async fn crash_analyze(
     state: State<'_, AppState>,
     version_id: String,
 ) -> CmdResult<crash::CrashReport> {
     let cfg = state.config.lock().unwrap().clone();
-    crash::analyze(&cfg, &version_id).map_err(err)
+    // 会扫描 mods 目录、读大日志并检测 Java，放到阻塞线程池避免卡界面
+    tokio::task::spawn_blocking(move || crash::analyze(&cfg, &version_id))
+        .await
+        .map_err(|error| format!("分析崩溃日志失败：{error}"))?
+        .map_err(err)
 }
 
 /// 导出崩溃报告 ZIP（分析结果 + 相关日志 + 实例信息，凭据行已隐藏）。
 #[tauri::command]
-pub fn crash_export(
+pub async fn crash_export(
     state: State<'_, AppState>,
     version_id: String,
 ) -> CmdResult<String> {
     let cfg = state.config.lock().unwrap().clone();
-    crash::export(&cfg, &version_id).map_err(err)
+    tokio::task::spawn_blocking(move || crash::export(&cfg, &version_id))
+        .await
+        .map_err(|error| format!("导出崩溃报告失败：{error}"))?
+        .map_err(err)
 }
 
 #[tauri::command]
@@ -1752,7 +1759,7 @@ pub async fn server_start(
         .iter()
         .any(|pack| pack.id == version_id)
     {
-        return server::start_pack(&cfg, &version_id, &options)
+        return server::start_pack(&state.client, &cfg, &version_id, &options)
             .await
             .map_err(err);
     }

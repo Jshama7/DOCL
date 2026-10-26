@@ -201,60 +201,73 @@ pub async fn lookup(
     }
 
     let mut result: HashMap<String, ModMeta> = HashMap::new();
+    // Modrinth 与 CurseForge 的批量接口都限制单次 100 条，必须分批，否则整段请求 400
+    const BATCH: usize = 100;
 
     // 1) Modrinth：sha1 批量反查
     let hashes: Vec<String> = local.iter().map(|(_, sha1, _)| sha1.clone()).collect();
-    if let Ok(map) = post_json::<HashMap<String, MrVersion>>(
-        client,
-        &format!("{MR_BASE}/version_files"),
-        &serde_json::json!({ "hashes": hashes, "algorithm": "sha1" }),
-    )
-    .await
-    {
-        let ids: Vec<String> = map
+    let mut versions: HashMap<String, MrVersion> = HashMap::new();
+    for chunk in hashes.chunks(BATCH) {
+        if let Ok(map) = post_json::<HashMap<String, MrVersion>>(
+            client,
+            &format!("{MR_BASE}/version_files"),
+            &serde_json::json!({ "hashes": chunk, "algorithm": "sha1" }),
+        )
+        .await
+        {
+            versions.extend(map);
+        }
+    }
+    if !versions.is_empty() {
+        let mut ids: Vec<String> = versions
             .values()
             .map(|version| version.project_id.clone())
             .filter(|id| !id.is_empty())
             .collect();
-        if !ids.is_empty() {
-            // Modrinth 的 /projects 只支持 GET + ids 查询参数，POST 会 404
-            if let Ok(mut url) = reqwest::Url::parse(&format!("{MR_BASE}/projects")) {
-                let ids_json = serde_json::to_string(&ids).unwrap_or_else(|_| "[]".into());
-                url.query_pairs_mut().append_pair("ids", &ids_json);
-                if let Ok(projects) =
-                    crate::download::get_json::<Vec<MrProject>>(client, url.as_str(), false).await
-                {
-                    let by_id: HashMap<String, MrProject> = projects
-                        .into_iter()
-                        .map(|project| (project.id.clone(), project))
-                        .collect();
-                    for (file_name, sha1, _) in &local {
-                        let Some(version) = map.get(sha1) else {
-                            continue;
-                        };
-                        let Some(project) = by_id.get(&version.project_id) else {
-                            continue;
-                        };
-                        let key = base_name(file_name);
-                        result.insert(
-                            key.clone(),
-                            ModMeta {
-                                file_name: key,
-                                name: project.title.clone(),
-                                project_id: project.id.clone(),
-                                source: "modrinth".into(),
-                                logo_url: project.icon_url.clone().unwrap_or_default(),
-                                website_url: if project.slug.is_empty() {
-                                    format!("https://modrinth.com/project/{}", project.id)
-                                } else {
-                                    format!("https://modrinth.com/mod/{}", project.slug)
-                                },
-                                version_number: version.version_number.clone(),
-                            },
-                        );
-                    }
-                }
+        ids.sort();
+        ids.dedup();
+        // Modrinth 的 /projects 只支持 GET + ids 查询参数，POST 会 404
+        let mut projects: Vec<MrProject> = Vec::new();
+        for chunk in ids.chunks(BATCH) {
+            let Ok(mut url) = reqwest::Url::parse(&format!("{MR_BASE}/projects")) else {
+                continue;
+            };
+            let ids_json = serde_json::to_string(chunk).unwrap_or_else(|_| "[]".into());
+            url.query_pairs_mut().append_pair("ids", &ids_json);
+            if let Ok(mut list) =
+                crate::download::get_json::<Vec<MrProject>>(client, url.as_str(), false).await
+            {
+                projects.append(&mut list);
             }
+        }
+        let by_id: HashMap<String, MrProject> = projects
+            .into_iter()
+            .map(|project| (project.id.clone(), project))
+            .collect();
+        for (file_name, sha1, _) in &local {
+            let Some(version) = versions.get(sha1) else {
+                continue;
+            };
+            let Some(project) = by_id.get(&version.project_id) else {
+                continue;
+            };
+            let key = base_name(file_name);
+            result.insert(
+                key.clone(),
+                ModMeta {
+                    file_name: key,
+                    name: project.title.clone(),
+                    project_id: project.id.clone(),
+                    source: "modrinth".into(),
+                    logo_url: project.icon_url.clone().unwrap_or_default(),
+                    website_url: if project.slug.is_empty() {
+                        format!("https://modrinth.com/project/{}", project.id)
+                    } else {
+                        format!("https://modrinth.com/mod/{}", project.slug)
+                    },
+                    version_number: version.version_number.clone(),
+                },
+            );
         }
     }
 
@@ -265,82 +278,89 @@ pub async fn lookup(
         .map(|(file_name, _, fingerprint)| (file_name.clone(), *fingerprint))
         .collect();
     if !pending.is_empty() {
-        let fingerprints: Vec<u32> = pending.iter().map(|(_, fp)| *fp).collect();
         let mut matched: Vec<(String, i64)> = Vec::new();
-        for base in [CF_BASE, CF_FALLBACK] {
-            let url = format!("{base}/fingerprints");
-            let body = serde_json::json!({ "fingerprints": fingerprints });
-            match post_json::<CfFingerprintResponse>(client, &url, &body).await {
-                Ok(response) => {
-                    for item in response
-                        .data
-                        .exact_matches
-                        .into_iter()
-                        .chain(response.data.partial_matches)
-                    {
-                        let Some(file) = item.file else { continue };
-                        if file.mod_id > 0 && !file.file_name.is_empty() {
-                            matched.push((file.file_name, file.mod_id));
+        for chunk in pending.chunks(BATCH) {
+            let fingerprints: Vec<u32> = chunk.iter().map(|(_, fp)| *fp).collect();
+            for base in [CF_BASE, CF_FALLBACK] {
+                let url = format!("{base}/fingerprints");
+                let body = serde_json::json!({ "fingerprints": fingerprints });
+                match post_json::<CfFingerprintResponse>(client, &url, &body).await {
+                    Ok(response) => {
+                        for item in response
+                            .data
+                            .exact_matches
+                            .into_iter()
+                            .chain(response.data.partial_matches)
+                        {
+                            let Some(file) = item.file else { continue };
+                            if file.mod_id > 0 && !file.file_name.is_empty() {
+                                matched.push((file.file_name, file.mod_id));
+                            }
                         }
+                        break;
                     }
-                    break;
+                    Err(_) => continue,
                 }
-                Err(_) => continue,
             }
         }
         if !matched.is_empty() {
-            let mod_ids: Vec<i64> = matched.iter().map(|(_, id)| *id).collect();
-            let url = format!("{CF_BASE}/mods");
-            let body = serde_json::json!({ "modIds": mod_ids });
-            let mods: Option<CfModsResponse> = match post_json(client, &url, &body).await {
-                Ok(value) => Some(value),
-                Err(_) => post_json(
+            let mut mod_ids: Vec<i64> = matched.iter().map(|(_, id)| *id).collect();
+            mod_ids.sort_unstable();
+            mod_ids.dedup();
+            let mut mods: Vec<CfMod> = Vec::new();
+            for chunk in mod_ids.chunks(BATCH) {
+                let body = serde_json::json!({ "modIds": chunk });
+                let fetched = match post_json::<CfModsResponse>(
                     client,
-                    &format!("{CF_FALLBACK}/mods"),
+                    &format!("{CF_BASE}/mods"),
                     &body,
                 )
                 .await
-                .ok(),
-            };
-            if let Some(mods) = mods {
-                let by_id: HashMap<i64, CfMod> =
-                    mods.data.into_iter().map(|item| (item.id, item)).collect();
-                for (file_name, mod_id) in matched {
-                    // 指纹返回的文件名可能带路径，按文件名对齐本地文件
-                    let key = base_name(
-                        &Path::new(&file_name)
-                            .file_name()
-                            .map(|value| value.to_string_lossy().to_string())
-                            .unwrap_or(file_name),
-                    );
-                    let Some(project) = by_id.get(&mod_id) else {
-                        continue;
-                    };
-                    let website = project
-                        .links
-                        .as_ref()
-                        .map(|links| links.website_url.clone())
-                        .filter(|url| !url.is_empty())
-                        .unwrap_or_else(|| {
-                            format!("https://www.curseforge.com/projects/{mod_id}")
-                        });
-                    result.insert(
-                        key.clone(),
-                        ModMeta {
-                            file_name: key,
-                            name: project.name.clone(),
-                            project_id: mod_id.to_string(),
-                            source: "curseforge".into(),
-                            logo_url: project
-                                .logo
-                                .as_ref()
-                                .map(|logo| logo.url.clone())
-                                .unwrap_or_default(),
-                            website_url: website,
-                            version_number: String::new(),
-                        },
-                    );
+                {
+                    Ok(value) => Some(value),
+                    Err(_) => post_json(client, &format!("{CF_FALLBACK}/mods"), &body)
+                        .await
+                        .ok(),
+                };
+                if let Some(response) = fetched {
+                    mods.extend(response.data);
                 }
+            }
+            let by_id: HashMap<i64, CfMod> =
+                mods.into_iter().map(|item| (item.id, item)).collect();
+            for (file_name, mod_id) in matched {
+                // 指纹返回的文件名可能带路径，按文件名对齐本地文件
+                let key = base_name(
+                    &Path::new(&file_name)
+                        .file_name()
+                        .map(|value| value.to_string_lossy().to_string())
+                        .unwrap_or(file_name),
+                );
+                let Some(project) = by_id.get(&mod_id) else {
+                    continue;
+                };
+                let website = project
+                    .links
+                    .as_ref()
+                    .map(|links| links.website_url.clone())
+                    .filter(|url| !url.is_empty())
+                    .unwrap_or_else(|| format!("https://www.curseforge.com/projects/{mod_id}"));
+                result.insert(
+                    key.clone(),
+                    ModMeta {
+                        file_name: key,
+                        name: project.name.clone(),
+                        project_id: mod_id.to_string(),
+                        source: "curseforge".into(),
+                        logo_url: project
+                            .logo
+                            .as_ref()
+                            .map(|logo| logo.url.clone())
+                            .unwrap_or_default(),
+                        website_url: website,
+                        version_number: String::new(),
+                    },
+                );
             }
         }
     }
@@ -389,4 +409,76 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>> {
 /// 前端按实例文件列表里的名字查询，禁用的模组名带 .disabled 后缀，统一去掉。
 pub fn base_name(name: &str) -> String {
     name.trim_end_matches(".disabled").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fingerprint_is_stable_and_in_range() {
+        // CurseForge 用 murmur2 取正后对 2147483647 取模
+        let first = cf_fingerprint(b"hello world");
+        let second = cf_fingerprint(b"hello world");
+        assert_eq!(first, second);
+        assert!(first < 2_147_483_647);
+        assert_ne!(first, cf_fingerprint(b"hello worlds"));
+    }
+
+    /// 联网实测：下载一个真实的 Modrinth 模组，验证 sha1 反查与项目信息。
+    /// cargo test --lib modmeta::tests::live_lookup_modrinth -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_lookup_modrinth() {
+        #[derive(serde::Deserialize)]
+        struct VersionFile {
+            url: String,
+            filename: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Version {
+            #[serde(default)]
+            files: Vec<VersionFile>,
+        }
+
+        let client = crate::http::client();
+        let versions: Vec<Version> = crate::download::get_json(
+            &client,
+            "https://api.modrinth.com/v2/project/sodium/version",
+            false,
+        )
+        .await
+        .expect("获取 Sodium 版本失败");
+        let file = versions
+            .iter()
+            .flat_map(|version| version.files.iter())
+            .find(|file| file.filename.ends_with(".jar"))
+            .expect("没有 jar 文件");
+        let bytes = crate::download::get_bytes(&client, &file.url, false)
+            .await
+            .expect("下载 Sodium 失败");
+        assert!(bytes.len() > 10_000);
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("docl-modmeta-live-{stamp}"));
+        let mods = root.join("versions").join("testpack").join("mods");
+        std::fs::create_dir_all(&mods).unwrap();
+        std::fs::write(mods.join(&file.filename), &bytes).unwrap();
+
+        let mut cfg = crate::config::Config::default();
+        cfg.game_dir = root.to_string_lossy().to_string();
+        cfg.version_isolation = true;
+
+        let list = lookup(&client, &cfg, "testpack").await.expect("反查失败");
+        println!("{list:?}");
+        assert!(
+            list.iter()
+                .any(|item| item.source == "modrinth" && item.name.to_lowercase().contains("sodium")),
+            "未识别出 Sodium：{list:?}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

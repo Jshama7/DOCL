@@ -49,13 +49,11 @@ pub async fn batch(
     }
 
     let mut set = tokio::task::JoinSet::new();
-    for id in pending.into_iter().take(40) {
-        let client = client.clone();
-        let source = source.to_string();
-        set.spawn(async move {
-            let value = fetch(&client, &source, &id).await;
-            (id, value)
-        });
+    let mut queue = pending.into_iter().take(40);
+    // 最多 8 个并发，避免对镜像站点瞬时压力过大
+    for _ in 0..8 {
+        let Some(id) = queue.next() else { break };
+        spawn_translate(&mut set, client.clone(), source.to_string(), id);
     }
     while let Some(joined) = set.join_next().await {
         let Ok((id, value)) = joined else {
@@ -68,8 +66,23 @@ pub async fn batch(
         if let Some(value) = value {
             result.insert(id, value);
         }
+        if let Some(next) = queue.next() {
+            spawn_translate(&mut set, client.clone(), source.to_string(), next);
+        }
     }
     result
+}
+
+fn spawn_translate(
+    set: &mut tokio::task::JoinSet<(String, Option<TranslatedProject>)>,
+    client: reqwest::Client,
+    source: String,
+    id: String,
+) {
+    set.spawn(async move {
+        let value = fetch(&client, &source, &id).await;
+        (id, value)
+    });
 }
 
 async fn fetch(

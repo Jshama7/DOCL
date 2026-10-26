@@ -51,6 +51,8 @@ export interface ServerVersionOption {
   loader: string;
   /// 服务端整合包的显示名；普通版本为空
   name: string;
+  /// 服务端包不含启动文件，首次开服需要自动安装加载器
+  needs_install: boolean;
 }
 
 export interface ServerPack {
@@ -61,6 +63,9 @@ export interface ServerPack {
   java_major: number;
   loader: string;
   imported_at: number;
+  /// 包里没有启动文件，开服时需要自动安装加载器
+  needs_install: boolean;
+  loader_version: string;
 }
 
 export interface ServerOptions {

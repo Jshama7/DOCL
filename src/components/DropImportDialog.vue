@@ -160,6 +160,7 @@ async function importServerPacks() {
   busy.value = true;
   try {
     const done: string[] = [];
+    let needsInstall = false;
     for (const pack of serverPacks.value) {
       const preview = packMeta.value[pack.path];
       store.installingId = `服务端 · ${pack.file_name}`;
@@ -170,12 +171,17 @@ async function importServerPacks() {
           preview?.suggested_id || ""
         );
         done.push(result.name);
+        if (result.needs_install) needsInstall = true;
       } finally {
         store.installingId = null;
       }
     }
     if (done.length) {
-      notify(`${done.join("、")} 已就绪，可在联机页一键开服`);
+      notify(
+        needsInstall
+          ? `${done.join("、")} 已导入；首次开服会自动安装加载器（需下载依赖）`
+          : `${done.join("、")} 已就绪，可在联机页一键开服`
+      );
       emit("done");
     }
   } catch (err) {

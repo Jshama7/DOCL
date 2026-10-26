@@ -291,30 +291,6 @@ export async function shuffleBackground() {
   }
 }
 
-export async function useBuiltinBackground(name: string) {
-  store.backgroundPreset = name;
-  store.backgroundUrl = "";
-  await saveConfig({ background_image: `builtin:${name}` });
-}
-
-export async function setBackground(path: string) {
-  try {
-    const info = await api.importBackground(path);
-    store.backgroundUrl = info.data_url;
-    store.backgroundPreset = "";
-    await saveConfig({ background_image: info.path });
-    notify("背景图片已应用");
-  } catch (err) {
-    notify(`设置背景失败：${String(err)}`, "err");
-  }
-}
-
-export async function clearBackground() {
-  store.backgroundUrl = "";
-  store.backgroundPreset = "";
-  await saveConfig({ background_image: null });
-}
-
 function primeProgress(stage: string, message: string) {
   store.progress = {
     stage,

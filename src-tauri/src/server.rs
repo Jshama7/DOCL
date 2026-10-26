@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::{HashSet, VecDeque};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, UdpSocket};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
@@ -24,6 +24,8 @@ pub struct ServerVersionOption {
     pub loader: String,
     /// 服务端整合包的显示名；普通版本为空
     pub name: String,
+    /// 服务端包不含启动文件，首次开服需要自动安装加载器
+    pub needs_install: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -505,6 +507,7 @@ pub fn versions(cfg: &Config) -> Vec<ServerVersionOption> {
             java_major: merged.detail.required_java(),
             loader,
             name: String::new(),
+            needs_install: false,
         });
     }
     // 已导入的服务端整合包：直接从解压目录启动
@@ -518,6 +521,7 @@ pub fn versions(cfg: &Config) -> Vec<ServerVersionOption> {
             java_major: pack.java_major,
             loader: pack.loader,
             name: pack.name,
+            needs_install: pack.needs_install,
         });
     }
     result
@@ -714,20 +718,28 @@ async fn prepare_fabric(
     Ok(LaunchMode::Jar(launch))
 }
 
-/// 旧版 Forge 安装器不会生成 win_args.txt，而是留下 universal / server jar。
+/// 旧版 Forge 安装器不会生成 win_args.txt，而是留下 universal / server jar；
+/// 1.12 的新安装器只生成 `forge-<mc>-<ver>.jar`，因此最后兜底取任意非安装器 jar。
 fn find_forge_jar(dir: &Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(dir).ok()?;
+    let mut fallback: Option<PathBuf> = None;
     for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
         let name = entry.file_name().to_string_lossy().to_lowercase();
-        if name.ends_with(".jar") && name.contains("forge") && (name.contains("universal") || name.contains("server")) {
+        if !name.ends_with(".jar") || name.contains("installer") || !name.contains("forge") {
+            continue;
+        }
+        if name.contains("universal") || name.contains("server") {
             return Some(path);
         }
+        if fallback.is_none() {
+            fallback = Some(path);
+        }
     }
-    None
+    fallback
 }
 
 fn find_win_args(root: &Path) -> Option<PathBuf> {
@@ -782,7 +794,21 @@ async fn prepare_forge_like(
             args.push("--mirror".into());
             args.push("https://bmclapi2.bangbang93.com/maven".into());
         }
-        run_installer(java, &installer, &args, dir, log).await?;
+        if let Err(first) = run_installer(java, &installer, &args, dir, log).await {
+            // 旧版安装器（如 Forge 1.12）可能不认识 --mirror，去掉后重试一次
+            if cfg.use_mirror() {
+                if let Ok(mut lines) = log.lock() {
+                    lines.push_back("带镜像参数的安装失败，改用官方源重试…".into());
+                }
+                let retry = vec![
+                    "--installServer".to_string(),
+                    dir.to_string_lossy().to_string(),
+                ];
+                run_installer(java, &installer, &retry, dir, log).await?;
+            } else {
+                return Err(first);
+            }
+        }
     }
 
     let Some(win_args) = find_win_args(dir) else {
@@ -1129,6 +1155,12 @@ pub struct ServerPack {
     pub java_major: u32,
     pub loader: String,
     pub imported_at: u64,
+    /// 包里没有启动文件（常见于只含 mods/config 的 CurseForge 服务端包），
+    /// 开服时需要先自动安装对应加载器的服务端
+    #[serde(default)]
+    pub needs_install: bool,
+    #[serde(default)]
+    pub loader_version: String,
 }
 
 fn packs_path() -> PathBuf {
@@ -1319,6 +1351,187 @@ fn guess_pack_game_version(dir: &Path) -> String {
     String::new()
 }
 
+/// 从 mods 里的元数据推断服务端包对应的游戏版本与加载器
+/// （CurseForge 的 server pack 常常只有 mods/config，没有 Forge 安装文件）。
+fn infer_from_mods(dir: &Path) -> (String, String, String) {
+    let mods_dir = dir.join("mods");
+    let Ok(entries) = std::fs::read_dir(&mods_dir) else {
+        return (String::new(), String::new(), String::new());
+    };
+    let mut game_version = String::new();
+    let mut loader = String::new();
+    let mut loader_version = String::new();
+    for entry in entries.flatten().take(80) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_lowercase();
+        if !name.ends_with(".jar") {
+            continue;
+        }
+        let Ok(file) = std::fs::File::open(&path) else {
+            continue;
+        };
+        let Ok(mut zip) = zip::ZipArchive::new(file) else {
+            continue;
+        };
+        // Forge 1.12 及更早用 mcmod.info，没有 mods.toml
+        if let Ok(mut entry) = zip.by_name("mcmod.info") {
+            let mut text = String::new();
+            if entry.read_to_string(&mut text).is_ok() {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                    let first = match &json {
+                        serde_json::Value::Array(list) => list.first(),
+                        serde_json::Value::Object(map) => map
+                            .get("modList")
+                            .and_then(|value| value.as_array())
+                            .and_then(|list| list.first()),
+                        _ => None,
+                    };
+                    if let Some(item) = first {
+                        if loader.is_empty() {
+                            loader = "forge".into();
+                        }
+                        if game_version.is_empty() {
+                            if let Some(value) = item
+                                .get("mcversion")
+                                .and_then(|value| value.as_str())
+                                .map(|value| value.to_string())
+                                .filter(|value| !value.is_empty())
+                            {
+                                game_version = first_version_number(&value).unwrap_or_default();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Ok(mut entry) = zip.by_name("META-INF/mods.toml") {
+            let mut text = String::new();
+            if entry.read_to_string(&mut text).is_ok() {
+                if loader.is_empty() {
+                    loader = "forge".into();
+                }
+                if game_version.is_empty() {
+                    if let Some(value) = toml_dependency_version(&text, "minecraft") {
+                        game_version = value;
+                    }
+                }
+                if loader_version.is_empty() {
+                    if let Some(value) = toml_value_of(&text, "loaderVersion") {
+                        loader_version = first_version_number(&value).unwrap_or_default();
+                    }
+                }
+                if let Some(value) = toml_value_of(&text, "modLoader") {
+                    if value.eq_ignore_ascii_case("javafml") {
+                        loader = "forge".into();
+                    } else if value.to_lowercase().contains("neoforge") {
+                        loader = "neoforge".into();
+                    }
+                }
+            }
+        }
+        if let Ok(mut entry) = zip.by_name("fabric.mod.json") {
+            let mut text = String::new();
+            if entry.read_to_string(&mut text).is_ok() {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                    let depends = json.get("depends");
+                    if loader.is_empty() {
+                        loader = "fabric".into();
+                    }
+                    if game_version.is_empty() {
+                        if let Some(value) = depends
+                            .and_then(|value| value.get("minecraft"))
+                            .and_then(|value| value.as_str())
+                        {
+                            game_version = first_version_number(value).unwrap_or_default();
+                        }
+                    }
+                    if loader_version.is_empty() {
+                        if let Some(value) = depends
+                            .and_then(|value| value.get("fabricloader"))
+                            .and_then(|value| value.as_str())
+                        {
+                            loader_version = first_version_number(value).unwrap_or_default();
+                        }
+                    }
+                }
+            }
+        }
+        if !game_version.is_empty() && !loader.is_empty() {
+            break;
+        }
+    }
+    (game_version, loader, loader_version)
+}
+
+/// 从形如 `[1.12.2,1.13)`、`>=1.20.1` 的文本里取第一个版本号。
+fn first_version_number(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+    while index + 2 < bytes.len() {
+        if (bytes[index] == b'1' || bytes[index].is_ascii_digit())
+            && index + 1 < bytes.len()
+            && bytes[index + 1] == b'.'
+            && (index == 0 || !bytes[index - 1].is_ascii_digit())
+        {
+            let rest = &text[index..];
+            let mut end = 0usize;
+            for (offset, ch) in rest.char_indices() {
+                if ch.is_ascii_digit() || ch == '.' {
+                    end = offset + ch.len_utf8();
+                } else {
+                    break;
+                }
+            }
+            let candidate = rest[..end].trim_end_matches('.');
+            if candidate.len() >= 3 {
+                return Some(candidate.to_string());
+            }
+        }
+        index += 1;
+    }
+    None
+}
+
+/// 读 toml 里某个 key 的字符串值（不处理多行）。
+fn toml_value_of(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if !trimmed.starts_with(key) {
+            continue;
+        }
+        let value = trimmed[key.len()..].trim_start();
+        let Some(value) = value.strip_prefix('=') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// 在 `[[dependencies.xxx]]` 段里找指定 modId 的 versionRange。
+fn toml_dependency_version(text: &str, mod_id: &str) -> Option<String> {
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        if !line.contains("modId") || !line.contains(&format!("\"{mod_id}\"")) {
+            continue;
+        }
+        for _ in 0..6 {
+            let Some(next) = lines.next() else {
+                break;
+            };
+            if next.contains("versionRange") {
+                if let Some(value) = toml_value_of(next, "versionRange") {
+                    return first_version_number(&value);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn extract_zip_into(archive: &str, dest: &Path) -> Result<()> {
     let file = std::fs::File::open(archive).with_context(|| format!("无法打开压缩包：{archive}"))?;
     let mut zip = zip::ZipArchive::new(file).context("压缩包损坏或格式不支持")?;
@@ -1363,36 +1576,52 @@ pub fn import_pack(cfg: &Config, archive: &str, name: &str, slug: &str) -> Resul
     }
     extract_zip_into(archive, &dir)?;
 
-    // 有些包外面多套一层目录，进入该目录
+    // 有些包外面多套一层目录
     let mut root = dir.clone();
     if detect_pack_launch(&root).is_none() {
         if let Ok(entries) = std::fs::read_dir(&root) {
-            let children: Vec<PathBuf> = entries
+            let mut children: Vec<PathBuf> = entries
                 .flatten()
                 .map(|entry| entry.path())
-                .filter(|path| {
-                    path.is_dir()
-                        && path
-                            .file_name()
-                            .map(|name| {
-                                let name = name.to_string_lossy();
-                                name != "libraries" && name != "mods"
-                            })
-                            .unwrap_or(false)
-                })
+                .filter(|path| path.is_dir())
                 .collect();
-            if children.len() == 1 && detect_pack_launch(&children[0]).is_some() {
-                root = children[0].clone();
+            // 只有一个子目录时下探（无论它是不是 libraries/mods）
+            if children.len() == 1 {
+                let child = children.remove(0);
+                let name = child
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if name != "libraries" && name != "mods" {
+                    root = child;
+                }
             }
         }
     }
 
-    if detect_pack_launch(&root).is_none() {
-        bail!("没有找到服务端启动文件（server.jar / fabric-server-launch.jar / Forge win_args.txt）");
+    let launch_ready = detect_pack_launch(&root).is_some();
+    let mut game_version = guess_pack_game_version(&root);
+    let mut loader = detect_pack_loader(&root);
+    let mut loader_version = String::new();
+
+    if !launch_ready {
+        // 只含 mods/config 的服务端包：从 Mod 元数据推断加载器与版本
+        let (inferred_game, inferred_loader, inferred_version) = infer_from_mods(&root);
+        if !inferred_game.is_empty() {
+            game_version = inferred_game;
+        }
+        if !inferred_loader.is_empty() {
+            loader = inferred_loader;
+        }
+        loader_version = inferred_version;
+        if game_version.is_empty() || loader == "vanilla" {
+            bail!(
+                "没有找到服务端启动文件，也无法从 mods 推断游戏版本与加载器；\
+                 请确认这是服务端整合包，或先手动安装对应加载器的服务端"
+            );
+        }
     }
 
-    let game_version = guess_pack_game_version(&root);
-    let loader = detect_pack_loader(&root);
     let java_major = if game_version.is_empty() {
         17
     } else {
@@ -1407,6 +1636,8 @@ pub fn import_pack(cfg: &Config, archive: &str, name: &str, slug: &str) -> Resul
         java_major,
         loader,
         imported_at: now_secs(),
+        needs_install: !launch_ready,
+        loader_version,
     };
     let mut packs = load_packs();
     packs.retain(|item| item.id != pack.id);
@@ -1432,7 +1663,74 @@ pub fn remove_pack(cfg: &Config, id: &str) -> Result<()> {
     Ok(())
 }
 
+/// 服务端包不含启动文件时，自动安装对应加载器的服务端（Forge/NeoForge/Fabric）。
+async fn install_loader_server(
+    client: &reqwest::Client,
+    cfg: &Config,
+    java: &str,
+    dir: &Path,
+    pack: &ServerPack,
+    log: &Arc<Mutex<VecDeque<String>>>,
+) -> Result<()> {
+    match pack.loader.as_str() {
+        "forge" | "neoforge" => {
+            let mut version = pack.loader_version.clone();
+            // 推断到的是 Mod 要求的最低版本，未必有安装器；优先用官方推荐版本
+            if let Ok(list) =
+                crate::install::loader_versions(client, cfg, &pack.game_version, &pack.loader).await
+            {
+                let preferred = list
+                    .iter()
+                    .find(|item| item.recommended)
+                    .or_else(|| list.first())
+                    .map(|item| item.version.clone());
+                if let Some(preferred) = preferred {
+                    if version.is_empty() || !list.iter().any(|item| item.version == version) {
+                        version = preferred;
+                    }
+                }
+            }
+            if version.is_empty() {
+                bail!("无法确定 {} 版本，请手动安装对应服务端", pack.loader);
+            }
+            if let Ok(mut lines) = log.lock() {
+                lines.push_back(format!("使用 {} {} 安装服务端", pack.loader, version));
+            }
+            let info = LoaderInfo {
+                loader: pack.loader.clone(),
+                version,
+            };
+            prepare_forge_like(client, cfg, java, dir, &pack.game_version, &info, log).await?;
+        }
+        "fabric" => {
+            let mut version = pack.loader_version.clone();
+            if version.is_empty() {
+                if let Ok(list) =
+                    crate::install::loader_versions(client, cfg, &pack.game_version, "fabric").await
+                {
+                    version = list
+                        .iter()
+                        .find(|item| item.recommended)
+                        .or_else(|| list.first())
+                        .map(|item| item.version.clone())
+                        .unwrap_or_default();
+                }
+            }
+            if version.is_empty() {
+                bail!("无法确定 Fabric 版本，请手动安装对应服务端");
+            }
+            if let Ok(mut lines) = log.lock() {
+                lines.push_back(format!("使用 Fabric {} 安装服务端", version));
+            }
+            prepare_fabric(client, java, dir, &pack.game_version, &version, log).await?;
+        }
+        other => bail!("暂不支持自动安装 {other} 服务端，请手动安装"),
+    }
+    Ok(())
+}
+
 pub async fn start_pack(
+    client: &reqwest::Client,
     cfg: &Config,
     id: &str,
     options: &ServerOptions,
@@ -1451,8 +1749,6 @@ pub async fn start_pack(
     if !dir.is_dir() {
         bail!("服务端目录不存在：{}", pack.dir);
     }
-    let mode = detect_pack_launch(&dir)
-        .ok_or_else(|| anyhow!("没有找到可用的服务端启动文件"))?;
     let java = launch::find_java(cfg, pack.java_major)?;
 
     let log: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
@@ -1464,6 +1760,20 @@ pub async fn start_pack(
         }
         lines.push_back(format!("加载器：{}", pack.loader));
     }
+
+    let mut mode = detect_pack_launch(&dir);
+    if mode.is_none() {
+        if pack.game_version.is_empty() || matches!(pack.loader.as_str(), "" | "vanilla" | "paper") {
+            bail!("该服务端包不含启动文件，请先手动安装对应加载器的服务端");
+        }
+        if let Ok(mut lines) = log.lock() {
+            lines.push_back("包内没有启动文件，正在安装服务端（首次会下载依赖）…".into());
+        }
+        install_loader_server(client, cfg, &java.path, &dir, &pack, &log).await?;
+        mode = detect_pack_launch(&dir);
+    }
+    let mode = mode.ok_or_else(|| anyhow!("服务端安装完成，但仍未找到启动文件"))?;
+
     spawn_server(
         cfg,
         &dir,
@@ -1570,6 +1880,89 @@ mod tests {
             Some(LaunchMode::Args(_))
         ));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 联网实测：下载真实的 CurseForge 服务端整合包，验证解压与启动文件识别。
+    /// cargo test --lib server::tests::live_import_real_server_pack -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn live_import_real_server_pack() {
+        let client = crate::http::client();
+        // RLCraft（项目 285109）的配套服务端包
+        let (url, file_name) = crate::curseforge::file_download(&client, 285109, 4612990, true)
+            .await
+            .expect("获取服务端包直链失败");
+        println!("下载 {file_name} <- {url}");
+        let bytes = crate::download::get_bytes(&client, &url, true)
+            .await
+            .expect("下载服务端包失败");
+        println!("大小 {} MB", bytes.len() / 1024 / 1024);
+        assert!(bytes.len() > 5 * 1024 * 1024);
+
+        let stamp = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("docl-serverpack-live-{stamp}"));
+        std::fs::create_dir_all(&root).unwrap();
+        let archive = root.join(&file_name);
+        std::fs::write(&archive, &bytes).unwrap();
+
+        let mut cfg = crate::config::Config::default();
+        cfg.game_dir = root.to_string_lossy().to_string();
+
+        let pack = import_pack(&cfg, &archive.to_string_lossy(), "RLCraft 服务端", "rlcraft-server")
+            .expect("导入服务端包失败");
+        println!("{pack:?}");
+        assert!(!pack.game_version.is_empty(), "未识别出游戏版本");
+        assert_eq!(pack.loader, "forge");
+        // RLCraft 的 server pack 只有 mods/config，需要开服时自动安装 Forge
+        assert!(pack.needs_install, "应标记为需要安装服务端");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn detects_forge_jar_variants() {
+        let dir = std::env::temp_dir().join(format!("docl-forge-jar-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 安装器本身不能当启动 jar
+        std::fs::write(dir.join("forge-1.12.2-14.23.5.2860-installer.jar"), b"x").unwrap();
+        assert!(find_forge_jar(&dir).is_none());
+
+        // 1.12 新安装器只生成这个
+        std::fs::write(dir.join("forge-1.12.2-14.23.5.2860.jar"), b"x").unwrap();
+        let found = find_forge_jar(&dir).expect("应兜底识别 forge jar");
+        assert!(found.ends_with("forge-1.12.2-14.23.5.2860.jar"));
+
+        // universal 优先
+        std::fs::write(dir.join("forge-1.12.2-14.23.5.2860-universal.jar"), b"x").unwrap();
+        let found = find_forge_jar(&dir).expect("应识别 universal");
+        assert!(found.to_string_lossy().contains("universal"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_legacy_mcmod_info() {
+        let dir = std::env::temp_dir().join(format!("docl-mcmod-info-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("mods")).unwrap();
+        {
+            let file = std::fs::File::create(dir.join("mods/legacy-1.12.2.jar")).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("mcmod.info", options).unwrap();
+            zip.write_all(br#"[{"modid":"legacy","mcversion":"1.12.2"}]"#)
+                .unwrap();
+            zip.finish().unwrap();
+        }
+        let (game, loader, _) = infer_from_mods(&dir);
+        assert_eq!(game, "1.12.2");
+        assert_eq!(loader, "forge");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

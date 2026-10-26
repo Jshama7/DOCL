@@ -1127,7 +1127,7 @@ onBeforeUnmount(() => {
           <IconButton
             icon="trash"
             label="从最近服务器移除"
-            variant="danger"
+            variant="danger-quiet"
             :size="30"
             @click="removeRecent(server.address)"
           />
@@ -1243,7 +1243,7 @@ onBeforeUnmount(() => {
                   v-if="selectedServerIsPack"
                   icon="trash"
                   label="删除服务端包"
-                  variant="danger"
+                  variant="danger-quiet"
                   :size="32"
                   @click="removeServerPack"
                 />

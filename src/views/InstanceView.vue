@@ -1625,7 +1625,7 @@ function launch() {
                 <IconButton
                   icon="trash"
                   :label="confirmName === file.name ? '确认删除' : '删除'"
-                  variant="danger"
+                  :variant="confirmName === file.name ? 'danger' : 'danger-quiet'"
                   :size="26"
                   @click="requestDelete(file)"
                 />
@@ -1696,7 +1696,7 @@ function launch() {
               <IconButton
                 icon="trash"
                 :label="confirmName === file.name ? '确认删除' : '删除'"
-                variant="danger"
+                :variant="confirmName === file.name ? 'danger' : 'danger-quiet'"
                 :size="30"
                 @click="requestDelete(file)"
               />

@@ -2,13 +2,16 @@ use crate::config::Config;
 use crate::instance;
 use anyhow::Result;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-/// 单个日志文件最多读取的字节数，避免超大 debug.log 拖慢分析。
-const READ_LIMIT: u64 = 3 * 1024 * 1024;
+/// 小文件整读；大文件只保留头部与尾部（崩溃堆栈在尾部）。
+const WHOLE_LIMIT: u64 = 6 * 1024 * 1024;
+const HEAD_LIMIT: u64 = 512 * 1024;
+const TAIL_LIMIT: u64 = 4 * 1024 * 1024;
 /// 崩溃报告与 latest.log 的写入时间差在这个范围内时，认为崩溃报告属于本次运行。
 const SAME_RUN_WINDOW: u64 = 90;
 
@@ -16,6 +19,31 @@ const SAME_RUN_WINDOW: u64 = 90;
 pub struct CrashLink {
     pub label: String,
     pub url: String,
+}
+
+/// 可疑 Mod：来自堆栈包名或崩溃报告的 Suspected Mods。
+#[derive(Debug, Clone, Serialize)]
+pub struct CrashSuspect {
+    pub name: String,
+    /// mods 目录里的文件名，未匹配到时为空
+    pub file_name: String,
+    /// 命中的包名（堆栈分析时）
+    pub package: String,
+    /// stack / reported
+    pub reason: String,
+}
+
+/// 分析时读取到的实例上下文，用于生成更具体的建议。
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct CrashContext {
+    pub game_version: String,
+    pub loader: String,
+    pub java_major: u32,
+    pub java_path: String,
+    pub memory_mb: u32,
+    pub mod_count: u32,
+    /// hs_err 的 Problematic frame
+    pub problematic_frame: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -26,12 +54,16 @@ pub struct CrashMatch {
     pub advice: Vec<String>,
     pub evidence: Vec<String>,
     pub links: Vec<CrashLink>,
+    /// 90 高（基本可直接定位）/ 70 中 / 50 低
+    pub priority: u8,
+    /// java / memory / mod / loader / graphics / file / world / server / auth
+    pub category: String,
+    pub suspects: Vec<CrashSuspect>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CrashReport {
     pub version_id: String,
-    /// 是否找到了可分析的日志
     pub found: bool,
     pub source: String,
     pub source_path: String,
@@ -42,6 +74,8 @@ pub struct CrashReport {
     pub matches: Vec<CrashMatch>,
     pub excerpt: Vec<String>,
     pub scanned: Vec<String>,
+    pub suspects: Vec<CrashSuspect>,
+    pub context: CrashContext,
 }
 
 struct Rule {
@@ -51,6 +85,8 @@ struct Rule {
     patterns: &'static [&'static str],
     advice: &'static [&'static str],
     links: &'static [(&'static str, &'static str)],
+    priority: u8,
+    category: &'static str,
 }
 
 const RULES: &[Rule] = &[
@@ -69,6 +105,8 @@ const RULES: &[Rule] = &[
             "改完后重新启动游戏。",
         ],
         links: &[("下载 Temurin JDK", "https://adoptium.net/temurin/releases/")],
+        priority: 90,
+        category: "java",
     },
     Rule {
         id: "out-of-memory",
@@ -80,13 +118,62 @@ const RULES: &[Rule] = &[
             "java heap space",
             "could not reserve enough space",
             "unable to allocate",
+            "outofmemoryerror",
         ],
         advice: &[
             "在设置或版本设置里调大内存，整合包建议 6–8 GB，但不要超过物理内存的一半。",
             "关闭浏览器等占用内存较多的程序。",
             "降低渲染距离、模拟距离或光影质量后重试。",
+            "如果已经分到 8 GB 仍不足，检查是否使用了 32 位 Java。",
         ],
         links: &[],
+        priority: 90,
+        category: "memory",
+    },
+    Rule {
+        id: "vm-options",
+        title: "Java 启动参数无效",
+        summary: "JVM 不认识设置的启动参数，或无法创建虚拟机，通常是自定义参数写错或内存过大。",
+        patterns: &[
+            "unrecognized vm option",
+            "could not create the java virtual machine",
+            "error: could not create",
+            "invalid maximum heap size",
+            "error occurred during initialization of vm",
+        ],
+        advice: &[
+            "在设置或版本设置里清空自定义 Java 参数后重试。",
+            "检查最大内存是否超过物理内存，或是否写成了非法数值。",
+            "确认使用的 Java 版本支持这些参数（部分参数仅特定版本可用）。",
+        ],
+        links: &[],
+        priority: 88,
+        category: "java",
+    },
+    Rule {
+        id: "missing-dependency",
+        title: "缺少前置 Mod 或类",
+        summary: "某个 Mod 依赖的前置没有安装、版本不满足，或类在运行时找不到。",
+        patterns: &[
+            "missing or unsupported mandatory dependencies",
+            "missing required dependency",
+            "modresolutionexception",
+            "missing dependency",
+            "requires any version of",
+            "requires version",
+            "mod file is missing",
+            "java.lang.noclassdeffounderror",
+            "java.lang.classnotfoundexception",
+            "java.lang.classnotfounderror",
+        ],
+        advice: &[
+            "按日志里列出的 modid 安装对应前置，版本需与游戏、加载器一致。",
+            "在本启动器的「下载 → 模组」里打开该 Mod 详情，前置区会列出必需依赖。",
+            "整合包建议使用导入功能完整安装，避免手动拷贝漏掉依赖。",
+        ],
+        links: &[],
+        priority: 86,
+        category: "mod",
     },
     Rule {
         id: "mod-conflict",
@@ -107,206 +194,30 @@ const RULES: &[Rule] = &[
             "在崩溃报告里搜索「Failure message」，通常会直接写出冲突的 Mod ID。",
         ],
         links: &[],
-    },
-    Rule {
-        id: "missing-dependency",
-        title: "缺少前置 Mod",
-        summary: "某个 Mod 依赖的前置库没有安装，或版本不满足要求。",
-        patterns: &[
-            "missing or unsupported mandatory dependencies",
-            "missing required dependency",
-            "modresolutionexception",
-            "missing dependency",
-        ],
-        advice: &[
-            "按日志里列出的 modid 安装对应前置。",
-            "确认前置 Mod 的版本与游戏版本、加载器版本一致。",
-            "整合包建议使用导入功能完整安装，避免手动拷贝漏掉依赖。",
-        ],
-        links: &[],
+        priority: 86,
+        category: "mod",
     },
     Rule {
         id: "mixin",
         title: "Mixin 注入失败",
-        summary: "某个 Mod 的 Mixin 与当前游戏版本或其他 Mod 不兼容。",
+        summary: "某个 Mod 的 Mixin 补丁无法应用，通常是 Mod 版本与游戏或加载器不匹配。",
         patterns: &[
             "mixin apply failed",
             "mixintransformererror",
             "mixin.injection",
             "mixin config",
-        ],
-        advice: &[
-            "确认该 Mod 支持当前游戏版本和加载器版本。",
-            "尝试更新该 Mod 或它依赖的前置库。",
-            "在崩溃报告里找到「Mixin apply failed」后面的 Mod 名称并暂时禁用。",
-        ],
-        links: &[],
-    },
-    Rule {
-        id: "graphics",
-        title: "显卡驱动 / OpenGL 问题",
-        summary: "游戏无法创建渲染窗口或初始化 OpenGL，通常与显卡驱动有关。",
-        patterns: &[
-            "glfw error",
-            "failed to create window",
-            "failed to create glfw window",
-            "pixel format not accelerated",
-            "doesn't support opengl",
-            "could not create opengl context",
-        ],
-        advice: &[
-            "到显卡厂商官网更新驱动，不要只依赖系统自带驱动。",
-            "确认不是通过远程桌面或虚拟机运行游戏。",
-            "在设置里打开「优先使用高性能显卡」后重试。",
-        ],
-        links: &[],
-    },
-    Rule {
-        id: "corrupted-jar",
-        title: "文件损坏",
-        summary: "某个 jar 下载不完整或已损坏，加载时无法解压。",
-        patterns: &[
-            "zip end header not found",
-            "invalid or corrupted jar",
-            "java.util.zip.zipexception",
-            "error in opening zip file",
-            "invalid jar file",
-        ],
-        advice: &[
-            "在版本设置里重新下载该版本或对应的 Mod。",
-            "检查 mods 目录里是否有 0 字节或异常的 jar 并删除。",
-            "确认磁盘剩余空间充足。",
-        ],
-        links: &[],
-    },
-    Rule {
-        id: "class-loading",
-        title: "类加载失败",
-        summary: "Mod 与游戏版本不匹配，或缺少前置导致类找不到。",
-        patterns: &[
-            "java.lang.nosuchmethoderror",
-            "java.lang.noclassdeffounderror",
-            "java.lang.classnotfounderror",
-            "java.lang.exceptioninitializererror",
-        ],
-        advice: &[
-            "确认所有 Mod 都是同一游戏版本。",
-            "删除只适用于其他版本的 Mod。",
-            "补齐报错里出现的类所属的前置 Mod。",
-        ],
-        links: &[],
-    },
-    Rule {
-        id: "jvm-fatal",
-        title: "Java 虚拟机崩溃",
-        summary: "JVM 层发生严重错误（SIGSEGV/SIGILL 等），常见于驱动、本地库或内存不稳定。",
-        patterns: &[
-            "a fatal error has been detected by the java runtime environment",
-            "sigtrap",
-            "sigsegv",
-            "hs_err_pid",
-        ],
-        advice: &[
-            "更新显卡驱动和 Java 版本。",
-            "关闭 CPU/内存超频（包括 XMP），检查内存稳定性。",
-            "在版本目录里找到 hs_err_pid*.log，崩溃模块名就在开头几行。",
-        ],
-        links: &[("崩溃报告说明", "https://minecraft.wiki/w/Crash_report")],
-    },
-    Rule {
-        id: "auth",
-        title: "账号验证失败",
-        summary: "正版登录状态失效，或无法连接 Mojang / Microsoft 的验证服务器。",
-        patterns: &[
-            "failed to verify username",
-            "invalid session",
-            "authentication servers",
-            "invalid credentials",
-        ],
-        advice: &[
-            "在账号页重新登录微软账号。",
-            "检查网络或代理是否拦截了验证域名。",
-            "离线账号请使用离线模式，或关闭服务器的正版验证。",
-        ],
-        links: &[],
-    },
-    Rule {
-        id: "missing-dependency",
-        title: "缺少前置 Mod",
-        summary: "某个 Mod 依赖的前置没有安装，或前置版本不满足要求。",
-        patterns: &[
-            "java.lang.noclassdeffounderror",
-            "java.lang.classnotfoundexception",
-            "java.lang.nosuchmethoderror",
-            "java.lang.nosuchfielderror",
-            "requires any version of",
-            "requires version",
-            "mod file is missing",
-            "missing or unsupported mandatory dependencies",
-        ],
-        advice: &[
-            "在模组列表里搜索报错中提到的 Mod ID，安装对应的前置。",
-            "在本启动器的「下载 → 模组」里打开该 Mod 详情，前置区会列出必需依赖。",
-            "前置必须是同一加载器、同一 Minecraft 版本的构建。",
-        ],
-        links: &[],
-    },
-    Rule {
-        id: "mixin-failure",
-        title: "Mixin 注入失败",
-        summary: "某个 Mod 的 Mixin 补丁无法应用，通常是 Mod 版本与游戏或加载器不匹配。",
-        patterns: &[
-            "mixin apply failed",
-            "mixin transformation",
-            "mixin.apply",
             "org.spongepowered.asm.mixin",
             "critical injection failure",
             "invalid mixin",
         ],
         advice: &[
-            "把报错里出现的 Mod 更新到与当前 Minecraft 版本匹配的构建。",
+            "确认该 Mod 支持当前游戏版本和加载器版本，必要时更新到匹配构建。",
             "如果同时装了多个优化 Mod（如 OptiFine 与 Sodium），只保留其中一个。",
             "在版本设置里临时禁用可疑 Mod 验证是否恢复。",
         ],
         links: &[],
-    },
-    Rule {
-        id: "graphics-driver",
-        title: "显卡驱动或 OpenGL 异常",
-        summary: "创建窗口或渲染时 OpenGL 失败，多与显卡驱动、双显卡切换或远程桌面有关。",
-        patterns: &[
-            "glfw error",
-            "opengl error",
-            "pixel format",
-            "wglcreatecontext",
-            "failed to create window",
-            "exiting current thread",
-            "unsupported graphics",
-        ],
-        advice: &[
-            "更新显卡驱动，笔记本请确认游戏跑在独显上。",
-            "在设置里开启「优先使用独立显卡」，或关闭远程桌面后重试。",
-            "降低光影与渲染距离，排除显存不足。",
-        ],
-        links: &[],
-    },
-    Rule {
-        id: "vm-options",
-        title: "Java 启动参数无效",
-        summary: "JVM 不认识设置的启动参数，或无法创建虚拟机，通常是自定义参数写错或内存过大。",
-        patterns: &[
-            "unrecognized vm option",
-            "could not create the java virtual machine",
-            "error: could not create",
-            "invalid maximum heap size",
-            "error occurred during initialization of vm",
-        ],
-        advice: &[
-            "在设置或版本设置里清空自定义 Java 参数后重试。",
-            "检查最大内存是否超过物理内存，或是否写成了非法数值。",
-            "确认使用的 Java 版本支持这些参数（部分参数仅特定版本可用）。",
-        ],
-        links: &[],
+        priority: 82,
+        category: "mod",
     },
     Rule {
         id: "mod-version-mismatch",
@@ -327,6 +238,90 @@ const RULES: &[Rule] = &[
             "整合包请通过启动器完整安装，避免手动替换单个 Mod。",
         ],
         links: &[],
+        priority: 80,
+        category: "mod",
+    },
+    Rule {
+        id: "corrupted-jar",
+        title: "文件损坏",
+        summary: "某个 jar 下载不完整或已损坏，加载时无法解压。",
+        patterns: &[
+            "zip end header not found",
+            "invalid or corrupted jar",
+            "java.util.zip.zipexception",
+            "error in opening zip file",
+            "invalid jar file",
+        ],
+        advice: &[
+            "在版本设置里重新下载该版本或对应的 Mod。",
+            "检查 mods 目录里是否有 0 字节或异常的 jar 并删除。",
+            "确认磁盘剩余空间充足。",
+        ],
+        links: &[],
+        priority: 76,
+        category: "file",
+    },
+    Rule {
+        id: "class-loading",
+        title: "类加载失败",
+        summary: "Mod 与游戏版本不匹配，或缺少前置导致类初始化失败。",
+        patterns: &[
+            "java.lang.nosuchmethoderror",
+            "java.lang.exceptioninitializererror",
+            "java.lang.nosuchfielderror",
+        ],
+        advice: &[
+            "确认所有 Mod 都是同一游戏版本。",
+            "删除只适用于其他版本的 Mod。",
+            "补齐报错里出现的类所属的前置 Mod。",
+        ],
+        links: &[],
+        priority: 72,
+        category: "mod",
+    },
+    Rule {
+        id: "graphics",
+        title: "显卡驱动 / OpenGL 问题",
+        summary: "游戏无法创建渲染窗口或初始化 OpenGL，通常与显卡驱动有关。",
+        patterns: &[
+            "glfw error",
+            "failed to create window",
+            "failed to create glfw window",
+            "pixel format not accelerated",
+            "pixel format",
+            "doesn't support opengl",
+            "could not create opengl context",
+            "opengl error",
+            "wglcreatecontext",
+            "unsupported graphics",
+        ],
+        advice: &[
+            "到显卡厂商官网更新驱动，不要只依赖系统自带驱动。",
+            "确认不是通过远程桌面或虚拟机运行游戏。",
+            "在设置里打开「优先使用高性能显卡」后重试。",
+        ],
+        links: &[],
+        priority: 70,
+        category: "graphics",
+    },
+    Rule {
+        id: "jvm-fatal",
+        title: "Java 虚拟机崩溃",
+        summary: "JVM 层发生严重错误（SIGSEGV/SIGILL 等），常见于驱动、本地库或内存不稳定。",
+        patterns: &[
+            "a fatal error has been detected by the java runtime environment",
+            "sigtrap",
+            "sigsegv",
+            "hs_err_pid",
+        ],
+        advice: &[
+            "更新显卡驱动和 Java 版本。",
+            "关闭 CPU/内存超频（包括 XMP），检查内存稳定性。",
+            "崩溃日志开头的 Problematic frame 会指向出问题的模块。",
+        ],
+        links: &[("崩溃报告说明", "https://minecraft.wiki/w/Crash_report")],
+        priority: 66,
+        category: "java",
     },
     Rule {
         id: "world-corrupt",
@@ -336,7 +331,6 @@ const RULES: &[Rule] = &[
             "chunk file",
             "region file",
             "exception generating new chunk",
-            "corrupted",
             "world corrupt",
             "failed to load world",
             "level.dat",
@@ -347,6 +341,8 @@ const RULES: &[Rule] = &[
             "如果只有特定区域崩溃，可用区块修复工具处理，或从备份恢复。",
         ],
         links: &[],
+        priority: 58,
+        category: "world",
     },
     Rule {
         id: "server-port",
@@ -363,6 +359,27 @@ const RULES: &[Rule] = &[
             "同一台机器同时开多个服务端时必须使用不同端口。",
         ],
         links: &[],
+        priority: 56,
+        category: "server",
+    },
+    Rule {
+        id: "auth",
+        title: "账号验证失败",
+        summary: "正版登录状态失效，或无法连接 Mojang / Microsoft 的验证服务器。",
+        patterns: &[
+            "failed to verify username",
+            "invalid session",
+            "authentication servers",
+            "invalid credentials",
+        ],
+        advice: &[
+            "在账号页重新登录微软账号。",
+            "检查网络或代理是否拦截了验证域名。",
+            "离线账号请使用离线模式，或关闭服务器的正版验证。",
+        ],
+        links: &[],
+        priority: 52,
+        category: "auth",
     },
     Rule {
         id: "authlib-login",
@@ -379,6 +396,8 @@ const RULES: &[Rule] = &[
             "如果游戏内被踢并提示验证失败，说明进的是正版验证服务器。",
         ],
         links: &[],
+        priority: 50,
+        category: "auth",
     },
 ];
 
@@ -388,20 +407,112 @@ fn generic_match() -> CrashMatch {
         id: "unknown".into(),
         title: "游戏崩溃（未匹配到已知原因）".into(),
         summary: "已经生成崩溃报告，但没有命中启动器内置的常见问题规则。".into(),
-        advice: [
-            "查看下方摘录里的「Description」和第一段异常堆栈。",
-            "禁用最近新增的 Mod、资源包或光影后重试。",
-            "向社区求助时附上游戏版本、加载器版本和完整崩溃报告。",
-        ]
-        .iter()
-        .map(|value| value.to_string())
-        .collect(),
+        advice: vec![
+            "查看下方摘录里的「Description」和第一段异常堆栈。".into(),
+            "禁用最近新增的 Mod、资源包或光影后重试。".into(),
+            "向社区求助时附上游戏版本、加载器版本和完整崩溃报告。".into(),
+        ],
         evidence: Vec::new(),
         links: vec![CrashLink {
             label: "崩溃报告说明".into(),
             url: "https://minecraft.wiki/w/Crash_report".into(),
         }],
+        priority: 10,
+        category: "other".into(),
+        suspects: Vec::new(),
     }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+fn modified_secs(path: &Path) -> u64 {
+    fs::metadata(path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0)
+}
+
+/// 读日志：小文件整读，大文件保留「头部 + 尾部」，因为崩溃堆栈总在末尾。
+fn read_text(path: &Path) -> String {
+    let Ok(meta) = fs::metadata(path) else {
+        return String::new();
+    };
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let size = meta.len();
+    if size <= WHOLE_LIMIT {
+        let mut buffer = Vec::new();
+        if file.read_to_end(&mut buffer).is_err() {
+            return String::new();
+        }
+        return String::from_utf8_lossy(&buffer).to_string();
+    }
+    let mut head = vec![0u8; HEAD_LIMIT as usize];
+    let head_len = file.read(&mut head).unwrap_or(0);
+    let tail_start = size.saturating_sub(TAIL_LIMIT);
+    let mut tail = Vec::new();
+    if file.seek(SeekFrom::Start(tail_start)).is_ok() {
+        let _ = file.read_to_end(&mut tail);
+    }
+    let mut text = String::from_utf8_lossy(&head[..head_len]).to_string();
+    text.push_str(&format!(
+        "\n\n... [日志过大，已省略中间 {} KB] ...\n\n",
+        tail_start.saturating_sub(head_len as u64) / 1024
+    ));
+    text.push_str(&String::from_utf8_lossy(&tail));
+    text
+}
+
+fn newest_file(dir: &Path, accept: impl Fn(&str) -> bool) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    let mut best: Option<(u64, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !accept(&name) {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let modified = modified_secs(&path);
+        if best
+            .as_ref()
+            .map(|(time, _)| modified > *time)
+            .unwrap_or(true)
+        {
+            best = Some((modified, path));
+        }
+    }
+    best.map(|(_, path)| path)
+}
+
+fn excerpt_from(text: &str, kind: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
+    let picked: Vec<String> = if kind == "latest-log" {
+        lines
+            .iter()
+            .rev()
+            .take(60)
+            .rev()
+            .map(|line| line.chars().take(240).collect())
+            .collect()
+    } else {
+        lines
+            .iter()
+            .take(45)
+            .map(|line| line.chars().take(240).collect())
+            .collect()
+    };
+    picked
 }
 
 fn evidence_for(text: &str, patterns: &[&str]) -> Vec<String> {
@@ -438,7 +549,7 @@ fn description_of(text: &str) -> Option<String> {
 
 fn matches_in(text: &str) -> Vec<CrashMatch> {
     let lowered = text.to_lowercase();
-    let mut result = Vec::new();
+    let mut result: Vec<CrashMatch> = Vec::new();
     for rule in RULES {
         if !rule.patterns.iter().any(|pattern| lowered.contains(pattern)) {
             continue;
@@ -447,93 +558,545 @@ fn matches_in(text: &str) -> Vec<CrashMatch> {
             id: rule.id.into(),
             title: rule.title.into(),
             summary: rule.summary.into(),
-            advice: rule
-                .advice
-                .iter()
-                .map(|value| value.to_string())
-                .collect(),
+            advice: rule.advice.iter().map(|value| value.to_string()).collect(),
             evidence: evidence_for(text, rule.patterns),
             links: rule
                 .links
                 .iter()
                 .map(|(label, url)| CrashLink {
-                    label: (*label).into(),
-                    url: (*url).into(),
+                    label: label.to_string(),
+                    url: url.to_string(),
                 })
                 .collect(),
+            priority: rule.priority,
+            category: rule.category.into(),
+            suspects: Vec::new(),
         });
-        if result.len() >= 4 {
-            break;
-        }
     }
-
-    let looks_like_crash = lowered.contains("---- minecraft crash report ----")
-        || lowered.contains("the game crashed whilst")
-        || lowered.contains("a fatal error has been detected by the java runtime environment");
-    if result.is_empty() && looks_like_crash {
+    if result.is_empty() && looks_like_crash(text) {
         result.push(generic_match());
     }
+    // 高优先级在前，同样优先级按规则表顺序
+    result.sort_by(|a, b| b.priority.cmp(&a.priority));
     result
 }
 
-fn modified_secs(path: &Path) -> u64 {
-    fs::metadata(path)
-        .ok()
-        .and_then(|meta| meta.modified().ok())
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+fn looks_like_crash(text: &str) -> bool {
+    let lowered = text.to_lowercase();
+    lowered.contains("---- minecraft crash report ----")
+        || lowered.contains("exception")
+        || lowered.contains("caused by:")
+        || lowered.contains("a fatal error has been detected")
 }
 
-fn read_text(path: &Path) -> String {
-    let Ok(mut file) = File::open(path) else {
-        return String::new();
-    };
-    let mut buffer = Vec::new();
-    if file.by_ref().take(READ_LIMIT).read_to_end(&mut buffer).is_err() {
-        return String::new();
+fn problematic_frame(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        if line.trim().starts_with("# Problematic frame:") {
+            if let Some(next) = lines.next() {
+                let value = next.trim().trim_start_matches('#').trim();
+                if !value.is_empty() {
+                    return Some(value.to_string());
+                }
+            }
+        }
     }
-    String::from_utf8_lossy(&buffer).to_string()
+    None
 }
 
-fn newest_file(dir: &Path, accept: impl Fn(&str) -> bool) -> Option<PathBuf> {
-    let entries = fs::read_dir(dir).ok()?;
-    let mut best: Option<(u64, PathBuf)> = None;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if !accept(&name) {
+/// 堆栈里出现频率最高的第三方包名（过滤掉游戏、加载器与常见库）。
+fn suspicious_packages(text: &str) -> Vec<(String, usize)> {
+    const IGNORED: &[&str] = &[
+        "java.",
+        "javax.",
+        "jdk.",
+        "sun.",
+        "com.sun.",
+        "net.minecraft.",
+        "net.minecraftforge.",
+        "net.neoforged.",
+        "net.fabricmc.",
+        "com.mojang.",
+        "org.lwjgl.",
+        "io.netty.",
+        "oshi.",
+        "com.google.",
+        "org.apache.",
+        "it.unimi.",
+        "org.jetbrains.",
+        "org.slf4j.",
+        "ch.qos.logback.",
+        "kotlin.",
+        "scala.",
+        "org.objectweb.asm.",
+        "org.ow2.asm.",
+        "cpw.mods.",
+        "org.spongepowered.",
+        "io.github.",
+        "com.electronwill.",
+        "org.commonmark.",
+        "net.minecrell.",
+        "org.jline.",
+        "com.mojang.blaze3d.",
+    ];
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("at ") else {
+            continue;
+        };
+        let Some(open) = rest.find('(') else {
+            continue;
+        };
+        let full = &rest[..open];
+        let segments: Vec<&str> = full.split('.').collect();
+        // 至少 a.b.c.Class.method 才有包名可比
+        if segments.len() < 5 {
             continue;
         }
+        let package = segments[..segments.len() - 2].join(".");
+        if package.split('.').count() < 2 {
+            continue;
+        }
+        if IGNORED
+            .iter()
+            .any(|prefix| package.starts_with(prefix))
+        {
+            continue;
+        }
+        *counts.entry(package).or_insert(0) += 1;
+    }
+    let mut list: Vec<(String, usize)> = counts.into_iter().collect();
+    list.sort_by(|a, b| b.1.cmp(&a.1));
+    list.truncate(6);
+    list
+}
+
+struct ModFile {
+    file_name: String,
+    mod_id: String,
+    display_name: String,
+    /// 斜杠形式的包前缀，例如 `com/example/mod`
+    packages: Vec<String>,
+}
+
+fn toml_value(text: &str, key: &str) -> Option<String> {
+    for line in text.lines() {
+        let trimmed = line.trim();
+        let Some(value) = trimmed.strip_prefix(key) else {
+            continue;
+        };
+        let value = value.trim_start();
+        let Some(value) = value.strip_prefix('=') else {
+            continue;
+        };
+        let value = value.trim().trim_matches('"').trim_matches('\'');
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+fn scan_mods(cfg: &Config, version_id: &str) -> Vec<ModFile> {
+    let dir = instance::game_dir(cfg, version_id).join("mods");
+    let Ok(entries) = fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut result = Vec::new();
+    for entry in entries.flatten() {
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
-        let modified = modified_secs(&path);
-        if best.as_ref().map(|(time, _)| modified > *time).unwrap_or(true) {
-            best = Some((modified, path));
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let lower = file_name.to_lowercase();
+        if !lower.ends_with(".jar") && !lower.ends_with(".jar.disabled") {
+            continue;
         }
+        let Ok(file) = File::open(&path) else {
+            continue;
+        };
+        let Ok(mut zip) = zip::ZipArchive::new(file) else {
+            continue;
+        };
+        let mut mod_id = String::new();
+        let mut display_name = String::new();
+        if let Ok(mut entry) = zip.by_name("fabric.mod.json") {
+            let mut text = String::new();
+            if entry.read_to_string(&mut text).is_ok() {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                    mod_id = json
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    display_name = json
+                        .get("name")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                }
+            }
+        }
+        if mod_id.is_empty() {
+            for candidate in ["META-INF/mods.toml", "META-INF/neoforge.mods.toml"] {
+                if let Ok(mut entry) = zip.by_name(candidate) {
+                    let mut text = String::new();
+                    if entry.read_to_string(&mut text).is_ok() {
+                        mod_id = toml_value(&text, "modId").unwrap_or_default();
+                        display_name = toml_value(&text, "displayName").unwrap_or_default();
+                        if !mod_id.is_empty() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        // 收集 jar 里的包前缀，用于和堆栈包名比对
+        let mut packages: Vec<String> = Vec::new();
+        for index in 0..zip.len().min(600) {
+            let Ok(entry) = zip.by_index(index) else {
+                continue;
+            };
+            let name = entry.name().to_string();
+            if !name.ends_with(".class") || name.ends_with("module-info.class") {
+                continue;
+            }
+            if let Some(position) = name.rfind('/') {
+                let package = name[..position].to_string();
+                if !package.is_empty() && !packages.contains(&package) {
+                    packages.push(package);
+                }
+            }
+            if packages.len() >= 200 {
+                break;
+            }
+        }
+        result.push(ModFile {
+            file_name,
+            mod_id,
+            display_name,
+            packages,
+        });
     }
-    best.map(|(_, path)| path)
+    result
 }
 
-fn excerpt_from(text: &str, kind: &str) -> Vec<String> {
-    let lines: Vec<&str> = text.lines().filter(|line| !line.trim().is_empty()).collect();
-    let picked: Vec<String> = if kind == "latest-log" {
-        lines
+fn locate_by_packages(mods: &[ModFile], packages: &[(String, usize)]) -> Vec<CrashSuspect> {
+    let mut result: Vec<CrashSuspect> = Vec::new();
+    for (package, _count) in packages {
+        let normalized = package.replace('.', "/");
+        let hit = mods.iter().find(|mod_file| {
+            mod_file.packages.iter().any(|candidate| {
+                candidate == &normalized
+                    || candidate.starts_with(&format!("{normalized}/"))
+                    || normalized.starts_with(&format!("{candidate}/"))
+            })
+        });
+        let Some(hit) = hit else {
+            continue;
+        };
+        if result
             .iter()
-            .rev()
-            .take(60)
-            .rev()
-            .map(|line| line.chars().take(240).collect())
-            .collect()
+            .any(|item| item.file_name == hit.file_name)
+        {
+            continue;
+        }
+        result.push(CrashSuspect {
+            name: if hit.display_name.is_empty() {
+                if hit.mod_id.is_empty() {
+                    hit.file_name.clone()
+                } else {
+                    hit.mod_id.clone()
+                }
+            } else {
+                hit.display_name.clone()
+            },
+            file_name: hit.file_name.clone(),
+            package: package.clone(),
+            reason: "stack".into(),
+        });
+        if result.len() >= 3 {
+            break;
+        }
+    }
+    result
+}
+
+/// 从崩溃报告的 "Suspected Mods:" 段与 "-- MOD xxx --" 标题提取 Mod。
+fn reported_mod_tokens(text: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Suspected Mods:") || trimmed.starts_with("Suspected Mod:") {
+            if let Some((_, rest)) = trimmed.split_once(':') {
+                let rest = rest.trim();
+                if !rest.is_empty() {
+                    tokens.push(rest.to_string());
+                }
+            }
+            while let Some(next) = lines.peek() {
+                let candidate = next.trim();
+                let indented = next.starts_with('\t') || next.starts_with("    ") || next.starts_with("  ");
+                if candidate.is_empty() || !indented {
+                    break;
+                }
+                tokens.push(candidate.to_string());
+                lines.next();
+            }
+        }
+        if trimmed.starts_with("-- MOD ") && trimmed.ends_with(" --") {
+            let name = trimmed
+                .trim_start_matches("-- MOD ")
+                .trim_end_matches(" --")
+                .trim();
+            if !name.is_empty() {
+                tokens.push(name.to_string());
+            }
+        }
+    }
+    let mut normalized: Vec<String> = Vec::new();
+    for token in tokens {
+        let value = mod_token(&token);
+        if value.is_empty() {
+            continue;
+        }
+        if !normalized.iter().any(|item| item.eq_ignore_ascii_case(&value)) {
+            normalized.push(value);
+        }
+    }
+    normalized
+}
+
+/// "Better Mineshafts (bettermineshafts), Version: 1.0" → "bettermineshafts"
+fn mod_token(entry: &str) -> String {
+    if let (Some(open), Some(close)) = (entry.rfind('('), entry.rfind(')')) {
+        if close > open {
+            let inner = entry[open + 1..close].trim();
+            if !inner.is_empty() {
+                return inner.to_string();
+            }
+        }
+    }
+    entry
+        .split(',')
+        .next()
+        .unwrap_or(entry)
+        .trim()
+        .to_string()
+}
+
+fn normalize_token(text: &str) -> String {
+    text.chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
+fn locate_reported(mods: &[ModFile], tokens: &[String]) -> Vec<CrashSuspect> {
+    let mut result: Vec<CrashSuspect> = Vec::new();
+    for token in tokens {
+        let normalized = normalize_token(token);
+        if normalized.is_empty() {
+            continue;
+        }
+        let hit = mods.iter().find(|mod_file| {
+            let id = normalize_token(&mod_file.mod_id);
+            let file = normalize_token(&mod_file.file_name);
+            (!id.is_empty() && (id == normalized || normalized.contains(&id)))
+                || file.contains(&normalized)
+        });
+        let suspect = match hit {
+            Some(hit) => CrashSuspect {
+                name: if hit.display_name.is_empty() {
+                    token.clone()
+                } else {
+                    hit.display_name.clone()
+                },
+                file_name: hit.file_name.clone(),
+                package: String::new(),
+                reason: "reported".into(),
+            },
+            None => CrashSuspect {
+                name: token.clone(),
+                file_name: String::new(),
+                package: String::new(),
+                reason: "reported".into(),
+            },
+        };
+        if result
+            .iter()
+            .any(|item| item.file_name == suspect.file_name && item.name == suspect.name)
+        {
+            continue;
+        }
+        result.push(suspect);
+        if result.len() >= 3 {
+            break;
+        }
+    }
+    result
+}
+
+fn expected_java(game_version: &str) -> u32 {
+    let mut parts = game_version.split('.');
+    let major = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(1);
+    if major >= 21 {
+        return 21;
+    }
+    if major != 1 {
+        return 17;
+    }
+    let minor = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    let patch = parts
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0);
+    if minor >= 21 || (minor == 20 && patch >= 5) {
+        21
+    } else if minor >= 17 {
+        17
     } else {
-        lines
-            .iter()
-            .take(45)
-            .map(|line| line.chars().take(240).collect())
-            .collect()
+        8
+    }
+}
+
+fn build_context(cfg: &Config, version_id: &str) -> CrashContext {
+    let (game_version, loader) = install_context(cfg, version_id);
+    let required = crate::install::resolve_detail(cfg, version_id)
+        .map(|merged| merged.detail.required_java())
+        .unwrap_or(0);
+    let java = crate::launch::find_java(cfg, required.max(8)).ok();
+    let mod_count = count_mods(cfg, version_id);
+    CrashContext {
+        game_version,
+        loader,
+        java_major: java.as_ref().map(|info| info.major).unwrap_or(required),
+        java_path: java
+            .as_ref()
+            .map(|info| info.path.clone())
+            .unwrap_or_default(),
+        memory_mb: crate::launch::effective_memory_mb(cfg),
+        mod_count,
+        problematic_frame: None,
+    }
+}
+
+fn install_context(cfg: &Config, version_id: &str) -> (String, String) {
+    crate::install::instance_context(cfg, version_id).unwrap_or_else(|_| (version_id.to_string(), String::new()))
+}
+
+fn count_mods(cfg: &Config, version_id: &str) -> u32 {
+    let dir = instance::game_dir(cfg, version_id).join("mods");
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    let name = entry.file_name().to_string_lossy().to_lowercase();
+                    name.ends_with(".jar") || name.ends_with(".jar.disabled")
+                })
+                .count() as u32
+        })
+        .unwrap_or(0)
+}
+
+/// 把实例信息写进建议，让提示更具体。
+fn apply_context(matches: &mut [CrashMatch], context: &CrashContext) {
+    if context.game_version.is_empty() && context.memory_mb == 0 {
+        return;
+    }
+    let expected = if context.game_version.is_empty() {
+        0
+    } else {
+        expected_java(&context.game_version)
     };
-    picked
+    for item in matches.iter_mut() {
+        match item.id.as_str() {
+            "java-version" => {
+                if !context.game_version.is_empty() && expected > 0 {
+                    let actual = if context.java_major == 0 {
+                        "未检测到".to_string()
+                    } else {
+                        format!("Java {}", context.java_major)
+                    };
+                    item.advice.insert(
+                        0,
+                        format!(
+                            "当前实例：{}，需要 Java {}；启动器目前选择的是 {}。",
+                            context.game_version, expected, actual
+                        ),
+                    );
+                    if context.java_major > 0 && context.java_major < expected {
+                        item.advice.insert(
+                            1,
+                            "已确认 Java 版本偏低，请到「设置 → Java」安装并选中对应版本。".into(),
+                        );
+                    }
+                }
+            }
+            "out-of-memory" | "vm-options" => {
+                if context.memory_mb > 0 {
+                    let hint = if context.memory_mb < 4096 {
+                        "当前分配偏低，建议 4096–8192 MB"
+                    } else {
+                        "如果仍然崩溃，可再提高 1024–2048 MB（不超过物理内存一半）"
+                    };
+                    item.advice.insert(
+                        0,
+                        format!("当前最大内存 {} MB；{}。", context.memory_mb, hint),
+                    );
+                }
+            }
+            "mod-version-mismatch" | "mod-conflict" | "mixin" | "missing-dependency" => {
+                if !context.game_version.is_empty() || !context.loader.is_empty() {
+                    item.advice.insert(
+                        0,
+                        format!(
+                            "当前实例：{} · {}，已安装 {} 个 Mod。",
+                            if context.game_version.is_empty() {
+                                "未知版本"
+                            } else {
+                                &context.game_version
+                            },
+                            if context.loader.is_empty() {
+                                "加载器未知"
+                            } else {
+                                &context.loader
+                            },
+                            context.mod_count
+                        ),
+                    );
+                }
+            }
+            "jvm-fatal" => {
+                if let Some(frame) = &context.problematic_frame {
+                    item.advice.insert(
+                        0,
+                        format!("本次崩溃的 Problematic frame：{frame}，可据此判断是显卡驱动还是本地库。"),
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn attach_suspects(matches: &mut [CrashMatch], suspects: &[CrashSuspect]) {
+    if suspects.is_empty() {
+        return;
+    }
+    if let Some(first) = matches.iter_mut().find(|item| item.category == "mod") {
+        first.suspects = suspects.iter().take(3).cloned().collect();
+    }
 }
 
 pub fn analyze(cfg: &Config, version_id: &str) -> Result<CrashReport> {
@@ -549,17 +1112,11 @@ pub fn analyze(cfg: &Config, version_id: &str) -> Result<CrashReport> {
     let latest_modified = modified_secs(&latest_log);
     let crash_fresh = crash_report
         .as_ref()
-        .map(|path| {
-            let modified = modified_secs(path);
-            modified + SAME_RUN_WINDOW >= latest_modified
-        })
+        .map(|path| modified_secs(path) + SAME_RUN_WINDOW >= latest_modified)
         .unwrap_or(false);
     let hs_err_fresh = hs_err
         .as_ref()
-        .map(|path| {
-            let modified = modified_secs(path);
-            modified + SAME_RUN_WINDOW >= latest_modified
-        })
+        .map(|path| modified_secs(path) + SAME_RUN_WINDOW >= latest_modified)
         .unwrap_or(false);
 
     let primary = if crash_fresh {
@@ -585,6 +1142,7 @@ pub fn analyze(cfg: &Config, version_id: &str) -> Result<CrashReport> {
         }
     }
 
+    let mut context = build_context(cfg, version_id);
     let Some(primary) = primary else {
         return Ok(CrashReport {
             version_id: version_id.into(),
@@ -598,6 +1156,8 @@ pub fn analyze(cfg: &Config, version_id: &str) -> Result<CrashReport> {
             matches: Vec::new(),
             excerpt: Vec::new(),
             scanned,
+            suspects: Vec::new(),
+            context,
         });
     };
 
@@ -611,13 +1171,49 @@ pub fn analyze(cfg: &Config, version_id: &str) -> Result<CrashReport> {
 
     let text = read_text(&primary);
     let mut combined = text.clone();
-    if let Ok(extra) = fs::read_to_string(&latest_log) {
-        combined.push_str("\n");
-        combined.push_str(&extra);
+    if latest_log.exists() && latest_log != primary {
+        combined.push('\n');
+        combined.push_str(&read_text(&latest_log));
+    }
+    if let Some(path) = hs_err.as_ref() {
+        if *path != primary {
+            combined.push('\n');
+            combined.push_str(&read_text(path));
+        }
     }
 
+    context.problematic_frame = problematic_frame(&combined);
+
     let description = description_of(&text);
-    let matches = matches_in(&combined);
+    let mut matches = matches_in(&combined);
+
+    // 可疑 Mod：堆栈包名优先，其次崩溃报告自带的 Suspected Mods
+    let packages = suspicious_packages(&combined);
+    let mods = if packages.is_empty() && !combined.contains("Suspected Mod") {
+        Vec::new()
+    } else {
+        scan_mods(cfg, version_id)
+    };
+    let mut suspects = locate_by_packages(&mods, &packages);
+    if suspects.len() < 3 {
+        let reported = reported_mod_tokens(&combined);
+        for suspect in locate_reported(&mods, &reported) {
+            if suspects
+                .iter()
+                .any(|item| item.file_name == suspect.file_name && item.name == suspect.name)
+            {
+                continue;
+            }
+            suspects.push(suspect);
+            if suspects.len() >= 3 {
+                break;
+            }
+        }
+    }
+
+    apply_context(&mut matches, &context);
+    attach_suspects(&mut matches, &suspects);
+
     let headline = if source_kind == "crash-report" {
         description
             .as_ref()
@@ -646,7 +1242,176 @@ pub fn analyze(cfg: &Config, version_id: &str) -> Result<CrashReport> {
         matches,
         excerpt: excerpt_from(&text, source_kind),
         scanned,
+        suspects,
+        context,
     })
+}
+
+/* ---------- 导出报告 ---------- */
+
+/// 含账号凭据的日志行整行隐藏，避免导出后泄露。
+fn redact(text: &str) -> (String, usize) {
+    const KEYS: [&str; 5] = [
+        "accesstoken",
+        "refreshtoken",
+        "clienttoken",
+        "authorization: bearer",
+        "bearer ",
+    ];
+    let mut hidden = 0usize;
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        let lower = line.to_lowercase();
+        if KEYS.iter().any(|key| lower.contains(key)) {
+            hidden += 1;
+            out.push_str("[已隐藏：包含账号凭据的日志行]\n");
+        } else {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    (out, hidden)
+}
+
+fn analysis_text(report: &CrashReport) -> String {
+    let mut out = String::new();
+    out.push_str("DOCL 崩溃分析报告\n");
+    out.push_str("=================\n\n");
+    out.push_str(&format!("版本：{}\n", report.version_id));
+    out.push_str(&format!("游戏版本：{}\n", report.context.game_version));
+    out.push_str(&format!("加载器：{}\n", report.context.loader));
+    out.push_str(&format!(
+        "Java：{}（{}）\n",
+        report.context.java_major, report.context.java_path
+    ));
+    out.push_str(&format!("最大内存：{} MB\n", report.context.memory_mb));
+    out.push_str(&format!("已安装 Mod：{} 个\n", report.context.mod_count));
+    if let Some(frame) = &report.context.problematic_frame {
+        out.push_str(&format!("Problematic frame：{frame}\n"));
+    }
+    out.push_str(&format!("\n结论：{}\n", report.headline));
+    if let Some(description) = &report.description {
+        out.push_str(&format!("崩溃描述：{description}\n"));
+    }
+    out.push_str("\n可疑 Mod：\n");
+    if report.suspects.is_empty() {
+        out.push_str("  （未定位到具体 Mod）\n");
+    } else {
+        for item in &report.suspects {
+            out.push_str(&format!(
+                "  - {}（{}）{}{}\n",
+                item.name,
+                if item.file_name.is_empty() {
+                    "未匹配到文件"
+                } else {
+                    &item.file_name
+                },
+                if item.package.is_empty() {
+                    String::new()
+                } else {
+                    format!("包名 {}", item.package)
+                },
+                if item.reason == "stack" { " · 来自堆栈" } else { " · 崩溃报告标注" }
+            ));
+        }
+    }
+    out.push_str("\n匹配结果：\n");
+    for item in &report.matches {
+        out.push_str(&format!(
+            "\n[{}] {}（优先级 {}）\n{}\n",
+            item.id, item.title, item.priority, item.summary
+        ));
+        for tip in &item.advice {
+            out.push_str(&format!("  · {tip}\n"));
+        }
+        if !item.evidence.is_empty() {
+            out.push_str("  证据：\n");
+            for line in &item.evidence {
+                out.push_str(&format!("    {line}\n"));
+            }
+        }
+    }
+    out
+}
+
+pub fn export(cfg: &Config, version_id: &str) -> Result<String> {
+    export_to(cfg, version_id, &crate::config::data_dir().join("crash-exports"))
+}
+
+fn export_to(cfg: &Config, version_id: &str, dir: &Path) -> Result<String> {
+    let report = analyze(cfg, version_id)?;
+    fs::create_dir_all(dir)?;
+    let safe_id: String = version_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let path = dir.join(format!("DOCL-crash-{safe_id}-{}.zip", now_secs()));
+    let file = File::create(&path)?;
+    let mut writer = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+    let mut hidden_total = 0usize;
+
+    fn add_text(
+        writer: &mut zip::ZipWriter<File>,
+        name: &str,
+        content: &str,
+        hidden: &mut usize,
+    ) -> Result<()> {
+        let (redacted, lines) = redact(content);
+        *hidden += lines;
+        writer.start_file(name, zip::write::SimpleFileOptions::default())?;
+        writer.write_all(redacted.as_bytes())?;
+        Ok(())
+    }
+
+    add_text(&mut writer, "analysis.txt", &analysis_text(&report), &mut hidden_total)?;
+
+    let game_dir = instance::game_dir(cfg, version_id);
+    let mut index = 1usize;
+    let mut log_paths: Vec<PathBuf> = Vec::new();
+    if !report.source_path.is_empty() {
+        log_paths.push(PathBuf::from(&report.source_path));
+    }
+    log_paths.push(game_dir.join("logs").join("latest.log"));
+    if let Some(path) = newest_file(&game_dir, |name| {
+        name.starts_with("hs_err_pid") && name.ends_with(".log")
+    }) {
+        log_paths.push(path);
+    }
+    for path in log_paths {
+        if !path.is_file() {
+            continue;
+        }
+        let text = read_text(&path);
+        let name = format!(
+            "logs/{index}-{}",
+            path.file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_else(|| "log.txt".into())
+        );
+        add_text(&mut writer, &name, &text, &mut hidden_total)?;
+        index += 1;
+    }
+
+    let context_json = serde_json::to_string_pretty(&report.context)?;
+    add_text(&mut writer, "context.json", &context_json, &mut hidden_total)?;
+
+    // 记录隐藏了多少行，便于用户判断报告是否被裁剪
+    writer.start_file("README.txt", options)?;
+    writer.write_all(
+        format!(
+            "由 DOCL 导出的崩溃报告\n\n包含：分析结论、可疑 Mod、实例信息与相关日志。\n出于安全考虑，有 {hidden_total} 行包含账号凭据的日志已被隐藏。\n"
+        )
+        .as_bytes(),
+    )?;
+    writer.finish()?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[cfg(test)]
@@ -659,6 +1424,7 @@ mod tests {
         let matches = matches_in(text);
         assert_eq!(matches[0].id, "java-version");
         assert!(!matches[0].evidence.is_empty());
+        assert_eq!(matches[0].priority, 90);
     }
 
     #[test]
@@ -668,6 +1434,8 @@ mod tests {
         let ids: Vec<&str> = report.iter().map(|item| item.id.as_str()).collect();
         assert!(ids.contains(&"out-of-memory"));
         assert!(ids.contains(&"graphics"));
+        // 高优先级排前面
+        assert_eq!(report[0].id, "out-of-memory");
     }
 
     #[test]
@@ -679,40 +1447,122 @@ mod tests {
     }
 
     #[test]
-    fn reads_newest_crash_report_from_game_dir() {
-        let stamp = std::time::SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|value| value.as_nanos())
-            .unwrap_or(0);
-        let root = std::env::temp_dir().join(format!("docl-crash-{stamp}"));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(root.join("logs")).unwrap();
-        fs::create_dir_all(root.join("crash-reports")).unwrap();
-        fs::write(root.join("logs").join("latest.log"), "[12:00:00] [main/INFO]: Hello").unwrap();
-        fs::write(
-            root.join("crash-reports").join("crash-2026-10-22_12.00.00-client.txt"),
-            "---- Minecraft Crash Report ----\nDescription: Rendering overlay\njava.lang.OutOfMemoryError: Java heap space",
-        )
-        .unwrap();
-
-        let mut cfg = Config::default();
-        cfg.game_dir = root.to_string_lossy().to_string();
-        cfg.version_isolation = false;
-
-        let report = analyze(&cfg, "test-instance").unwrap();
-        assert!(report.found);
-        assert_eq!(report.source_kind, "crash-report");
-        assert!(report.matches.iter().any(|item| item.id == "out-of-memory"));
-        assert!(report.headline.contains("Rendering overlay"));
-        let _ = fs::remove_dir_all(&root);
+    fn extracts_suspicious_packages() {
+        let text = "\tat com.example.coolmod.Core.tick(Core.java:10)\n\tat net.minecraft.client.Minecraft.run(Minecraft.java:1)\n\tat com.example.coolmod.Core.tick(Core.java:20)";
+        let packages = suspicious_packages(text);
+        assert_eq!(packages[0].0, "com.example.coolmod");
+        assert_eq!(packages[0].1, 2);
     }
 
     #[test]
-    fn extracts_description_and_excerpt() {
-        let text = "---- Minecraft Crash Report ----\n// Watchdog\nTime: 2026-10-22\nDescription: Ticking entity\n\njava.lang.NullPointerException";
-        assert_eq!(description_of(text).as_deref(), Some("Ticking entity"));
-        let excerpt = excerpt_from(text, "crash-report");
-        assert!(excerpt.iter().any(|line| line.contains("Description:")));
-        assert_eq!(excerpt.len(), 5);
+    fn reads_reported_suspected_mods() {
+        let text = "Suspected Mods: \n\tExample Mod (examplemod), Version: 1.0\n\tOther (othermod), Version: 2.0\n\n-- MOD thirdmod --\n";
+        let tokens = reported_mod_tokens(text);
+        assert_eq!(tokens, vec!["examplemod", "othermod", "thirdmod"]);
+    }
+
+    #[test]
+    fn expected_java_by_game_version() {
+        assert_eq!(expected_java("1.12.2"), 8);
+        assert_eq!(expected_java("1.16.5"), 8);
+        assert_eq!(expected_java("1.17.1"), 17);
+        assert_eq!(expected_java("1.20.4"), 17);
+        assert_eq!(expected_java("1.20.5"), 21);
+        assert_eq!(expected_java("1.21.1"), 21);
+    }
+
+    #[test]
+    fn redacts_credential_lines() {
+        let (text, hidden) = redact("normal line\n--accessToken abcdef\nkey=value");
+        assert_eq!(hidden, 1);
+        assert!(text.contains("normal line"));
+        assert!(!text.contains("abcdef"));
+    }
+
+    #[test]
+    fn reads_newest_crash_report_from_game_dir() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_secs())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("docl-crash-test-{stamp}"));
+        let reports = dir.join("crash-reports");
+        std::fs::create_dir_all(&reports).unwrap();
+        std::fs::write(
+            reports.join("crash-2026-01-01_00.00.00-client.txt"),
+            "---- Minecraft Crash Report ----\nDescription: Test",
+        )
+        .unwrap();
+        let found = newest_file(&reports, |name| {
+            name.starts_with("crash-") && name.ends_with(".txt")
+        });
+        assert!(found.is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 端到端：构造一个带 Mod 的实例，验证堆栈定位、报告标注与导出 ZIP。
+    #[test]
+    fn locates_mod_from_stack_and_exports() {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let root = std::env::temp_dir().join(format!("docl-crash-e2e-{stamp}"));
+        let instance_dir = root.join("versions").join("testpack");
+        let mods_dir = instance_dir.join("mods");
+        std::fs::create_dir_all(&mods_dir).unwrap();
+
+        // 造一个含 com/example/coolmod 包的 Mod
+        {
+            let file = File::create(mods_dir.join("coolmod-1.0.jar")).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::SimpleFileOptions::default();
+            zip.start_file("fabric.mod.json", options).unwrap();
+            zip.write_all(br#"{"id":"coolmod","name":"Cool Mod"}"#)
+                .unwrap();
+            zip.start_file("com/example/coolmod/Core.class", options)
+                .unwrap();
+            zip.write_all(b"\xca\xfe\xba\xbe").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let reports = instance_dir.join("crash-reports");
+        std::fs::create_dir_all(&reports).unwrap();
+        let crash_text = "---- Minecraft Crash Report ----\nDescription: Ticking entity\n\nCaused by: java.lang.NoClassDefFoundError: com/example/coolmod/Missing\n\tat com.example.coolmod.Core.tick(Core.java:10)\n\tat net.minecraft.client.Minecraft.run(Minecraft.java:1)\n\nSuspected Mods: \n\tCool Mod (coolmod), Version: 1.0\n";
+        std::fs::write(
+            reports.join("crash-2026-01-01_00.00.00-client.txt"),
+            crash_text,
+        )
+        .unwrap();
+        let logs = instance_dir.join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(logs.join("latest.log"), "old run\n").unwrap();
+
+        let mut cfg = crate::config::Config::default();
+        cfg.game_dir = root.to_string_lossy().to_string();
+        cfg.version_isolation = true;
+
+        let report = analyze(&cfg, "testpack").unwrap();
+        assert!(report.found);
+        assert_eq!(report.source_kind, "crash-report");
+        assert!(
+            report
+                .suspects
+                .iter()
+                .any(|item| item.file_name == "coolmod-1.0.jar"),
+            "未从堆栈定位到 Mod：{:?}",
+            report.suspects
+        );
+        assert!(report
+            .matches
+            .iter()
+            .any(|item| item.category == "mod" && !item.suspects.is_empty()));
+
+        let out = root.join("exports");
+        std::fs::create_dir_all(&out).unwrap();
+        let path = export_to(&cfg, "testpack", &out).unwrap();
+        assert!(Path::new(&path).is_file());
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

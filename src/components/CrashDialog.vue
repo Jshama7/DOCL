@@ -1,14 +1,38 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { api, openExternal, openFolder, type CrashReport } from "../api";
-import { store } from "../store";
+import {
+  api,
+  openExternal,
+  openFolder,
+  revealFile,
+  type CrashMatch,
+  type CrashReport,
+} from "../api";
+import { notify, openInstance, store } from "../store";
 import AppIcon from "./AppIcon.vue";
 import WoodButton from "./WoodButton.vue";
 import WoodModal from "./WoodModal.vue";
 
 const report = ref<CrashReport | null>(null);
 const loading = ref(false);
+const exporting = ref(false);
 const error = ref("");
+
+/// 按优先级分组：高优先级是「最可能的原因」，其余作为补充线索
+const matchGroups = computed(() => {
+  const list = report.value?.matches ?? [];
+  const groups: { title: string; items: CrashMatch[] }[] = [];
+  const primary = list.filter((item) => item.priority >= 70);
+  const others = list.filter((item) => item.priority < 70);
+  if (primary.length) groups.push({ title: "最可能的原因", items: primary });
+  if (others.length) {
+    groups.push({
+      title: primary.length ? "其他线索" : "检测到的线索",
+      items: others,
+    });
+  }
+  return groups;
+});
 
 const sourceLabel = computed(() => {
   switch (report.value?.source_kind) {
@@ -61,6 +85,31 @@ function openLogDir() {
   if (!path) return;
   const dir = path.replace(/[\\/][^\\/]+$/, "");
   if (dir) void openFolder(dir);
+}
+
+/// 导出分析结果 + 日志 ZIP，方便发到社区
+async function exportReport() {
+  const versionId = store.crashVersionId;
+  if (!versionId || exporting.value) return;
+  exporting.value = true;
+  try {
+    const path = await api.crashExport(versionId);
+    const name = path.split(/[\\/]/).pop() ?? path;
+    notify(`已导出崩溃报告：${name}`);
+    await revealFile(path);
+  } catch (err) {
+    notify(`导出失败：${String(err)}`, "err");
+  } finally {
+    exporting.value = false;
+  }
+}
+
+/// 跳到版本设置，方便禁用可疑 Mod
+function openInstanceSettings() {
+  const versionId = store.crashVersionId;
+  if (!versionId) return;
+  close();
+  openInstance(versionId);
 }
 
 watch(
@@ -116,31 +165,77 @@ onMounted(() => {
         <span class="mono">logs/latest.log</span> 或崩溃报告。
       </p>
 
-      <div v-else class="crash-matches">
-        <article v-for="item in report.matches" :key="item.id" class="crash-match">
-          <header class="crash-match__head">
-            <strong>{{ item.title }}</strong>
-            <span class="tag">{{ item.id }}</span>
-          </header>
-          <p class="crash-match__summary">{{ item.summary }}</p>
-          <ul class="crash-advice">
-            <li v-for="(tip, index) in item.advice" :key="index">{{ tip }}</li>
-          </ul>
-          <div v-if="item.evidence.length" class="crash-evidence mono">
-            <div v-for="(line, index) in item.evidence" :key="index">{{ line }}</div>
+      <template v-else>
+        <div class="crash-context">
+          <span v-if="report.context.game_version" class="tag">
+            {{ report.context.game_version }}
+          </span>
+          <span v-if="report.context.loader" class="tag">{{ report.context.loader }}</span>
+          <span class="tag">
+            {{ report.context.java_major ? `Java ${report.context.java_major}` : "Java 未检测到" }}
+          </span>
+          <span class="tag">{{ report.context.memory_mb }} MB</span>
+          <span class="tag">{{ report.context.mod_count }} 个 Mod</span>
+        </div>
+
+        <p v-if="report.context.problematic_frame" class="crash-frame mono">
+          Problematic frame：{{ report.context.problematic_frame }}
+        </p>
+
+        <div v-if="report.suspects.length" class="crash-suspects">
+          <div class="crash-suspects__head">
+            <strong>可疑 Mod</strong>
+            <span class="muted small">按崩溃堆栈与报告标注推断，未必是最终结论</span>
+            <WoodButton variant="ghost" size="sm" @click="openInstanceSettings">
+              打开版本设置
+            </WoodButton>
           </div>
-          <div v-if="item.links.length" class="crash-links">
-            <button
-              v-for="link in item.links"
-              :key="link.url"
-              @click="openExternal(link.url)"
-            >
-              {{ link.label }}
-              <AppIcon name="external" :size="11" />
-            </button>
+          <div
+            v-for="suspect in report.suspects"
+            :key="`${suspect.name}-${suspect.file_name}`"
+            class="crash-suspect"
+          >
+            <div class="crash-suspect__text">
+              <strong>{{ suspect.name }}</strong>
+              <span v-if="suspect.file_name" class="mono small">{{ suspect.file_name }}</span>
+              <span v-else class="muted small">未在 mods 目录找到对应文件</span>
+              <span v-if="suspect.package" class="mono small muted">{{ suspect.package }}</span>
+            </div>
+            <span class="tag">
+              {{ suspect.reason === "stack" ? "来自堆栈" : "报告标注" }}
+            </span>
           </div>
-        </article>
-      </div>
+        </div>
+
+        <div class="crash-matches">
+          <div v-for="group in matchGroups" :key="group.title" class="crash-group">
+            <div class="crash-group__title">{{ group.title }}</div>
+            <article v-for="item in group.items" :key="item.id" class="crash-match">
+              <header class="crash-match__head">
+                <strong>{{ item.title }}</strong>
+                <span class="tag">{{ item.id }}</span>
+              </header>
+              <p class="crash-match__summary">{{ item.summary }}</p>
+              <ul class="crash-advice">
+                <li v-for="(tip, index) in item.advice" :key="index">{{ tip }}</li>
+              </ul>
+              <div v-if="item.evidence.length" class="crash-evidence mono">
+                <div v-for="(line, index) in item.evidence" :key="index">{{ line }}</div>
+              </div>
+              <div v-if="item.links.length" class="crash-links">
+                <button
+                  v-for="link in item.links"
+                  :key="link.url"
+                  @click="openExternal(link.url)"
+                >
+                  {{ link.label }}
+                  <AppIcon name="external" :size="11" />
+                </button>
+              </div>
+            </article>
+          </div>
+        </div>
+      </template>
 
       <details v-if="report.excerpt.length" class="crash-excerpt">
         <summary>日志摘录（{{ report.source }}）</summary>
@@ -149,6 +244,16 @@ onMounted(() => {
     </template>
 
     <template #footer>
+      <WoodButton
+        v-if="report?.found"
+        variant="ghost"
+        size="sm"
+        :disabled="exporting"
+        @click="exportReport"
+      >
+        <AppIcon name="download" :size="13" />
+        {{ exporting ? "导出中…" : "导出报告" }}
+      </WoodButton>
       <WoodButton
         v-if="report?.found"
         variant="ghost"
@@ -245,10 +350,92 @@ onMounted(() => {
   line-height: 1.6;
 }
 
+.crash-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.crash-frame {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 11.5px;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+
+.crash-suspects {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid #d3dfc8;
+  background: var(--moss-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crash-suspects__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.crash-suspects__head strong {
+  font-size: 12.5px;
+  color: var(--moss);
+}
+
+.crash-suspects__head .small {
+  flex: 1;
+  min-width: 0;
+}
+
+.crash-suspect {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.crash-suspect__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.crash-suspect__text strong {
+  font-size: 12.5px;
+  color: var(--walnut-deep);
+  overflow-wrap: anywhere;
+}
+
+.crash-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crash-group__title {
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
 .crash-matches {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   margin-top: 14px;
 }
 

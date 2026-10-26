@@ -745,6 +745,16 @@ pub fn crash_analyze(
     crash::analyze(&cfg, &version_id).map_err(err)
 }
 
+/// 导出崩溃报告 ZIP（分析结果 + 相关日志 + 实例信息，凭据行已隐藏）。
+#[tauri::command]
+pub fn crash_export(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<String> {
+    let cfg = state.config.lock().unwrap().clone();
+    crash::export(&cfg, &version_id).map_err(err)
+}
+
 #[tauri::command]
 pub async fn hall_rooms(
     state: State<'_, AppState>,

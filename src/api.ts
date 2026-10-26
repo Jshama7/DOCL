@@ -252,6 +252,26 @@ export interface CrashLink {
   url: string;
 }
 
+export interface CrashSuspect {
+  name: string;
+  /// mods 目录里的文件名，未匹配到时为空
+  file_name: string;
+  /// 命中的包名（堆栈分析时）
+  package: string;
+  /// stack / reported
+  reason: string;
+}
+
+export interface CrashContext {
+  game_version: string;
+  loader: string;
+  java_major: number;
+  java_path: string;
+  memory_mb: number;
+  mod_count: number;
+  problematic_frame: string | null;
+}
+
 export interface CrashMatch {
   id: string;
   title: string;
@@ -259,6 +279,10 @@ export interface CrashMatch {
   advice: string[];
   evidence: string[];
   links: CrashLink[];
+  /// 90 高 / 70 中 / 50 低
+  priority: number;
+  category: string;
+  suspects: CrashSuspect[];
 }
 
 export interface CrashReport {
@@ -273,6 +297,8 @@ export interface CrashReport {
   matches: CrashMatch[];
   excerpt: string[];
   scanned: string[];
+  suspects: CrashSuspect[];
+  context: CrashContext;
 }
 
 export interface ModUpdate {
@@ -715,6 +741,8 @@ export const api = {
   importSettings: (path: string) => invoke<Config>("import_settings", { path }),
   crashAnalyze: (versionId: string) =>
     invoke<CrashReport>("crash_analyze", { versionId }),
+  crashExport: (versionId: string) =>
+    invoke<string>("crash_export", { versionId }),
   modUpdates: (versionId: string) =>
     invoke<ModUpdateReport>("mod_updates", { versionId }),
   modUpdateInstall: (

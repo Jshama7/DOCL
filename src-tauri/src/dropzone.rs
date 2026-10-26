@@ -102,6 +102,18 @@ fn classify_names(path: &Path, names: &[String]) -> String {
             }
         }
     }
+    // 没有清单的整合包：mods/ 加上配置目录或服务端特征文件。
+    // 服务端整合包一般有 libraries/ 或 server.properties，客户端包一般有 config/scripts。
+    if has_dir(names, "mods")
+        && (has_dir(names, "config")
+            || has_dir(names, "scripts")
+            || has_dir(names, "defaultconfigs")
+            || has_dir(names, "libraries")
+            || has_file(names, "server.properties")
+            || has_file(names, "eula.txt"))
+    {
+        return "modpack".into();
+    }
     if has_file(names, "level.dat") {
         return "saves".into();
     }
@@ -210,4 +222,35 @@ pub fn inspect(paths: &[String]) -> Vec<DroppedItem> {
         });
     }
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(list: &[&str]) -> Vec<String> {
+        list.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn classifies_server_pack_without_manifest() {
+        let list = names(&[
+            "RLCraft/mods/a.jar",
+            "RLCraft/libraries/x.jar",
+            "RLCraft/server.properties",
+        ]);
+        assert_eq!(classify_names(Path::new("pack.zip"), &list), "modpack");
+    }
+
+    #[test]
+    fn classifies_client_pack_without_manifest() {
+        let list = names(&["mods/a.jar", "config/b.toml", "scripts/c.zs"]);
+        assert_eq!(classify_names(Path::new("pack.zip"), &list), "modpack");
+    }
+
+    #[test]
+    fn plain_mod_collection_is_not_modpack() {
+        let list = names(&["a.jar", "b.jar"]);
+        assert_eq!(classify_names(Path::new("mods.zip"), &list), "unknown");
+    }
 }

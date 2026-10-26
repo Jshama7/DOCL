@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { api, type DroppedItem } from "../api";
+import { computed, ref, watch } from "vue";
+import { api, type DroppedItem, type PackPreview } from "../api";
 import AppIcon from "./AppIcon.vue";
 import WoodButton from "./WoodButton.vue";
 import WoodModal from "./WoodModal.vue";
@@ -58,6 +58,32 @@ const content = computed(() => props.items.filter((item) => item.kind !== "modpa
 const packs = computed(() => props.items.filter((item) => item.kind === "modpack"));
 const unknown = computed(() => content.value.filter((item) => item.kind === "unknown"));
 
+/// 拖入的整合包要判断是客户端包还是服务端包，服务端包直接解压到服务端目录
+const packMeta = ref<Record<string, PackPreview | null>>({});
+
+watch(
+  packs,
+  async (list) => {
+    for (const pack of list) {
+      if (packMeta.value[pack.path] !== undefined) continue;
+      try {
+        const preview = await api.modpackInspect(pack.path);
+        packMeta.value = { ...packMeta.value, [pack.path]: preview };
+      } catch {
+        packMeta.value = { ...packMeta.value, [pack.path]: null };
+      }
+    }
+  },
+  { immediate: true }
+);
+
+function isServerPack(item: DroppedItem) {
+  return packMeta.value[item.path]?.server_like === true;
+}
+
+const clientPacks = computed(() => packs.value.filter((item) => !isServerPack(item)));
+const serverPacks = computed(() => packs.value.filter((item) => isServerPack(item)));
+
 /// 未识别的条目要等用户选好分类才能导入
 const unresolved = computed(() => unknown.value.filter((item) => !overrides.value[item.path]));
 const canInstall = computed(
@@ -110,11 +136,11 @@ async function installContent() {
 }
 
 async function importPacks() {
-  if (!packs.value.length || busy.value) return;
+  if (!clientPacks.value.length || busy.value) return;
   busy.value = true;
   try {
     let last: string | null = null;
-    for (const pack of packs.value) {
+    for (const pack of clientPacks.value) {
       const result = await importModpack(
         pack.path,
         { parent_version: target.value || null },
@@ -123,6 +149,37 @@ async function importPacks() {
       if (result) last = result.instance_id;
     }
     if (last) emit("done");
+  } finally {
+    busy.value = false;
+  }
+}
+
+/// 服务端整合包：解压到 docl-servers，之后在联机页开服
+async function importServerPacks() {
+  if (!serverPacks.value.length || busy.value) return;
+  busy.value = true;
+  try {
+    const done: string[] = [];
+    for (const pack of serverPacks.value) {
+      const preview = packMeta.value[pack.path];
+      store.installingId = `服务端 · ${pack.file_name}`;
+      try {
+        const result = await api.serverPackImport(
+          pack.path,
+          preview?.name || pack.file_name,
+          preview?.suggested_id || ""
+        );
+        done.push(result.name);
+      } finally {
+        store.installingId = null;
+      }
+    }
+    if (done.length) {
+      notify(`${done.join("、")} 已就绪，可在联机页一键开服`);
+      emit("done");
+    }
+  } catch (err) {
+    notify(`导入服务端失败：${String(err)}`, "err");
   } finally {
     busy.value = false;
   }
@@ -147,8 +204,10 @@ async function importPacks() {
           <strong class="drop-item__name" :title="item.file_name">{{ item.file_name }}</strong>
           <span class="drop-item__meta">
             {{ item.label }}<template v-if="item.detail"> · {{ item.detail }}</template>
+            <template v-if="isServerPack(item)"> · 服务端整合包</template>
           </span>
         </div>
+        <span v-if="isServerPack(item)" class="tag tag--grass">服务端</span>
         <div v-if="item.kind === 'unknown'" class="drop-item__override">
           <WoodSelect
             v-model="overrides[item.path]"
@@ -171,17 +230,31 @@ async function importPacks() {
 
     <template #footer>
       <span class="footnote">
-        {{ packs.length ? `整合包将创建新实例` : "" }}
+        {{
+          serverPacks.length
+            ? "服务端包会解压到服务端目录，装好可在联机页开服"
+            : clientPacks.length
+              ? "客户端整合包将创建新实例"
+              : ""
+        }}
       </span>
       <div class="actions">
         <WoodButton variant="ghost" :disabled="busy" @click="emit('close')">取消</WoodButton>
         <WoodButton
-          v-if="packs.length"
+          v-if="clientPacks.length"
           variant="soft"
           :disabled="busy"
           @click="importPacks"
         >
-          {{ busy ? "导入中…" : `作为整合包导入 (${packs.length})` }}
+          {{ busy ? "导入中…" : `作为整合包导入 (${clientPacks.length})` }}
+        </WoodButton>
+        <WoodButton
+          v-if="serverPacks.length"
+          variant="soft"
+          :disabled="busy"
+          @click="importServerPacks"
+        >
+          {{ busy ? "导入中…" : `导入为服务端 (${serverPacks.length})` }}
         </WoodButton>
         <WoodButton
           v-if="content.length"

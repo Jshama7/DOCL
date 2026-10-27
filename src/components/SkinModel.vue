@@ -80,24 +80,6 @@ const BODY: FaceRegions = {
   back: [32, 20, 8, 12],
 };
 
-const ARM_RIGHT: FaceRegions = {
-  right: [40, 20, 4, 12],
-  left: [48, 20, 4, 12],
-  top: [44, 16, 4, 4],
-  bottom: [48, 16, 4, 4],
-  front: [44, 20, 4, 12],
-  back: [52, 20, 4, 12],
-};
-
-const ARM_LEFT: FaceRegions = {
-  right: [32, 52, 4, 12],
-  left: [40, 52, 4, 12],
-  top: [36, 48, 4, 4],
-  bottom: [40, 48, 4, 4],
-  front: [36, 52, 4, 12],
-  back: [44, 52, 4, 12],
-};
-
 const LEG_RIGHT: FaceRegions = {
   right: [0, 20, 4, 12],
   left: [8, 20, 4, 12],
@@ -136,24 +118,6 @@ const JACKET: FaceRegions = {
   back: [32, 36, 8, 12],
 };
 
-const SLEEVE_RIGHT: FaceRegions = {
-  right: [40, 36, 4, 12],
-  left: [48, 36, 4, 12],
-  top: [44, 32, 4, 4],
-  bottom: [48, 32, 4, 4],
-  front: [44, 36, 4, 12],
-  back: [52, 36, 4, 12],
-};
-
-const SLEEVE_LEFT: FaceRegions = {
-  right: [48, 52, 4, 12],
-  left: [56, 52, 4, 12],
-  top: [52, 48, 4, 4],
-  bottom: [56, 48, 4, 4],
-  front: [52, 52, 4, 12],
-  back: [60, 52, 4, 12],
-};
-
 const PANTS_RIGHT: FaceRegions = {
   right: [0, 36, 4, 12],
   left: [8, 36, 4, 12],
@@ -172,6 +136,46 @@ const PANTS_LEFT: FaceRegions = {
   back: [12, 52, 4, 12],
 };
 
+/// 手臂的 UV 布局随模型不同：纤薄(Alex)模型的正面/顶面/底面只有 3 像素宽，
+/// 内外侧与背面整体左移 1 像素；经典(Steve)模型全部 4 像素宽。
+/// 区域原点两种模型相同（右臂 40,16 / 左臂 32,48 / 右袖 40,32 / 左袖 48,48）。
+function armFaces(slim: boolean) {
+  const fw = slim ? 3 : 4;
+  const rightArm: FaceRegions = {
+    right: [40, 20, 4, 12],
+    left: [44 + fw, 20, 4, 12],
+    top: [44, 16, fw, 4],
+    bottom: [44 + fw, 16, fw, 4],
+    front: [44, 20, fw, 12],
+    back: [48 + fw, 20, 4, 12],
+  };
+  const leftArm: FaceRegions = {
+    right: [32, 52, 4, 12],
+    left: [36 + fw, 52, 4, 12],
+    top: [36, 48, fw, 4],
+    bottom: [36 + fw, 48, fw, 4],
+    front: [36, 52, fw, 12],
+    back: [40 + fw, 52, 4, 12],
+  };
+  const sleeveRight: FaceRegions = {
+    right: [40, 36, 4, 12],
+    left: [44 + fw, 36, 4, 12],
+    top: [44, 32, fw, 4],
+    bottom: [44 + fw, 32, fw, 4],
+    front: [44, 36, fw, 12],
+    back: [48 + fw, 36, 4, 12],
+  };
+  const sleeveLeft: FaceRegions = {
+    right: [48, 52, 4, 12],
+    left: [52 + fw, 52, 4, 12],
+    top: [52, 48, fw, 4],
+    bottom: [52 + fw, 48, fw, 4],
+    front: [52, 52, fw, 12],
+    back: [56 + fw, 52, 4, 12],
+  };
+  return { rightArm, leftArm, sleeveRight, sleeveLeft };
+}
+
 /// 披风是 10×16×1 的盒子，UV 区域与游戏内盒子展开一致
 const CAPE: FaceRegions = {
   right: [0, 1, 1, 16],
@@ -182,13 +186,22 @@ const CAPE: FaceRegions = {
   back: [12, 1, 10, 16],
 };
 
-function faceTexture(source: HTMLCanvasElement, region: [number, number, number, number]) {
+function faceTexture(
+  source: HTMLCanvasElement,
+  region: [number, number, number, number],
+  flipY = false
+) {
   const [x, y, w, h] = region;
   const canvas = document.createElement("canvas");
   canvas.width = w;
   canvas.height = h;
   const ctx = canvas.getContext("2d")!;
   ctx.imageSmoothingEnabled = false;
+  if (flipY) {
+    // 游戏内盒子底面的展开方向与 three.js 默认朝向上下相反，翻转后与游戏一致
+    ctx.translate(0, h);
+    ctx.scale(1, -1);
+  }
   ctx.drawImage(source, x, y, w, h, 0, 0, w, h);
   const texture = new THREE.CanvasTexture(canvas);
   texture.magFilter = THREE.NearestFilter;
@@ -214,9 +227,9 @@ function part(
     regions.back,
   ];
   const mats = order.map(
-    (region) =>
+    (region, index) =>
       new THREE.MeshStandardMaterial({
-        map: faceTexture(source, region),
+        map: faceTexture(source, region, index === 3),
         transparent: true,
         alphaTest: 0.02,
         roughness: 0.95,
@@ -295,18 +308,19 @@ async function build() {
   jacketMesh.position.y = 24.25;
 
   const armWidth = props.model === "slim" ? 3 : 4;
+  const arms = armFaces(props.model === "slim");
   const armLeftGroup = new THREE.Group();
   armLeftGroup.position.set(-(4 + armWidth / 2), 24, 0);
-  armLeftGroup.add(part(canvas, ARM_LEFT, armWidth, 12, 4));
-  const sleeveLeft = part(canvas, SLEEVE_LEFT, armWidth + 0.5, 12.5, 4.5);
+  armLeftGroup.add(part(canvas, arms.leftArm, armWidth, 12, 4));
+  const sleeveLeft = part(canvas, arms.sleeveLeft, armWidth + 0.5, 12.5, 4.5);
   sleeveLeft.position.y = 0.25;
   armLeftGroup.add(sleeveLeft);
   armLeft = armLeftGroup;
 
   const armRightGroup = new THREE.Group();
   armRightGroup.position.set(4 + armWidth / 2, 24, 0);
-  armRightGroup.add(part(canvas, ARM_RIGHT, armWidth, 12, 4));
-  const sleeveRight = part(canvas, SLEEVE_RIGHT, armWidth + 0.5, 12.5, 4.5);
+  armRightGroup.add(part(canvas, arms.rightArm, armWidth, 12, 4));
+  const sleeveRight = part(canvas, arms.sleeveRight, armWidth + 0.5, 12.5, 4.5);
   sleeveRight.position.y = 0.25;
   armRightGroup.add(sleeveRight);
   armRight = armRightGroup;

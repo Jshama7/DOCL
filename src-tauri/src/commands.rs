@@ -1281,6 +1281,8 @@ pub struct AccountSkinView {
     pub data_url: String,
     pub model: String,
     pub source: String,
+    /// 披风的 data URL（没有披风时为 null）
+    pub cape: Option<String>,
 }
 
 fn find_account(account_id: &str) -> CmdResult<Account> {
@@ -1296,11 +1298,12 @@ pub async fn get_account_skin(
     account_id: String,
 ) -> CmdResult<AccountSkinView> {
     let account = find_account(&account_id)?;
-    let (data_url, model, source) = skins::load_skin(&state.client, &account).await;
+    let skin = skins::load_skin(&state.client, &account).await;
     Ok(AccountSkinView {
-        data_url,
-        model,
-        source,
+        data_url: skin.data_url,
+        model: skin.model,
+        source: skin.source,
+        cape: skin.cape,
     })
 }
 
@@ -1414,9 +1417,9 @@ pub async fn skin_library_from_account(
     account_id: String,
 ) -> CmdResult<skins::LibraryItemView> {
     let account = find_account(&account_id)?;
-    let (data_url, model, _source) = skins::load_skin(&state.client, &account).await;
-    let bytes = skins::decode_and_normalize(&data_url).map_err(err)?;
-    let entry = skins::library_add(&name, &model, bytes, "account").map_err(err)?;
+    let skin = skins::load_skin(&state.client, &account).await;
+    let bytes = skins::decode_and_normalize(&skin.data_url).map_err(err)?;
+    let entry = skins::library_add(&name, &skin.model, bytes, "account").map_err(err)?;
     skins::library_views()
         .into_iter()
         .find(|item| item.id == entry.id)

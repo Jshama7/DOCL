@@ -2,11 +2,12 @@
 import * as THREE from "three";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { store } from "../store";
-import { canvasFromSource, createDefaultSkin, seedFromString } from "../skin";
+import { canvasFromSource, capeCanvasFromSource, createDefaultSkin, seedFromString } from "../skin";
 
 const props = withDefaults(
   defineProps<{
     skin?: string;
+    cape?: string;
     seed?: string;
     model?: string;
     walking?: boolean;
@@ -15,6 +16,7 @@ const props = withDefaults(
   }>(),
   {
     skin: "",
+    cape: "",
     seed: "docl",
     model: "classic",
     walking: true,
@@ -33,6 +35,7 @@ let armRight: THREE.Group | null = null;
 let legLeft: THREE.Group | null = null;
 let legRight: THREE.Group | null = null;
 let head: THREE.Group | null = null;
+let capeGroup: THREE.Group | null = null;
 let frame = 0;
 let clock: THREE.Clock | null = null;
 let resizeObserver: ResizeObserver | null = null;
@@ -113,6 +116,16 @@ const LEG_LEFT: FaceRegions = {
   back: [28, 52, 4, 12],
 };
 
+/// 披风是 10×16×1 的盒子，UV 区域与游戏内盒子展开一致
+const CAPE: FaceRegions = {
+  right: [0, 1, 1, 16],
+  left: [11, 1, 1, 16],
+  top: [1, 0, 10, 1],
+  bottom: [11, 0, 10, 1],
+  front: [1, 1, 10, 16],
+  back: [12, 1, 10, 16],
+};
+
 function faceTexture(source: HTMLCanvasElement, region: [number, number, number, number]) {
   const [x, y, w, h] = region;
   const canvas = document.createElement("canvas");
@@ -181,6 +194,7 @@ function clearScene() {
   armRight = null;
   legLeft = null;
   legRight = null;
+  capeGroup = null;
 }
 
 async function build() {
@@ -195,6 +209,14 @@ async function build() {
     }
   } else {
     canvas = createDefaultSkin(seedFromString(props.seed));
+  }
+  let capeCanvas: HTMLCanvasElement | null = null;
+  if (props.cape) {
+    try {
+      capeCanvas = await capeCanvasFromSource(props.cape);
+    } catch {
+      capeCanvas = null;
+    }
   }
   if (token !== buildToken) return;
 
@@ -232,6 +254,16 @@ async function build() {
   legRight = legRightGroup;
 
   root.add(head, bodyMesh, armLeft, armRight, legLeft, legRight);
+  if (capeCanvas) {
+    const capeRoot = new THREE.Group();
+    // 挂在肩膀高度、身体背面（+Z 是脸的方向，披风在 -Z）；
+    // 旋转 180° 让纹理的外侧面朝后，和游戏内一致
+    capeRoot.position.set(0, 24, -2.5);
+    capeRoot.rotation.y = Math.PI;
+    capeRoot.add(part(capeCanvas, CAPE, 10, 16, 1));
+    capeGroup = capeRoot;
+    root.add(capeRoot);
+  }
   group = root;
   scene.add(root);
 }
@@ -279,6 +311,9 @@ function animate() {
       if (legRight) legRight.rotation.x = 0;
       if (head) head.rotation.y = 0;
       group.position.y = -16;
+    }
+    if (capeGroup) {
+      capeGroup.rotation.x = walking ? Math.sin(t * 2.2) * 0.08 : 0;
     }
   }
   renderer.render(scene, camera);
@@ -332,7 +367,7 @@ onMounted(async () => {
 });
 
 watch(
-  () => [props.skin, props.seed, props.model],
+  () => [props.skin, props.cape, props.seed, props.model],
   () => {
     void build();
   }

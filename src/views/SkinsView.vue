@@ -3,6 +3,7 @@ import { computed, onMounted, ref, watch } from "vue";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import {
   api,
+  openExternal,
   type AccountView,
   type CapeView,
   type SkinLibraryItem,
@@ -57,10 +58,14 @@ const capeBusy = ref("");
 const accountOptions = computed(() =>
   store.accounts.map((account) => ({ value: account.id, label: account.name }))
 );
-const msAccountOptions = computed(() =>
+/// 披风：微软账号可切换，第三方账号只读展示皮肤站下发的披风
+const capeAccountOptions = computed(() =>
   store.accounts
-    .filter((account) => account.kind === "microsoft")
+    .filter((account) => account.kind === "microsoft" || account.kind === "authlib")
     .map((account) => ({ value: account.id, label: account.name }))
+);
+const capeAccountView = computed<AccountView | null>(
+  () => store.accounts.find((account) => account.id === capeAccount.value) ?? null
 );
 const applyAccountView = computed<AccountView | null>(
   () => store.accounts.find((account) => account.id === applyAccount.value) ?? null
@@ -273,13 +278,23 @@ watch(capeAccount, () => {
   void loadCapes();
 });
 
+/// 第三方账号的披风只能在皮肤站切换，这里按 API 根推出站点首页
+function openSkinSite() {
+  const trimmed = (capeAccountView.value?.authlib_url ?? "").trim().replace(/\/+$/, "");
+  if (!trimmed) return;
+  const site = trimmed.endsWith("/api/yggdrasil")
+    ? trimmed.slice(0, -"/api/yggdrasil".length)
+    : trimmed;
+  openExternal(site);
+}
+
 onMounted(async () => {
   await loadLibrary();
-  if (msAccountOptions.value.length) {
+  if (capeAccountOptions.value.length) {
     const selected = store.config?.selected_account;
-    capeAccount.value = msAccountOptions.value.some((o) => o.value === selected)
+    capeAccount.value = capeAccountOptions.value.some((o) => o.value === selected)
       ? (selected as string)
-      : msAccountOptions.value[0].value;
+      : capeAccountOptions.value[0].value;
   }
 });
 </script>
@@ -351,14 +366,14 @@ onMounted(async () => {
       <header class="lib__head">
         <div class="lib__title">披风管理</div>
         <WoodSelect
-          v-if="msAccountOptions.length"
+          v-if="capeAccountOptions.length"
           v-model="capeAccount"
-          :options="msAccountOptions"
+          :options="capeAccountOptions"
         />
       </header>
 
-      <div v-if="!msAccountOptions.length" class="lib__empty">
-        <span class="muted small">只有微软账号支持披风，请先到账号页登录</span>
+      <div v-if="!capeAccountOptions.length" class="lib__empty">
+        <span class="muted small">登录微软或第三方账号后可以查看披风</span>
       </div>
       <div v-else-if="capesLoading" class="lib__empty">
         <span class="muted small">正在读取披风…</span>
@@ -368,7 +383,13 @@ onMounted(async () => {
         <WoodButton variant="ghost" size="sm" @click="loadCapes">重试</WoodButton>
       </div>
       <div v-else-if="!capes.length" class="lib__empty">
-        <span class="muted small">这个账号没有可用的披风</span>
+        <span class="muted small">
+          {{
+            capeAccountView?.kind === "authlib"
+              ? "这个角色还没有在皮肤站设置披风"
+              : "这个账号没有可用的披风"
+          }}
+        </span>
       </div>
 
       <div v-else class="cape-grid">
@@ -392,6 +413,15 @@ onMounted(async () => {
           </div>
           <footer class="cape__foot">
             <WoodButton
+              v-if="capeAccountView?.kind === 'authlib'"
+              variant="soft"
+              size="sm"
+              @click="openSkinSite"
+            >
+              去皮肤站管理
+            </WoodButton>
+            <WoodButton
+              v-else
               :variant="cape.active ? 'ghost' : 'primary'"
               size="sm"
               :disabled="capeBusy === cape.id"
@@ -706,13 +736,13 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-/* Mojang 披风纹理是 64x32 的拼接图（正面 + 侧面），只裁正面区域
-   （x=1..10, y=0..16）放大展示，避免露出难看的侧面拼接 */
+/* 披风纹理是 64x32 的拼接图，只裁外侧面（x=1..11, y=1..17）放大展示，
+   避免露出内侧与侧边拼接 */
 .cape-front {
   width: 70px;
   height: 112px;
   background-size: 448px 224px;
-  background-position: -7px 0;
+  background-position: -7px -7px;
   background-repeat: no-repeat;
   image-rendering: pixelated;
 }

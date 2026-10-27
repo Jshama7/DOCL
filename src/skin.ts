@@ -120,3 +120,16 @@ export async function canvasFromSource(source: string): Promise<HTMLCanvasElemen
   ctx.drawImage(image, 0, 0, SKIN_SIZE, SKIN_SIZE);
   return canvas;
 }
+
+/** 披风纹理是 64×32，统一缩放后按盒子 UV 区域取样（兼容高清披风） */
+export async function capeCanvasFromSource(source: string): Promise<HTMLCanvasElement> {
+  const image = await imageFromSource(source);
+  const canvas = document.createElement("canvas");
+  canvas.width = SKIN_SIZE;
+  canvas.height = SKIN_SIZE / 2;
+  const ctx = canvas.getContext("2d")!;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas;
+}

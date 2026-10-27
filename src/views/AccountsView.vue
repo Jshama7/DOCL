@@ -322,6 +322,7 @@ onMounted(() => {
               }}
             </span>
             <span class="tag">{{ skinSourceLabel }}</span>
+            <span v-if="store.accountSkin?.cape" class="tag">披风</span>
           </div>
         </header>
 
@@ -335,6 +336,7 @@ onMounted(() => {
           <SkinModel
             v-else
             :skin="skinSource"
+            :cape="store.accountSkin?.cape ?? ''"
             :seed="selectedAccount.uuid"
             :model="skinModel"
             :height="360"

@@ -186,10 +186,44 @@ const CAPE: FaceRegions = {
   back: [12, 1, 10, 16],
 };
 
+/** 作者漏画（全透明）的像素会让模型上出现贯穿的空条，用邻近颜色补两圈 */
+function padTransparent(ctx: CanvasRenderingContext2D, width: number, height: number) {
+  const image = ctx.getImageData(0, 0, width, height);
+  const filled = new Uint8ClampedArray(image.data);
+  for (let pass = 0; pass < 2; pass += 1) {
+    const source = new Uint8ClampedArray(filled);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const offset = (y * width + x) * 4;
+        if (source[offset + 3] !== 0) continue;
+        const neighbors: [number, number][] = [
+          [x - 1, y],
+          [x + 1, y],
+          [x, y - 1],
+          [x, y + 1],
+        ];
+        for (const [nx, ny] of neighbors) {
+          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+          const near = (ny * width + nx) * 4;
+          if (source[near + 3] === 0) continue;
+          filled[offset] = source[near];
+          filled[offset + 1] = source[near + 1];
+          filled[offset + 2] = source[near + 2];
+          filled[offset + 3] = 255;
+          break;
+        }
+      }
+    }
+  }
+  image.data.set(filled);
+  ctx.putImageData(image, 0, 0);
+}
+
 function faceTexture(
   source: HTMLCanvasElement,
   region: [number, number, number, number],
-  flipY = false
+  flipY = false,
+  pad = false
 ) {
   const [x, y, w, h] = region;
   const canvas = document.createElement("canvas");
@@ -203,6 +237,7 @@ function faceTexture(
     ctx.scale(1, -1);
   }
   ctx.drawImage(source, x, y, w, h, 0, 0, w, h);
+  if (pad) padTransparent(ctx, w, h);
   const texture = new THREE.CanvasTexture(canvas);
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
@@ -234,7 +269,7 @@ function part(
   const mats = order.map(
     (region, index) =>
       new THREE.MeshStandardMaterial({
-        map: faceTexture(source, region, index === 3),
+        map: faceTexture(source, region, index === 3, layer === 0),
         transparent: true,
         alphaTest: 0.02,
         roughness: 0.95,

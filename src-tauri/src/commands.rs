@@ -1299,6 +1299,17 @@ pub async fn get_account_skin(
 ) -> CmdResult<AccountSkinView> {
     let account = find_account(&account_id)?;
     let skin = skins::load_skin(&state.client, &account).await;
+    // 皮肤站/官方档案里带的模型（classic/slim）同步回账号，
+    // 否则各处以登录时写死的 classic 渲染，纤细皮肤的手臂会整条取错图
+    if skin.source != "local" && !skin.model.is_empty() && skin.model != account.skin_model {
+        let mut accounts = auth::load_accounts();
+        if let Some(item) = accounts.iter_mut().find(|item| item.id == account_id) {
+            item.skin_model = skin.model.clone();
+            if auth::save_accounts(&accounts).is_ok() {
+                *state.accounts.lock().unwrap() = accounts;
+            }
+        }
+    }
     Ok(AccountSkinView {
         data_url: skin.data_url,
         model: skin.model,

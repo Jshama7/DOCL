@@ -183,6 +183,8 @@ export interface BackgroundInfo {
 export interface SystemMemory {
   total_mb: number;
   available_mb: number;
+  /// 按当前占用情况推荐的自动分配值（参考 PCL，随可用内存实时变化）
+  recommended_mb: number;
 }
 
 export interface NewsItem {

@@ -217,12 +217,8 @@ const javaOptions = computed(() => [
   })),
 ]);
 
-const recommendedMemory = computed(() => {
-  const total = store.systemMemory.total_mb;
-  if (!total) return 4096;
-  const target = Math.min(8192, Math.max(1024, Math.floor(total / 3)));
-  return Math.max(1024, Math.floor(target / 512) * 512);
-});
+/// 自动内存的推荐值由后端按「当前可用内存」实时计算（参考 PCL）
+const recommendedMemory = computed(() => store.systemMemory.recommended_mb || 4096);
 
 const iconColor = computed(
   () => iconPresets.find((preset) => preset.value === form.icon)?.color ?? "#8b9d6f"

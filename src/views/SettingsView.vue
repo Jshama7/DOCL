@@ -271,11 +271,8 @@ const totalMb = computed(() => store.systemMemory.total_mb || 0);
 const usedMb = computed(() =>
   Math.max(0, totalMb.value - (store.systemMemory.available_mb || 0))
 );
-const recommendedMb = computed(() => {
-  if (!totalMb.value) return 4096;
-  const target = Math.min(8192, Math.max(1024, Math.floor(totalMb.value / 3)));
-  return Math.max(1024, Math.floor(target / 512) * 512);
-});
+/// 推荐值由后端按「当前可用内存」实时计算，设置页定时刷新后随之波动
+const recommendedMb = computed(() => store.systemMemory.recommended_mb || 4096);
 const sliderMax = computed(() =>
   totalMb.value
     ? Math.min(32768, Math.max(2048, Math.floor((totalMb.value - 1024) / 512) * 512))
@@ -1273,7 +1270,7 @@ async function removeJava(path: string) {
       <div class="setting setting--stack">
         <div class="setting__label">
           <strong>内存分配</strong>
-          <span>自动按物理内存推荐，也可以切到自定义手动拖动</span>
+          <span>自动按当前可用内存推荐，随系统占用实时变化；也可以切到自定义手动拖动</span>
         </div>
         <div class="setting__control setting__control--wide">
           <div class="memory">

@@ -109,15 +109,69 @@ export async function imageFromSource(source: string): Promise<HTMLImageElement>
   });
 }
 
+/** 按原始比例把皮肤画进 64x64 画布，返回实际占用高度（旧版 64x32 只占上半） */
+function drawScaled(ctx: CanvasRenderingContext2D, image: HTMLImageElement): number {
+  ctx.clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
+  ctx.imageSmoothingEnabled = false;
+  const destHeight = Math.min(
+    SKIN_SIZE,
+    Math.round((image.height / image.width) * SKIN_SIZE)
+  );
+  ctx.drawImage(image, 0, 0, SKIN_SIZE, destHeight);
+  return destHeight;
+}
+
 export async function canvasFromSource(source: string): Promise<HTMLCanvasElement> {
   const image = await imageFromSource(source);
   const canvas = document.createElement("canvas");
   canvas.width = SKIN_SIZE;
   canvas.height = SKIN_SIZE;
+  drawScaled(canvas.getContext("2d")!, image);
+  return canvas;
+}
+
+/** 旧版皮肤没有左臂/左腿区域，按游戏内规则把右臂/右腿水平镜像过去 */
+function mirrorLegacyLimbs(ctx: CanvasRenderingContext2D) {
+  // [srcX, srcY, w, h, dstX, dstY]，逐面水平翻转（镜像后内外侧面互换位置）
+  const faces: [number, number, number, number, number, number][] = [
+    // 右臂 → 左臂
+    [44, 16, 4, 4, 36, 48], // 顶
+    [48, 16, 4, 4, 40, 48], // 底
+    [40, 20, 4, 12, 40, 52], // 外侧 → 左面
+    [44, 20, 4, 12, 36, 52], // 前
+    [48, 20, 4, 12, 32, 52], // 内侧 → 右面
+    [52, 20, 4, 12, 44, 52], // 后
+    // 右腿 → 左腿
+    [4, 16, 4, 4, 20, 48],
+    [8, 16, 4, 4, 24, 48],
+    [0, 20, 4, 12, 24, 52],
+    [4, 20, 4, 12, 20, 52],
+    [8, 20, 4, 12, 16, 52],
+    [12, 20, 4, 12, 28, 52],
+  ];
+  for (const [sx, sy, w, h, dx, dy] of faces) {
+    const tmp = document.createElement("canvas");
+    tmp.width = w;
+    tmp.height = h;
+    const tctx = tmp.getContext("2d")!;
+    tctx.translate(w, 0);
+    tctx.scale(-1, 1);
+    tctx.drawImage(ctx.canvas, sx, sy, w, h, 0, 0, w, h);
+    ctx.drawImage(tmp, dx, dy);
+  }
+}
+
+/** 供 3D 预览使用：旧版 64x32 皮肤自动补全左臂/左腿与覆盖层布局 */
+export async function skinCanvasFromSource(source: string): Promise<HTMLCanvasElement> {
+  const image = await imageFromSource(source);
+  const canvas = document.createElement("canvas");
+  canvas.width = SKIN_SIZE;
+  canvas.height = SKIN_SIZE;
   const ctx = canvas.getContext("2d")!;
-  ctx.clearRect(0, 0, SKIN_SIZE, SKIN_SIZE);
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(image, 0, 0, SKIN_SIZE, SKIN_SIZE);
+  const destHeight = drawScaled(ctx, image);
+  if (destHeight <= SKIN_SIZE / 2) {
+    mirrorLegacyLimbs(ctx);
+  }
   return canvas;
 }
 

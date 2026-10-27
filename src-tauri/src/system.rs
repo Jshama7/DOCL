@@ -5,6 +5,8 @@ use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORY
 pub struct MemoryInfo {
     pub total_mb: u64,
     pub available_mb: u64,
+    /// 按当前占用情况推荐的自动分配值
+    pub recommended_mb: u32,
 }
 
 /// 读取物理内存总量与可用量（MB）。
@@ -16,24 +18,59 @@ pub fn memory_info() -> MemoryInfo {
         return MemoryInfo {
             total_mb: 0,
             available_mb: 0,
+            recommended_mb: 4096,
         };
     }
-    MemoryInfo {
+    let info = MemoryInfo {
         total_mb: status.ullTotalPhys / 1024 / 1024,
         available_mb: status.ullAvailPhys / 1024 / 1024,
+        recommended_mb: 0,
+    };
+    MemoryInfo {
+        recommended_mb: recommended_memory_mb(info.total_mb, info.available_mb),
+        ..info
     }
 }
 
-/// 类似 PCL 的自动分配：约三分之一系统内存，取 512 MB 的整数倍。
-pub fn recommended_memory_mb(total_mb: u64) -> u32 {
-    let total = if total_mb > 0 {
-        total_mb
-    } else {
-        memory_info().total_mb
-    };
-    if total == 0 {
-        return 4096;
+/// 参考 PCL 的自动内存分配：
+/// 以「当前可用物理内存」为基准取约 3/4——浏览器、启动器等占用变化会实时反映在推荐值里；
+/// 上限为总内存的 3/4 且至少给系统留 2GB（总内存不足 8GB 时留 1GB），推荐值封顶 12GB；
+/// 下限 1GB，按 512MB 对齐。
+pub fn recommended_memory_mb(total_mb: u64, available_mb: u64) -> u32 {
+    let total = if total_mb > 0 { total_mb } else { return 4096 };
+    let available = available_mb.min(total);
+    let mut target = available * 3 / 4;
+    let leave: u64 = if total >= 8192 { 2048 } else { 1024 };
+    let cap = total
+        .saturating_sub(leave)
+        .min(total * 3 / 4)
+        .min(12288)
+        .max(1024);
+    target = target.clamp(1024, cap);
+    // 512MB 对齐（向下取整）
+    let aligned = (target / 512) * 512;
+    aligned.max(1024) as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recommended_memory_mb;
+
+    #[test]
+    fn auto_memory_follows_available() {
+        // 8GB 机器：空闲推荐 6GB，占用上来后明显下降
+        assert_eq!(recommended_memory_mb(8192, 8192), 6144);
+        assert_eq!(recommended_memory_mb(8192, 4096), 3072);
+        assert_eq!(recommended_memory_mb(8192, 1024), 1024);
+        // 16GB 机器空闲 14GB：10500 → 对齐 10752
+        assert_eq!(recommended_memory_mb(16384, 14336), 10752);
+        // 32GB 空闲时封顶 12GB，不会给出离谱的大堆
+        assert_eq!(recommended_memory_mb(32768, 32768), 12288);
+        // 2GB 小机器至少给系统留 1GB
+        assert_eq!(recommended_memory_mb(2048, 2048), 1024);
+        // 512MB 对齐（向下取整）
+        assert_eq!(recommended_memory_mb(16384, 7000), 5120);
+        // 读不到内存时的兜底
+        assert_eq!(recommended_memory_mb(0, 0), 4096);
     }
-    let target = (total / 3).clamp(1024, 8192);
-    ((target / 512) * 512).max(1024) as u32
 }

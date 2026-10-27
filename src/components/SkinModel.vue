@@ -2,7 +2,7 @@
 import * as THREE from "three";
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { store } from "../store";
-import { canvasFromSource, capeCanvasFromSource, createDefaultSkin, seedFromString } from "../skin";
+import { capeCanvasFromSource, createDefaultSkin, seedFromString, skinCanvasFromSource } from "../skin";
 
 const props = withDefaults(
   defineProps<{
@@ -116,6 +116,62 @@ const LEG_LEFT: FaceRegions = {
   back: [28, 52, 4, 12],
 };
 
+/* ---------- 第二层（覆盖层）：游戏里让皮肤有立体感的部分，64x64 皮肤才有 ---------- */
+
+const HAT: FaceRegions = {
+  right: [32, 8, 8, 8],
+  left: [48, 8, 8, 8],
+  top: [40, 0, 8, 8],
+  bottom: [48, 0, 8, 8],
+  front: [40, 8, 8, 8],
+  back: [56, 8, 8, 8],
+};
+
+const JACKET: FaceRegions = {
+  right: [16, 36, 4, 12],
+  left: [28, 36, 4, 12],
+  top: [20, 32, 8, 4],
+  bottom: [28, 32, 8, 4],
+  front: [20, 36, 8, 12],
+  back: [32, 36, 8, 12],
+};
+
+const SLEEVE_RIGHT: FaceRegions = {
+  right: [40, 36, 4, 12],
+  left: [48, 36, 4, 12],
+  top: [44, 32, 4, 4],
+  bottom: [48, 32, 4, 4],
+  front: [44, 36, 4, 12],
+  back: [52, 36, 4, 12],
+};
+
+const SLEEVE_LEFT: FaceRegions = {
+  right: [48, 52, 4, 12],
+  left: [56, 52, 4, 12],
+  top: [52, 48, 4, 4],
+  bottom: [56, 48, 4, 4],
+  front: [52, 52, 4, 12],
+  back: [60, 52, 4, 12],
+};
+
+const PANTS_RIGHT: FaceRegions = {
+  right: [0, 36, 4, 12],
+  left: [8, 36, 4, 12],
+  top: [4, 32, 4, 4],
+  bottom: [8, 32, 4, 4],
+  front: [4, 36, 4, 12],
+  back: [12, 36, 4, 12],
+};
+
+const PANTS_LEFT: FaceRegions = {
+  right: [0, 52, 4, 12],
+  left: [8, 52, 4, 12],
+  top: [4, 48, 4, 4],
+  bottom: [8, 48, 4, 4],
+  front: [4, 52, 4, 12],
+  back: [12, 52, 4, 12],
+};
+
 /// 披风是 10×16×1 的盒子，UV 区域与游戏内盒子展开一致
 const CAPE: FaceRegions = {
   right: [0, 1, 1, 16],
@@ -203,7 +259,7 @@ async function build() {
   let canvas: HTMLCanvasElement;
   if (props.skin) {
     try {
-      canvas = await canvasFromSource(props.skin);
+      canvas = await skinCanvasFromSource(props.skin);
     } catch {
       canvas = createDefaultSkin(seedFromString(props.seed));
     }
@@ -228,32 +284,50 @@ async function build() {
   head = new THREE.Group();
   head.position.y = 32;
   head.add(headMesh);
+  // 第二层外扩量与游戏一致：头 0.5，身体四肢 0.25；透明像素会被 alphaTest 丢弃
+  const hatMesh = part(canvas, HAT, 9, 9, 9);
+  hatMesh.position.y = 0.5;
+  head.add(hatMesh);
 
   const bodyMesh = part(canvas, BODY, 8, 12, 4);
   bodyMesh.position.y = 24;
+  const jacketMesh = part(canvas, JACKET, 8.5, 12.5, 4.5);
+  jacketMesh.position.y = 24.25;
 
   const armWidth = props.model === "slim" ? 3 : 4;
   const armLeftGroup = new THREE.Group();
   armLeftGroup.position.set(-(4 + armWidth / 2), 24, 0);
   armLeftGroup.add(part(canvas, ARM_LEFT, armWidth, 12, 4));
+  const sleeveLeft = part(canvas, SLEEVE_LEFT, armWidth + 0.5, 12.5, 4.5);
+  sleeveLeft.position.y = 0.25;
+  armLeftGroup.add(sleeveLeft);
   armLeft = armLeftGroup;
 
   const armRightGroup = new THREE.Group();
   armRightGroup.position.set(4 + armWidth / 2, 24, 0);
   armRightGroup.add(part(canvas, ARM_RIGHT, armWidth, 12, 4));
+  const sleeveRight = part(canvas, SLEEVE_RIGHT, armWidth + 0.5, 12.5, 4.5);
+  sleeveRight.position.y = 0.25;
+  armRightGroup.add(sleeveRight);
   armRight = armRightGroup;
 
   const legLeftGroup = new THREE.Group();
   legLeftGroup.position.set(-2, 12, 0);
   legLeftGroup.add(part(canvas, LEG_LEFT, 4, 12, 4));
+  const pantsLeft = part(canvas, PANTS_LEFT, 4.5, 12.5, 4.5);
+  pantsLeft.position.y = 0.25;
+  legLeftGroup.add(pantsLeft);
   legLeft = legLeftGroup;
 
   const legRightGroup = new THREE.Group();
   legRightGroup.position.set(2, 12, 0);
   legRightGroup.add(part(canvas, LEG_RIGHT, 4, 12, 4));
+  const pantsRight = part(canvas, PANTS_RIGHT, 4.5, 12.5, 4.5);
+  pantsRight.position.y = 0.25;
+  legRightGroup.add(pantsRight);
   legRight = legRightGroup;
 
-  root.add(head, bodyMesh, armLeft, armRight, legLeft, legRight);
+  root.add(head, bodyMesh, jacketMesh, armLeft, armRight, legLeft, legRight);
   if (capeCanvas) {
     const capeRoot = new THREE.Group();
     // 挂在肩膀高度、身体背面（+Z 是脸的方向，披风在 -Z）；

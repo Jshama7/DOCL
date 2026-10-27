@@ -100,9 +100,11 @@ fn memory_args(mode: &str, java_major: u32) -> Vec<&'static str> {
 }
 
 /// 启动参数与本地服务端共用的内存分配值。
+/// 自动模式在启动瞬间重新读取系统内存，随当时的可用量浮动（参考 PCL）。
 pub fn effective_memory_mb(cfg: &Config) -> u32 {
     if cfg.memory_auto {
-        crate::system::recommended_memory_mb(crate::system::memory_info().total_mb)
+        let info = crate::system::memory_info();
+        crate::system::recommended_memory_mb(info.total_mb, info.available_mb)
     } else {
         cfg.memory_mb.max(512)
     }

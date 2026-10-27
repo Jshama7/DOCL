@@ -8,6 +8,7 @@ import {
   revealFile,
   savePackDialog,
   type ExportPreview,
+  type InstanceCheck,
   type InstanceFile,
   type InstanceInfo,
   type InstanceMeta,
@@ -693,6 +694,53 @@ function openGameFolder() {
   if (paths.value) openFolder(paths.value.game_dir);
 }
 
+const CHECK_KIND_LABELS: Record<string, string> = {
+  mods: "Mod",
+  resourcepacks: "资源包",
+  shaderpacks: "光影",
+};
+
+const checkOpen = ref(false);
+const checking = ref(false);
+const checkResult = ref<InstanceCheck | null>(null);
+
+/// 扫描 mods / 资源包 / 光影里打不开的压缩包。
+/// FML 初始化时遇到损坏的 jar 会直接退出，这个入口用来给已装好的实例排查。
+async function runSelfCheck() {
+  const versionId = store.instanceId;
+  if (checking.value || !versionId) return;
+  checking.value = true;
+  checkResult.value = null;
+  checkOpen.value = true;
+  try {
+    const result = await api.checkInstanceFiles(versionId);
+    checkResult.value = result;
+    if (result.broken.length === 0) {
+      notify(`自检完成：${result.scanned} 个文件全部正常`);
+    }
+  } catch (err) {
+    notify(`自检失败：${String(err)}`, "err");
+    checkOpen.value = false;
+  } finally {
+    checking.value = false;
+  }
+}
+
+function brokenFolder(kind: string): string | null {
+  const value = paths.value;
+  if (!value) return null;
+  if (kind === "mods") return value.mods;
+  if (kind === "resourcepacks") return value.resourcepacks;
+  if (kind === "shaderpacks") return value.shaderpacks;
+  return null;
+}
+
+function openBrokenFolder() {
+  const first = checkResult.value?.broken[0];
+  const folder = first ? brokenFolder(first.kind) : null;
+  if (folder) openFolder(folder);
+}
+
 async function toggleFile(file: InstanceFile) {
   if (!store.instanceId) return;
   try {
@@ -1003,6 +1051,13 @@ function launch() {
           variant="soft"
           :size="34"
           @click="openVersionFolder"
+        />
+        <IconButton
+          icon="search"
+          label="文件自检"
+          variant="soft"
+          :size="34"
+          @click="runSelfCheck"
         />
         <WoodButton
           variant="primary"
@@ -1735,6 +1790,53 @@ function launch() {
       </template>
     </WoodModal>
 
+    <WoodModal
+      v-if="checkOpen"
+      title="实例文件自检"
+      :width="470"
+      @close="checkOpen = false"
+    >
+      <div v-if="checking" class="check-loading">
+        <span class="skeleton" />
+        <span class="muted small">正在检查 Mod / 资源包 / 光影…</span>
+      </div>
+      <div v-else-if="checkResult" class="check-body">
+        <p class="muted small">已检查 {{ checkResult.scanned }} 个文件。</p>
+        <p v-if="checkResult.broken.length === 0" class="check-ok">
+          <AppIcon name="check" :size="14" />
+          没有发现损坏的文件
+        </p>
+        <template v-else>
+          <ul class="check-list">
+            <li
+              v-for="file in checkResult.broken"
+              :key="`${file.kind}/${file.name}`"
+              class="check-item"
+            >
+              <span class="check-tag">{{ CHECK_KIND_LABELS[file.kind] ?? file.kind }}</span>
+              <span class="check-name mono">{{ file.name }}</span>
+              <span class="muted small">{{ formatBytes(file.size) }}</span>
+            </li>
+          </ul>
+          <p class="muted small">
+            这些文件已经无法作为压缩包读取，通常是下载中断造成的。删除后重新下载即可，否则游戏会在 Mod 扫描阶段直接退出。
+          </p>
+        </template>
+      </div>
+      <template #footer>
+        <WoodButton variant="ghost" size="sm" @click="checkOpen = false">关闭</WoodButton>
+        <WoodButton
+          v-if="checkResult?.broken.length"
+          variant="soft"
+          size="sm"
+          @click="openBrokenFolder"
+        >
+          <AppIcon name="folder" :size="13" />
+          打开所在目录
+        </WoodButton>
+      </template>
+    </WoodModal>
+
     <Teleport to="body">
       <Transition name="pack-modal">
         <div v-if="showExport && exportPreview" class="pack-modal">
@@ -2399,6 +2501,68 @@ function launch() {
 .seed-hint {
   margin: 0;
   line-height: 1.6;
+}
+
+.check-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+}
+
+.check-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.check-ok {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.check-tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.check-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink);
 }
 
 .world-pick__label {

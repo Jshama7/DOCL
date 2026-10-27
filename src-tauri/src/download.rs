@@ -407,6 +407,82 @@ const SLOW_SOURCE_BYTES_PER_SEC: u64 = 256 * 1024;
 /// 速度探测窗口，太短容易被网络抖动误判
 const SLOW_PROBE_WINDOW: Duration = Duration::from_secs(6);
 
+/// 临时性失败（5xx / 超时）：换源并等待后仍有较大概率成功，
+/// 退避时间比 4xx 长，避免服务端短暂不可用时三次连撞。
+#[derive(Debug)]
+struct TransientError {
+    message: String,
+    /// 服务端 Retry-After（秒），没有则为 None
+    retry_after: Option<Duration>,
+}
+
+impl std::fmt::Display for TransientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for TransientError {}
+
+/// 统计本次尝试已经计入进度的字节数。
+/// 失败时（未 commit）自动扣回，避免重试把同一份数据重复累加导致进度虚高。
+struct ByteTracker<'a> {
+    progress: &'a ProgressState,
+    written: u64,
+    committed: bool,
+}
+
+impl<'a> ByteTracker<'a> {
+    fn new(progress: &'a ProgressState) -> Self {
+        Self {
+            progress,
+            written: 0,
+            committed: false,
+        }
+    }
+
+    fn add(&mut self, bytes: u64) {
+        self.written += bytes;
+        self.progress
+            .bytes_done
+            .fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    fn written(&self) -> u64 {
+        self.written
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for ByteTracker<'_> {
+    fn drop(&mut self) {
+        if !self.committed && self.written > 0 {
+            self.progress
+                .bytes_done
+                .fetch_sub(self.written, Ordering::Relaxed);
+        }
+    }
+}
+
+/// 可被取消打断的等待：长退避期间用户点停止不必干等到超时。
+async fn sleep_cancellable(progress: &ProgressState, total: Duration) -> bool {
+    let step = Duration::from_millis(200);
+    let mut left = total;
+    while left > Duration::ZERO {
+        if progress.is_cancelled() {
+            return true;
+        }
+        let chunk = left.min(step);
+        tokio::time::sleep(chunk).await;
+        left -= chunk;
+    }
+    progress.is_cancelled()
+}
+
+
 async fn fetch_to_file(
     client: &reqwest::Client,
     url: &str,
@@ -421,17 +497,39 @@ async fn fetch_to_file(
     let _ = tokio::fs::remove_file(&tmp).await;
 
     // 连接阶段必须有超时：CDN 握手挂起时 send() 会一直等，取消也无法打断
-    let resp = tokio::time::timeout(Duration::from_secs(30), client.get(url).send())
-        .await
-        .map_err(|_| anyhow!("连接超时：{}", task.label))?
-        .with_context(|| format!("连接失败：{}", task.label))?;
+    let resp = match tokio::time::timeout(Duration::from_secs(30), client.get(url).send()).await {
+        Ok(result) => result.with_context(|| format!("连接失败：{}", task.label))?,
+        Err(_) => {
+            return Err(anyhow::Error::new(TransientError {
+                message: format!("连接超时：{}", task.label),
+                retry_after: None,
+            }))
+        }
+    };
     if !resp.status().is_success() {
-        bail!("服务器返回 {}", resp.status());
+        let status = resp.status();
+        // 5xx 与 429 是临时不可用，等一会儿换源还有机会；4xx 直接判定失败
+        if status.is_server_error() || status.as_u16() == 429 {
+            let retry_after = resp
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.trim().parse::<u64>().ok())
+                .map(Duration::from_secs)
+                // 服务端偶有给出很大的值，超过 20 秒就不等了，直接按退避表走
+                .filter(|wait| *wait <= Duration::from_secs(20));
+            return Err(anyhow::Error::new(TransientError {
+                message: format!("服务器返回 {status}"),
+                retry_after,
+            }));
+        }
+        bail!("服务器返回 {}", status);
     }
 
     let mut file = tokio::fs::File::create(&tmp).await?;
     let mut hasher = Sha1::new();
     let mut stream = resp.bytes_stream();
+    let mut tracker = ByteTracker::new(progress.as_ref());
     // 连接已完成，从这里开始算有效速度
     let probe_start = Instant::now();
     let mut probe_bytes = 0u64;
@@ -443,16 +541,33 @@ async fn fetch_to_file(
             bail!("下载已取消");
         }
         // 单块读取加超时，避免数据流卡住时永远等不到下一个 chunk
-        let next = tokio::time::timeout(Duration::from_secs(30), stream.next())
-            .await
-            .map_err(|_| anyhow!("下载超时（30 秒无数据）：{}", task.label))?;
+        let next = match tokio::time::timeout(Duration::from_secs(30), stream.next()).await {
+            Ok(value) => value,
+            Err(_) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return Err(anyhow::Error::new(TransientError {
+                    message: format!("下载超时（30 秒无数据）：{}", task.label),
+                    retry_after: None,
+                }));
+            }
+        };
         let Some(chunk) = next else { break };
-        let chunk = chunk.context("读取下载数据失败")?;
+        // 流中途断开（连接重置等）也属于临时性失败，值得换源重试
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(err) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&tmp).await;
+                return Err(anyhow::Error::new(TransientError {
+                    message: format!("读取下载数据失败：{err}"),
+                    retry_after: None,
+                }));
+            }
+        };
         hasher.update(&chunk);
         file.write_all(&chunk).await?;
-        progress
-            .bytes_done
-            .fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        tracker.add(chunk.len() as u64);
         throttle(chunk.len() as u64).await;
 
         // 下载源慢到不可用时提前放弃，交给上层换源（用户主动限速时不判定，否则必然误切）
@@ -467,10 +582,7 @@ async fn fetch_to_file(
                 {
                     drop(file);
                     let _ = tokio::fs::remove_file(&tmp).await;
-                    // 这部分数据已经丢弃，进度要扣回避免虚高
-                    progress
-                        .bytes_done
-                        .fetch_sub(probe_bytes, Ordering::Relaxed);
+                    // 丢弃的数据由 ByteTracker 在返回时统一扣回
                     bail!(
                         "下载源速度过慢（{} KB/s）：{}，换源重试",
                         (speed / 1024.0) as u64,
@@ -484,16 +596,32 @@ async fn fetch_to_file(
     drop(file);
 
     let actual = format!("{:x}", hasher.finalize());
-    if let Some(expected) = &task.sha1 {
-        if !expected.is_empty() && !expected.eq_ignore_ascii_case(&actual) {
-            let _ = tokio::fs::remove_file(&tmp).await;
-            bail!("文件校验失败（SHA1 不匹配）：{}", task.label);
+    // SHA1 是权威校验；没有哈希时才用清单长度兜底，
+    // 避免个别清单里的 size 写错导致正确文件被误判失败
+    match task.sha1.as_deref().filter(|value| !value.is_empty()) {
+        Some(expected) => {
+            if !expected.eq_ignore_ascii_case(&actual) {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                bail!("文件校验失败（SHA1 不匹配）：{}", task.label);
+            }
+        }
+        None => {
+            if task.size > 0 && tracker.written() != task.size {
+                let _ = tokio::fs::remove_file(&tmp).await;
+                bail!(
+                    "文件大小不符（预期 {} 字节，实际 {}）：{}",
+                    task.size,
+                    tracker.written(),
+                    task.label
+                );
+            }
         }
     }
     if task.dest.exists() {
         let _ = tokio::fs::remove_file(&task.dest).await;
     }
     tokio::fs::rename(&tmp, &task.dest).await?;
+    tracker.commit();
     Ok(())
 }
 
@@ -534,14 +662,17 @@ async fn download_one(
     };
 
     let mut last_err: Option<anyhow::Error> = None;
-    for attempt in 0..3usize {
+    // 5xx / 超时给服务端留出恢复时间：2s → 6s → 15s，共 4 次尝试
+    const ATTEMPTS: usize = 4;
+    const BACKOFF_SECS: [u64; 3] = [2, 6, 15];
+    for attempt in 0..ATTEMPTS {
         if progress.is_cancelled() {
             bail!("下载已取消");
         }
         let uses_mirror = if mirror_first { attempt % 2 == 0 } else { attempt % 2 == 1 };
         let url = &order[attempt % 2];
-        // 前两次尝试都允许因过慢切源，最后一次只求下完，避免两个源都慢时直接失败
-        let allow_slow_bail = attempt < 2;
+        // 前几次都允许因过慢切源，最后一次只求下完，避免两个源都慢时直接失败
+        let allow_slow_bail = attempt + 1 < ATTEMPTS;
         match fetch_to_file(client, url, task, progress, allow_slow_bail).await {
             Ok(()) => {
                 progress.files_done.fetch_add(1, Ordering::Relaxed);
@@ -551,17 +682,44 @@ async fn download_one(
                 if use_mirror && uses_mirror {
                     mirror_failures.fetch_add(1, Ordering::Relaxed);
                 }
+                // 临时性失败等久一点，4xx 之类仍按原来的短间隔快速换源
+                let wait = match err.downcast_ref::<TransientError>() {
+                    Some(transient) => transient.retry_after.unwrap_or_else(|| {
+                        Duration::from_secs(BACKOFF_SECS[attempt.min(BACKOFF_SECS.len() - 1)])
+                    }),
+                    None => Duration::from_millis(400 * (attempt as u64 + 1)),
+                };
                 last_err = Some(err);
-                tokio::time::sleep(Duration::from_millis(400 * (attempt as u64 + 1))).await;
+                if attempt + 1 < ATTEMPTS && sleep_cancellable(progress, wait).await {
+                    bail!("下载已取消");
+                }
             }
         }
     }
     Err(last_err.unwrap_or_else(|| anyhow!("下载失败：{}", task.label)))
 }
 
+/// 补下单个文件：复用换源与重试逻辑（内部最多 3 次），
+/// 但用独立的进度对象，不干扰主下载面板。
+pub async fn refetch(client: &reqwest::Client, task: &FileTask, use_mirror: bool) -> Result<()> {
+    // 损坏文件必须删掉：download_one 对已存在且未给长度的文件会直接跳过
+    let _ = tokio::fs::remove_file(&task.dest).await;
+    let progress = ProgressState::new("repair");
+    let failures = AtomicU64::new(0);
+    download_one(client, task, use_mirror, &failures, &progress).await
+}
+
 /// 下载任务并发上限。设置页滑条、各调用点都必须引用它，
 /// 避免像整合包那样各自硬编码成 32 导致上限不一致。
 pub const MAX_CONCURRENCY: usize = 64;
+
+/// 一批下载的结果。个别文件失败不再让整批任务直接报错，
+/// 由调用方决定是提示还是中断。
+#[derive(Debug, Default)]
+pub struct DownloadOutcome {
+    /// 失败文件的标签与原因
+    pub failed: Vec<(String, String)>,
+}
 
 pub async fn run_tasks(
     app: &AppHandle,
@@ -571,6 +729,23 @@ pub async fn run_tasks(
     use_mirror: bool,
     progress: Arc<ProgressState>,
 ) -> Result<()> {
+    let outcome =
+        run_tasks_reporting(app, client, tasks, concurrency, use_mirror, progress).await?;
+    if let Some((_, message)) = outcome.failed.into_iter().next() {
+        return Err(anyhow!("{message}"));
+    }
+    Ok(())
+}
+
+/// 与 run_tasks 相同，但把失败文件收集起来返回，便于分批容错。
+pub async fn run_tasks_reporting(
+    app: &AppHandle,
+    client: &reqwest::Client,
+    tasks: Vec<FileTask>,
+    concurrency: usize,
+    use_mirror: bool,
+    progress: Arc<ProgressState>,
+) -> Result<DownloadOutcome> {
     let total_files = tasks.len() as u64;
     let total_bytes: u64 = tasks.iter().map(|t| t.size).sum();
     progress.begin_phase(total_files, total_bytes);
@@ -579,7 +754,7 @@ pub async fn run_tasks(
     if tasks.is_empty() {
         progress.active.store(false, Ordering::Relaxed);
         emit_now(app, &progress);
-        return Ok(());
+        return Ok(DownloadOutcome::default());
     }
 
     start_ticker(app.clone(), progress.clone());
@@ -592,12 +767,15 @@ pub async fn run_tasks(
         let progress = progress.clone();
         let mirror_failures = mirror_failures.clone();
         async move {
-            download_one(&client, &task, use_mirror, &mirror_failures, &progress).await
+            let result =
+                download_one(&client, &task, use_mirror, &mirror_failures, &progress).await;
+            (task.label, result)
         }
     }))
     .buffer_unordered(conc);
 
-    let mut first_err: Option<anyhow::Error> = None;
+    let mut failed: Vec<(String, String)> = Vec::new();
+    let mut cancel_err: Option<anyhow::Error> = None;
     // 取消不能只靠任务自己返回错误：所有并发请求都卡在网络上时，
     // 主循环永远等不到结果。这里用 select 监听取消标志，一旦取消就
     // 跳出并丢弃 stream，正在进行的请求随之被打断。
@@ -605,20 +783,18 @@ pub async fn run_tasks(
         tokio::select! {
             biased;
             _ = wait_cancel(&progress) => {
-                first_err = Some(anyhow!("下载已取消"));
+                cancel_err = Some(anyhow!("下载已取消"));
                 break;
             }
             next = stream.next() => {
                 match next {
-                    Some(Ok(())) => {}
-                    Some(Err(err)) => {
+                    Some((_, Ok(()))) => {}
+                    Some((label, Err(err))) => {
                         if progress.is_cancelled() {
-                            first_err = Some(err);
+                            cancel_err = Some(err);
                             break;
                         }
-                        if first_err.is_none() {
-                            first_err = Some(err);
-                        }
+                        failed.push((label, err.to_string()));
                     }
                     None => break,
                 }
@@ -630,8 +806,40 @@ pub async fn run_tasks(
     progress.active.store(false, Ordering::Relaxed);
     emit_now(app, &progress);
 
-    if let Some(err) = first_err {
+    if let Some(err) = cancel_err {
         return Err(err);
     }
-    Ok(())
+    Ok(DownloadOutcome { failed })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ByteTracker, ProgressState};
+    use std::sync::atomic::Ordering;
+
+    /// 失败重试时要把本次已计入的字节扣回，否则进度会虚高到 100%
+    #[test]
+    fn rollback_bytes_when_not_committed() {
+        let progress = ProgressState::new("test");
+        progress.bytes_done.store(1000, Ordering::Relaxed);
+        {
+            let mut tracker = ByteTracker::new(progress.as_ref());
+            tracker.add(200);
+            tracker.add(300);
+            assert_eq!(progress.bytes_done.load(Ordering::Relaxed), 1500);
+            assert_eq!(tracker.written(), 500);
+        }
+        assert_eq!(progress.bytes_done.load(Ordering::Relaxed), 1000);
+    }
+
+    #[test]
+    fn keeps_bytes_when_committed() {
+        let progress = ProgressState::new("test");
+        {
+            let mut tracker = ByteTracker::new(progress.as_ref());
+            tracker.add(700);
+            tracker.commit();
+        }
+        assert_eq!(progress.bytes_done.load(Ordering::Relaxed), 700);
+    }
 }

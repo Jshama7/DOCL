@@ -938,6 +938,27 @@ pub fn instance_context(
     })
 }
 
+#[derive(serde::Serialize)]
+pub struct InstanceCheck {
+    pub scanned: u32,
+    pub broken: Vec<modpack::BrokenFile>,
+}
+
+/// 实例文件自检：扫描 mods / 资源包 / 光影里打不开的压缩包。
+/// 磁盘 IO 可能较慢，放阻塞线程池避免卡住 UI。
+#[tauri::command]
+pub async fn check_instance_files(
+    state: State<'_, AppState>,
+    version_id: String,
+) -> CmdResult<InstanceCheck> {
+    let cfg = state.config.lock().unwrap().clone();
+    let root = instance::game_dir(&cfg, &version_id);
+    let (scanned, broken) = tokio::task::spawn_blocking(move || modpack::scan_broken_files(&root))
+        .await
+        .map_err(err)?;
+    Ok(InstanceCheck { scanned, broken })
+}
+
 #[tauri::command]
 pub async fn cf_search(
     state: State<'_, AppState>,

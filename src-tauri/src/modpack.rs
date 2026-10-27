@@ -136,6 +136,9 @@ struct MrIndexFile {
     hashes: MrHashes,
     #[serde(default)]
     env: Option<MrEnv>,
+    /// 用于下载后校验长度，索引里缺省时为 0（不校验）
+    #[serde(default, rename = "fileSize")]
+    file_size: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -166,7 +169,7 @@ enum SourceData {
         game_version: String,
         loader: String,
         loader_version: Option<String>,
-        files: Vec<(String, String, Option<String>, bool)>,
+        files: Vec<(String, String, Option<String>, u64, bool)>,
     },
     Generic {
         prefix: String,
@@ -379,7 +382,7 @@ fn parse_pack(path: &str, server: bool) -> Result<ParsedPack> {
             if files.len() < 40 {
                 files.push(PackFilePreview {
                     path: file.path.clone(),
-                    size: 0,
+                    size: file.file_size,
                     url: if url.is_empty() { None } else { Some(url.clone()) },
                     required: !optional,
                 });
@@ -392,6 +395,7 @@ fn parse_pack(path: &str, server: bool) -> Result<ParsedPack> {
                 } else {
                     Some(file.hashes.sha1)
                 },
+                file.file_size,
                 optional,
             ));
         }
@@ -659,8 +663,17 @@ fn write_instance_json(cfg: &Config, id: &str, parent: &str) -> Result<PathBuf> 
 /// PCL 式自包含实例：把继承链的合并结果直接写成实例 json（不带 inheritsFrom），
 /// client jar 落进实例目录，最后清掉不再被其他实例引用的父版本目录。
 /// generic 导入的父版本可能是用户手动选的常用实例，remove_parents 传 false 不清理。
-fn finalize_self_contained(cfg: &Config, instance_id: &str, remove_parents: bool) -> Result<()> {
-    let merged = crate::install::resolve_detail(cfg, instance_id)?;
+fn finalize_self_contained(
+    cfg: &Config,
+    instance_id: &str,
+    remove_parents: bool,
+    meta: Option<&crate::models::DoclMeta>,
+) -> Result<()> {
+    let mut merged = crate::install::resolve_detail(cfg, instance_id)?;
+    // 合并后没有继承链，把游戏版本与加载器留在 json 里，供模组搜索和版本信息使用
+    if let Some(meta) = meta {
+        merged.detail.docl = Some(meta.clone());
+    }
     let dir = cfg.game_root().join("versions").join(instance_id);
     std::fs::write(
         dir.join(format!("{instance_id}.json")),
@@ -691,6 +704,124 @@ fn finalize_self_contained(cfg: &Config, instance_id: &str, remove_parents: bool
         }
     }
     Ok(())
+}
+
+/// jar 打不开说明下载不完整（截断或 0 字节），FML 扫描时会直接抛
+/// `ZipException: zip END header not found` 退出。
+fn jar_is_broken(path: &Path) -> bool {
+    match std::fs::File::open(path) {
+        Ok(file) => zip::ZipArchive::new(file).is_err(),
+        Err(_) => true,
+    }
+}
+
+fn broken_jars(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let is_jar = path
+            .extension()
+            .map(|ext| ext.eq_ignore_ascii_case("jar"))
+            .unwrap_or(false);
+        if is_jar && jar_is_broken(&path) {
+            out.push(path);
+        }
+    }
+    out
+}
+
+/// 实例自检发现的损坏文件
+#[derive(Debug, Clone, Serialize)]
+pub struct BrokenFile {
+    pub kind: String,
+    pub name: String,
+    pub size: u64,
+}
+
+/// 实例文件自检：返回扫描数量与无法作为 zip 打开的文件。
+/// mods 里的损坏文件会让 FML 初始化直接退出，资源包/光影包同理但不致命。
+pub fn scan_broken_files(root: &Path) -> (u32, Vec<BrokenFile>) {
+    let mut scanned = 0u32;
+    let mut broken = Vec::new();
+    for kind in ["mods", "resourcepacks", "shaderpacks"] {
+        let Ok(entries) = std::fs::read_dir(root.join(kind)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let is_archive = path
+                .extension()
+                .map(|ext| {
+                    let ext = ext.to_string_lossy().to_ascii_lowercase();
+                    ext == "jar" || ext == "zip"
+                })
+                .unwrap_or(false);
+            if !is_archive {
+                continue;
+            }
+            scanned += 1;
+            if jar_is_broken(&path) {
+                broken.push(BrokenFile {
+                    kind: kind.to_string(),
+                    name: path
+                        .file_name()
+                        .map(|value| value.to_string_lossy().to_string())
+                        .unwrap_or_default(),
+                    size: std::fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0),
+                });
+            }
+        }
+    }
+    broken.sort_by(|a, b| a.kind.cmp(&b.kind).then(a.name.cmp(&b.name)));
+    (scanned, broken)
+}
+
+/// 导入后自检 mods 目录：损坏的 jar 按本次导入的下载地址单文件补下
+/// （download::refetch 内部最多 3 次换源重试），仍不可用则记入 failed。
+async fn repair_broken_jars(
+    client: &reqwest::Client,
+    cfg: &Config,
+    root: &Path,
+    tasks: &[FileTask],
+    failed: &mut Vec<String>,
+    progress: &ProgressState,
+) {
+    for path in broken_jars(&root.join("mods")) {
+        // 用户取消导入后不必再逐个补下
+        if progress.is_cancelled() {
+            break;
+        }
+        let name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.display().to_string());
+        // 优先按完整路径匹配；路径规范差异时退回同名文件（mods 下基本同名唯一）
+        let task = tasks
+            .iter()
+            .find(|item| item.dest == path)
+            .or_else(|| {
+                tasks
+                    .iter()
+                    .find(|item| item.dest.file_name() == path.file_name())
+            });
+        let Some(task) = task else {
+            failed.push(format!("{name}：文件损坏且没有下载地址，请手动替换"));
+            continue;
+        };
+        let _ = download::refetch(client, task, cfg.use_mirror()).await;
+        if jar_is_broken(&path) {
+            failed.push(format!("{name}：文件损坏，自动补下失败，请删除后重新导入"));
+        }
+    }
 }
 
 async fn ensure_vanilla(
@@ -1334,7 +1465,7 @@ pub async fn import(
     let mut failed: Vec<String> = Vec::new();
     let mut installed_files = 0u32;
 
-    let (parent, game_version, loader) = match &parsed.source {
+    let (_, game_version, loader) = match &parsed.source {
         SourceData::Curse {
             game_version,
             loader,
@@ -1400,7 +1531,7 @@ pub async fn import(
             // API 源顺序跟随全局下载源设置：优先镜像时先试国内 MCIM
             let prefer_mirror = cfg.use_mirror();
             let mut tasks: Vec<FileTask> = Vec::new();
-            let mut results: Vec<Result<Option<(String, String)>>> = Vec::new();
+            let mut results: Vec<Result<Option<curseforge::FileDownload>>> = Vec::new();
             let mut stream = stream::iter(specs.into_iter().map(|(project_id, file_id, required)| {
                 let client = client_ref.clone();
                 async move {
@@ -1439,17 +1570,17 @@ pub async fn import(
             std::fs::create_dir_all(&mods_dir)?;
             for result in results {
                 match result {
-                    Ok(Some((url, name))) => {
-                        let file_name = Path::new(&name)
+                    Ok(Some(file)) => {
+                        let file_name = Path::new(&file.name)
                             .file_name()
                             .map(|value| value.to_string_lossy().to_string())
                             .unwrap_or_else(|| "mod.jar".into());
                         tasks.push(FileTask {
-                            url,
                             dest: mods_dir.join(file_name),
-                            sha1: None,
-                            size: 0,
-                            label: name,
+                            url: file.url,
+                            sha1: file.sha1,
+                            size: file.size,
+                            label: file.name,
                         });
                     }
                     Ok(None) => failed.push("可选文件下载地址缺失".into()),
@@ -1462,7 +1593,7 @@ pub async fn import(
                 download::run_tasks(
                     app,
                     client,
-                    tasks,
+                    tasks.clone(),
                     (cfg.concurrency as usize).clamp(1, download::MAX_CONCURRENCY),
                     cfg.use_mirror(),
                     progress.clone(),
@@ -1470,6 +1601,8 @@ pub async fn import(
                 .await?;
                 installed_files += count;
             }
+            download::begin_stage(app, &progress, "正在校验下载文件…");
+            repair_broken_jars(client, cfg, &root, &tasks, &mut failed, progress.as_ref()).await;
 
             download::begin_stage(app, &progress, "正在解压整合包覆盖文件…");
             let path_owned = path.to_string();
@@ -1537,7 +1670,7 @@ pub async fn import(
 
             let root = instance::game_dir(cfg, &instance_id);
             let mut tasks = Vec::new();
-            for (file_path, url, sha1, optional) in files {
+            for (file_path, url, sha1, size, optional) in files {
                 if url.is_empty() {
                     if !optional || options.install_optional {
                         failed.push(format!("缺少下载地址：{file_path}"));
@@ -1554,7 +1687,7 @@ pub async fn import(
                     url: url.clone(),
                     dest: root.join(relative),
                     sha1: sha1.clone(),
-                    size: 0,
+                    size: *size,
                     label: file_path.clone(),
                 });
             }
@@ -1564,7 +1697,7 @@ pub async fn import(
                 download::run_tasks(
                     app,
                     client,
-                    tasks,
+                    tasks.clone(),
                     (cfg.concurrency as usize).clamp(1, download::MAX_CONCURRENCY),
                     cfg.use_mirror(),
                     progress.clone(),
@@ -1572,6 +1705,8 @@ pub async fn import(
                 .await?;
                 installed_files += count;
             }
+            download::begin_stage(app, &progress, "正在校验下载文件…");
+            repair_broken_jars(client, cfg, &root, &tasks, &mut failed, progress.as_ref()).await;
 
             download::begin_stage(app, &progress, "正在解压整合包覆盖文件…");
             let path_owned = path.to_string();
@@ -1646,19 +1781,26 @@ pub async fn import(
             .await??;
             installed_files += written;
 
-            let game_version = install::instance_context(cfg, &parent)
-                .map(|(version, _)| version)
-                .unwrap_or_else(|_| parent.clone());
-            (parent, game_version, "vanilla".to_string())
+            // 本地压缩包导入没有原始下载地址，只能报告损坏文件
+            let instance_root = instance::game_dir(cfg, &instance_id);
+            repair_broken_jars(client, cfg, &instance_root, &[], &mut failed, progress.as_ref())
+                .await;
+
+            // 通用整合包沿用父实例的版本与加载器，父实例可能是 Forge/NeoForge 实例
+            let (game_version, loader) = install::instance_context(cfg, &parent)
+                .unwrap_or_else(|_| (parent.clone(), "vanilla".to_string()));
+            (parent, game_version, loader)
         }
     };
-
-    let _ = (parent, game_version, loader);
 
     // 导入完成后做 PCL 式自包含：合并 json + jar 进实例，清掉独占的父版本目录。
     // generic 的父版本可能是用户自己的实例，不清理。失败时保留 inheritsFrom 架构兜底。
     let remove_parents = !matches!(parsed.source, SourceData::Generic { .. });
-    if let Err(error) = finalize_self_contained(cfg, &instance_id, remove_parents) {
+    let meta = crate::models::DoclMeta {
+        game_version: game_version.clone(),
+        loader: loader.clone(),
+    };
+    if let Err(error) = finalize_self_contained(cfg, &instance_id, remove_parents, Some(&meta)) {
         progress.set_message(format!("自包含合并失败（实例仍可用）：{error}"));
     }
 
@@ -1668,4 +1810,51 @@ pub async fn import(
         installed_files,
         failed,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::broken_jars;
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    fn temp_dir(label: &str) -> PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("docl-pack-{label}-{stamp}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 0 字节与截断的 jar 要报出来，正常 zip 与无关文件不能误报
+    #[test]
+    fn reports_only_broken_jars() {
+        let dir = temp_dir("broken");
+        std::fs::write(dir.join("empty.jar"), b"").unwrap();
+        let mut truncated = std::fs::File::create(dir.join("truncated.jar")).unwrap();
+        truncated.write_all(&[0x50, 0x4b, 0x03, 0x04, 0x00]).unwrap();
+        drop(truncated);
+
+        let good = dir.join("good.jar");
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&good).unwrap());
+        zip.start_file("a.txt", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"ok").unwrap();
+        zip.finish().unwrap();
+        std::fs::write(dir.join("readme.txt"), b"not a jar").unwrap();
+
+        let mut names: Vec<String> = broken_jars(&dir)
+            .iter()
+            .filter_map(|path| path.file_name().map(|name| name.to_string_lossy().to_string()))
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["empty.jar".to_string(), "truncated.jar".to_string()]
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

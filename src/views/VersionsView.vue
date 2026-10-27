@@ -59,6 +59,16 @@ function displayName(id: string) {
   return name && name.trim() ? name : id;
 }
 
+/// 整合包实例的 id 是包名，这里补上真实的游戏版本与加载器
+function versionTag(item: { id: string; game_version?: string; loader?: string }) {
+  const parts: string[] = [];
+  if (item.game_version && item.game_version !== item.id) parts.push(item.game_version);
+  if (item.loader && item.loader !== "vanilla") {
+    parts.push(item.loader.charAt(0).toUpperCase() + item.loader.slice(1));
+  }
+  return parts.join(" · ");
+}
+
 const CATEGORY_LABELS: Record<string, string> = {
   survival: "生存",
   creative: "创造",
@@ -254,6 +264,7 @@ async function chooseImage(id: string) {
             <span class="tag">{{ kindLabel(item.kind) }}</span>
           </div>
           <span class="version-row__sub mono">
+            <template v-if="versionTag(item)">{{ versionTag(item) }} · </template>
             {{ item.id }}
             <template v-if="store.metas[item.id]?.category && store.metas[item.id]?.category !== 'auto'">
               · {{ categoryLabel(store.metas[item.id]?.category) }}

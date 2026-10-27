@@ -223,6 +223,9 @@ export interface InstalledVersion {
   has_jar: boolean;
   last_modified: number;
   java_major: number;
+  /// 游戏版本与加载器（整合包也能拿到真实值）
+  game_version: string;
+  loader: string;
   /// 仅作为整合包父版本存在
   dependency: boolean;
 }
@@ -252,6 +255,17 @@ export interface JavaInfo {
 export interface InstanceContext {
   game_version: string;
   loader: string;
+}
+
+export interface BrokenFile {
+  kind: string;
+  name: string;
+  size: number;
+}
+
+export interface InstanceCheck {
+  scanned: number;
+  broken: BrokenFile[];
 }
 
 export interface CrashLink {
@@ -699,6 +713,8 @@ export const api = {
     invoke<InstalledVersion>("install_loader", { versionId, loader, loaderVersion }),
   instanceContext: (versionId: string) =>
     invoke<InstanceContext>("instance_context", { versionId }),
+  checkInstanceFiles: (versionId: string) =>
+    invoke<InstanceCheck>("check_instance_files", { versionId }),
   instanceInfo: (versionId: string) =>
     invoke<InstanceInfo>("instance_info", { versionId }),
   instanceMetas: () => invoke<Record<string, InstanceMeta>>("instance_metas"),

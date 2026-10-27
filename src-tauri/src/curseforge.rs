@@ -69,6 +69,15 @@ struct CfAuthor {
     name: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+struct CfHash {
+    #[serde(default)]
+    value: String,
+    /// 1 = SHA1，2 = MD5
+    #[serde(default)]
+    algo: i32,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct CfFile {
@@ -81,6 +90,8 @@ struct CfFile {
     file_date: String,
     #[serde(default)]
     file_length: u64,
+    #[serde(default)]
+    hashes: Option<Vec<CfHash>>,
     #[serde(default)]
     download_url: Option<String>,
     #[serde(default)]
@@ -460,6 +471,14 @@ pub async fn files(
     Ok(files)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FileDownload {
+    pub url: String,
+    pub name: String,
+    pub sha1: Option<String>,
+    pub size: u64,
+}
+
 /// 读取文件详情并取出下载直链。
 /// 403/404 属于服务端明确拒绝，原地重试没有意义，像 PCL 一样直接换源：
 /// 先试配置偏好的源，失败再换另一个；每个源内部仍有一次重试。
@@ -468,7 +487,7 @@ pub async fn file_download(
     mod_id: i64,
     file_id: i64,
     prefer_mirror: bool,
-) -> Result<(String, String)> {
+) -> Result<FileDownload> {
     #[derive(Deserialize)]
     struct CfFileResponse {
         data: CfFile,
@@ -501,7 +520,19 @@ pub async fn file_download(
     } else {
         file_name
     };
-    Ok((download_url, name))
+    let sha1 = file
+        .hashes
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find(|hash| hash.algo == 1 && !hash.value.is_empty())
+        .map(|hash| hash.value.clone());
+    Ok(FileDownload {
+        url: download_url,
+        name,
+        sha1,
+        size: file.file_length,
+    })
 }
 
 #[derive(Debug, Serialize)]
@@ -519,8 +550,11 @@ pub async fn file_link(
 ) -> Result<FileLink> {
     let mod_id: i64 = mod_id.parse().context("项目 ID 无效")?;
     let file_id: i64 = file_id.parse().context("文件 ID 无效")?;
-    let (url, file_name) = file_download(client, mod_id, file_id, prefer_mirror).await?;
-    Ok(FileLink { url, file_name })
+    let download = file_download(client, mod_id, file_id, prefer_mirror).await?;
+    Ok(FileLink {
+        url: download.url,
+        file_name: download.name,
+    })
 }
 
 #[derive(Debug, Serialize)]

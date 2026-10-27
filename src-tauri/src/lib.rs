@@ -141,6 +141,7 @@ pub fn run() {
             commands::modpack_export_preview,
             commands::modpack_export,
             commands::instance_context,
+            commands::check_instance_files,
             commands::crash_analyze,
             commands::crash_export,
             commands::mod_updates,

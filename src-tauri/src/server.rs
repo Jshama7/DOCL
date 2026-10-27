@@ -2107,9 +2107,10 @@ mod tests {
         let _guard = PacksGuard::new();
         let client = crate::http::client();
         // RLCraft（项目 285109）的配套服务端包
-        let (url, file_name) = crate::curseforge::file_download(&client, 285109, 4612990, true)
+        let download = crate::curseforge::file_download(&client, 285109, 4612990, true)
             .await
             .expect("获取服务端包直链失败");
+        let (url, file_name) = (download.url, download.name);
         println!("下载 {file_name} <- {url}");
         let bytes = crate::download::get_bytes(&client, &url, true)
             .await
@@ -2196,9 +2197,10 @@ mod tests {
         let _guard = PacksGuard::new();
         let client = crate::http::client();
         // BMC6（项目 1634429）的配套服务端包，manifest 记录 MC 26.1.2 / NeoForge
-        let (url, file_name) = crate::curseforge::file_download(&client, 1634429, 9167839, true)
+        let download = crate::curseforge::file_download(&client, 1634429, 9167839, true)
             .await
             .expect("获取服务端包直链失败");
+        let (url, file_name) = (download.url, download.name);
         println!("下载 {file_name} <- {url}");
         let bytes = crate::download::get_bytes(&client, &url, true)
             .await

@@ -32,6 +32,17 @@ pub struct VersionSummary {
     pub installed: bool,
 }
 
+/// 导入整合包时写入实例 json 的元信息。
+/// 自包含实例（合并后不带 inheritsFrom）会丢掉游戏版本与加载器，
+/// 这里把它们留在 json 里，供搜索模组、显示版本信息使用。
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct DoclMeta {
+    #[serde(default)]
+    pub game_version: String,
+    #[serde(default)]
+    pub loader: String,
+}
+
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct VersionDetail {
     pub id: String,
@@ -40,6 +51,9 @@ pub struct VersionDetail {
     #[serde(rename = "mainClass")]
     pub main_class: Option<String>,
     pub assets: Option<String>,
+    /// Forge / NeoForge 安装器写入的原版版本号，自包含实例靠它还原
+    #[serde(rename = "clientVersion", default)]
+    pub client_version: Option<String>,
     #[serde(rename = "assetIndex")]
     pub asset_index: Option<AssetIndexRef>,
     pub downloads: Option<VersionDownloads>,
@@ -53,6 +67,8 @@ pub struct VersionDetail {
     pub logging: Option<Logging>,
     #[serde(rename = "inheritsFrom")]
     pub inherits_from: Option<String>,
+    #[serde(rename = "_docl", default, skip_serializing_if = "Option::is_none")]
+    pub docl: Option<DoclMeta>,
 }
 
 impl VersionDetail {

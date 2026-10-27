@@ -23,6 +23,9 @@ pub struct InstalledVersion {
     pub has_jar: bool,
     pub last_modified: u64,
     pub java_major: u32,
+    /// 游戏版本与加载器，自包含整合包也能显示真实值
+    pub game_version: String,
+    pub loader: String,
     /// 仅作为整合包父版本存在，不在版本页默认展示
     pub dependency: bool,
 }
@@ -85,6 +88,10 @@ pub fn list_installed(cfg: &Config) -> Vec<InstalledVersion> {
             Some(merged) => (merged.detail.kind.clone(), merged.detail.required_java()),
             None => ("unknown".into(), 8),
         };
+        let (game_version, loader) = match &resolved {
+            Some(merged) => context_from(&id, &merged.detail, &merged.chain),
+            None => (id.clone(), "vanilla".to_string()),
+        };
         let jar_path = match resolved.as_ref().and_then(|m| m.jar_id.as_ref()) {
             Some(jar_id) => dir.join(jar_id).join(format!("{jar_id}.jar")),
             None => path.join(format!("{id}.jar")),
@@ -109,6 +116,8 @@ pub fn list_installed(cfg: &Config) -> Vec<InstalledVersion> {
             has_jar,
             last_modified: modified,
             java_major,
+            game_version,
+            loader,
         });
     }
     result.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
@@ -411,6 +420,8 @@ pub async fn install_version(
     .await?;
 
     // 2) 资源索引与资源文件
+    // 资源文件缺一两个只会少音效/贴图，不该让整个安装失败，失败项单独汇总
+    let mut asset_failures: Vec<String> = Vec::new();
     if let Some(index_ref) = &detail.asset_index {
         progress.set_message("正在获取资源索引…");
         // 索引体积大且是后续全部下载的前置，卡在这里最常见，用竞速请求；
@@ -458,7 +469,7 @@ pub async fn install_version(
             });
         }
         progress.set_message(format!("正在下载 {} 个资源文件…", asset_tasks.len()));
-        download::run_tasks(
+        let outcome = download::run_tasks_reporting(
             app,
             client,
             asset_tasks,
@@ -468,6 +479,13 @@ pub async fn install_version(
             progress.clone(),
         )
         .await?;
+        if !outcome.failed.is_empty() {
+            asset_failures = outcome
+                .failed
+                .into_iter()
+                .map(|(label, _)| label)
+                .collect();
+        }
     }
 
     // 3) 日志配置
@@ -508,13 +526,28 @@ pub async fn install_version(
         }
     }
 
-    progress.set_message("安装完成");
+    if asset_failures.is_empty() {
+        progress.set_message("安装完成");
+    } else {
+        let sample = asset_failures
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("、");
+        progress.set_message(format!(
+            "安装完成，{} 个资源文件缺失（{}）。缺音效/贴图不影响启动，可稍后重新安装补齐",
+            asset_failures.len(),
+            sample
+        ));
+    }
     progress.active.store(false, Ordering::Relaxed);
     download::emit_now(app, &progress);
 
     let jar_path = version_dir.join(format!("{version_id}.jar"));
     let kind = detail.kind.clone();
     let java_major = detail.required_java();
+    let (game_version, loader) = context_from(&version_id, &detail, &[version_id.to_string()]);
     Ok(InstalledVersion {
         dependency: false,
         id: version_id.to_string(),
@@ -526,7 +559,84 @@ pub async fn install_version(
             .map(|d| d.as_secs())
             .unwrap_or(0),
         java_major,
+        game_version,
+        loader,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::context_from;
+    use crate::models::VersionDetail;
+
+    fn parse(value: serde_json::Value) -> VersionDetail {
+        serde_json::from_value(value).unwrap()
+    }
+
+    /// 自包含整合包没有继承链：真实数据的 assets 是 `5`，
+    /// 版本号只能靠 clientVersion 与库坐标还原
+    #[test]
+    fn self_contained_recovers_version_and_loader() {
+        let detail = parse(serde_json::json!({
+            "id": "Immersive Fight 4.2.1",
+            "clientVersion": "1.20.1",
+            "assets": "5",
+            "mainClass": "cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "libraries": [{ "name": "net.minecraftforge:fmlloader:1.20.1-47.4.6" }],
+        }));
+        let chain = vec!["Immersive Fight 4.2.1".to_string()];
+        assert_eq!(
+            context_from("Immersive Fight 4.2.1", &detail, &chain),
+            ("1.20.1".to_string(), "forge".to_string())
+        );
+    }
+
+    /// 没有 clientVersion 时退回库坐标里的版本号
+    #[test]
+    fn library_coordinate_yields_game_version() {
+        let detail = parse(serde_json::json!({
+            "id": "Pack",
+            "assets": "5",
+            "libraries": [{ "name": "net.minecraftforge:forge:1.12.2-14.23.5.2860" }],
+        }));
+        let chain = vec!["Pack".to_string()];
+        assert_eq!(
+            context_from("Pack", &detail, &chain),
+            ("1.12.2".to_string(), "forge".to_string())
+        );
+    }
+
+    /// 导入时写入的元信息优先级最高
+    #[test]
+    fn docl_meta_takes_precedence() {
+        let detail = parse(serde_json::json!({
+            "id": "Pack",
+            "assets": "1.20.1",
+            "_docl": { "game_version": "1.21.1", "loader": "neoforge" },
+        }));
+        let chain = vec!["Pack".to_string()];
+        assert_eq!(
+            context_from("Pack", &detail, &chain),
+            ("1.21.1".to_string(), "neoforge".to_string())
+        );
+    }
+
+    /// 有继承链时链根就是原版版本号
+    #[test]
+    fn chain_root_wins_over_assets() {
+        let detail = parse(serde_json::json!({
+            "id": "1.20.1-forge-47.2.0",
+            "assets": "1.20.1",
+        }));
+        let chain = vec![
+            "1.20.1-forge-47.2.0".to_string(),
+            "1.20.1".to_string(),
+        ];
+        assert_eq!(
+            context_from("1.20.1-forge-47.2.0", &detail, &chain),
+            ("1.20.1".to_string(), "forge".to_string())
+        );
+    }
 }
 
 pub fn is_installed(cfg: &Config, version_id: &str) -> bool {
@@ -578,6 +688,12 @@ fn merge_child(base: &mut VersionDetail, child: &VersionDetail) {
     }
     if let Some(assets) = &child.assets {
         base.assets = Some(assets.clone());
+    }
+    if let Some(client) = &child.client_version {
+        base.client_version = Some(client.clone());
+    }
+    if let Some(docl) = &child.docl {
+        base.docl = Some(docl.clone());
     }
 
     for lib in &child.libraries {
@@ -915,25 +1031,116 @@ async fn forge_installer(
     Ok(forge_installer_for(game_version, &version))
 }
 
-pub fn instance_context(cfg: &Config, version_id: &str) -> Result<(String, String)> {
-    let merged = resolve_detail(cfg, version_id)?;
-    let game_version = merged
-        .chain
+/// 从已解析的版本信息推断「游戏版本 + 加载器」。
+///
+/// 自包含整合包合并后没有继承链，`chain.last()` 只能是包名，因此按以下顺序兜底：
+/// 1. 导入时写进 json 的 `_docl`；
+/// 2. 继承链的链根（原版版本号）；
+/// 3. Forge / NeoForge 安装器留下的 `clientVersion`；
+/// 4. 库坐标里的版本号（如 `fmlloader:1.20.1-47.4.6`）；
+/// 5. 资源索引名（部分整合包的 `assets` 是 `5` 这类旧索引，只有形如版本号才采用）。
+pub fn context_from(version_id: &str, detail: &VersionDetail, chain: &[String]) -> (String, String) {
+    if let Some(meta) = &detail.docl {
+        if !meta.game_version.is_empty() {
+            return (meta.game_version.clone(), meta.loader.clone());
+        }
+    }
+
+    let game_version = chain
         .last()
         .cloned()
+        .filter(|value| value != version_id)
+        .or_else(|| {
+            detail
+                .client_version
+                .as_deref()
+                .filter(|value| looks_like_game_version(value))
+                .map(str::to_string)
+        })
+        .or_else(|| game_version_from_libraries(detail))
+        .or_else(|| {
+            detail
+                .assets
+                .as_deref()
+                .filter(|value| looks_like_game_version(value))
+                .map(str::to_string)
+        })
         .unwrap_or_else(|| version_id.to_string());
-    let loader = if version_id.starts_with("fabric-loader") {
-        "fabric"
-    } else if version_id.starts_with("quilt-loader") {
-        "quilt"
-    } else if version_id.contains("neoforge") {
-        "neoforge"
-    } else if version_id.contains("forge") {
-        "forge"
-    } else {
-        "vanilla"
-    };
-    Ok((game_version, loader.to_string()))
+
+    (game_version, detect_loader(version_id, detail))
+}
+
+/// 资源索引名形如 `1.20.1`；`pre-1.6`、`legacy`、`5` 这类不算。
+fn looks_like_game_version(value: &str) -> bool {
+    value.contains('.') && value.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+/// Forge 的 `fmlloader:1.20.1-47.4.6`、`forge:1.12.2-14.23.5` 自带原版版本号。
+fn game_version_from_libraries(detail: &VersionDetail) -> Option<String> {
+    for lib in &detail.libraries {
+        let lower = lib.name.to_ascii_lowercase();
+        if lower.starts_with("net.minecraftforge:forge:")
+            || lower.starts_with("net.minecraftforge:fmlloader:")
+        {
+            let version = lib.name.rsplit(':').next()?;
+            let candidate = version.split('-').next()?;
+            if looks_like_game_version(candidate) {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// 版本 id 优先（DOCL 自己安装的加载器版本 id 带名字），
+/// 自包含实例的 id 是包名，改看库坐标与主类。
+fn detect_loader(version_id: &str, detail: &VersionDetail) -> String {
+    let lower = version_id.to_ascii_lowercase();
+    if lower.contains("neoforge") {
+        return "neoforge".into();
+    }
+    if lower.contains("forge") {
+        return "forge".into();
+    }
+    if lower.contains("quilt") {
+        return "quilt".into();
+    }
+    if lower.contains("fabric") {
+        return "fabric".into();
+    }
+    for lib in &detail.libraries {
+        let name = lib.name.to_ascii_lowercase();
+        if name.starts_with("net.neoforged:") {
+            return "neoforge".into();
+        }
+        if name.starts_with("net.minecraftforge:") {
+            return "forge".into();
+        }
+        if name.starts_with("org.quiltmc:quilt-loader") {
+            return "quilt".into();
+        }
+        if name.starts_with("net.fabricmc:fabric-loader") {
+            return "fabric".into();
+        }
+    }
+    if let Some(main) = &detail.main_class {
+        let main = main.to_ascii_lowercase();
+        if main.contains("bootstraplauncher") {
+            return "forge".into();
+        }
+        if main.contains("quilt") {
+            return "quilt".into();
+        }
+        if main.contains("knot") {
+            return "fabric".into();
+        }
+    }
+    "vanilla".into()
+}
+
+pub fn instance_context(cfg: &Config, version_id: &str) -> Result<(String, String)> {
+    let merged = resolve_detail(cfg, version_id)?;
+    Ok(context_from(version_id, &merged.detail, &merged.chain))
 }
 
 pub async fn loader_versions(
@@ -1171,6 +1378,7 @@ fn finish_loader_install(
         })
         .map(|m| m.len())
         .unwrap_or(0);
+    let (game_version, loader) = context_from(&target, &detail.detail, &detail.chain);
     Ok(InstalledVersion {
         dependency: false,
         id: target.to_string(),
@@ -1182,6 +1390,8 @@ fn finish_loader_install(
             .unwrap_or_default()
             .as_secs(),
         java_major: detail.detail.required_java(),
+        game_version,
+        loader,
     })
 }
 
@@ -1731,6 +1941,7 @@ pub async fn install_loader(
         .map(|m| m.len())
         .unwrap_or(0);
 
+    let (game_version, loader) = context_from(&loader_id, &merged.detail, &merged.chain);
     Ok(InstalledVersion {
         dependency: false,
         id: loader_id,
@@ -1742,5 +1953,7 @@ pub async fn install_loader(
             .map(|d| d.as_secs())
             .unwrap_or(0),
         java_major,
+        game_version,
+        loader,
     })
 }

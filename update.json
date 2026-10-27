@@ -1,6 +1,6 @@
 {
-  "version": "1.5.3",
-  "url": "https://github.com/dawo4/DOCL/releases/download/v1.5.3/DOCL_1.5.3_x64-setup.exe",
-  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.5.3/DOCL_1.5.3_portable.zip",
-  "notes": "CurseForge 全接口接入国内镜像并智能选源，Forge 1.12 改原生安装不再卡境外源，Java 运行时支持删除。"
+  "version": "1.6.0",
+  "url": "https://github.com/dawo4/DOCL/releases/download/v1.6.0/DOCL_1.6.0_x64-setup.exe",
+  "portable_url": "https://github.com/dawo4/DOCL/releases/download/v1.6.0/DOCL_1.6.0_portable.zip",
+  "notes": "新增 LittleSkin 等第三方登录（自动同步皮肤/披风与纤细模型）；服务端整合包支持拖拽识别、一键下载、自动安装加载器与删除，兼容 26.x 新版本号；模组支持 MC 百科中文名、图标与来源反查；崩溃分析可按堆栈定位 Mod 并导出脱敏报告；皮肤 3D 预览补齐第二层（帽子/外套/袖子/裤子）并修正纤细模型与左右镜像；自动内存改为按当前可用内存动态推荐。"
 }

@@ -53,7 +53,7 @@ export const store = reactive({
   dirCounts: {} as Record<string, number>,
   accounts: [] as AccountView[],
   javaList: [] as JavaInfo[],
-  systemMemory: { total_mb: 0, available_mb: 0 } as SystemMemory,
+  systemMemory: { total_mb: 0, available_mb: 0, recommended_mb: 0 } as SystemMemory,
   loadingVersions: false,
   progress: null as ProgressSnapshot | null,
   installingId: null as string | null,

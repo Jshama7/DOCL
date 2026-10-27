@@ -28,3 +28,16 @@
 
 - jsDelivr 只代理仓库内文本文件，不代理 Release 附件；安装包下载仍走 GitHub 直链。
 - 构建/发布类命令用内置终端执行，不要用 MCP 的 PowerShell 工具（会卡在授权确认上）。
+- **git 需要走系统代理**：本机直连 `github.com:443` 会超时/重置，Windows 系统代理为
+  `127.0.0.1:7897`。推送时用临时参数，不要修改全局/仓库 git 配置：
+
+  ```powershell
+  git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push origin main
+  ```
+
+  端口以系统代理实际设置为准（`HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 的 `ProxyServer`）。
+- 本机 git 未配置全局身份。提交时用 `-c` 临时指定历史作者，避免写入配置：
+
+  ```powershell
+  git -c user.name="dawo4" -c user.email="dawo4@users.noreply.github.com" commit -m "..."
+  ```

@@ -47,16 +47,22 @@ type Tab =
   | "saves"
   | "screenshots";
 
-const tabs: { key: Tab; label: string; icon: string; no: string }[] = [
-  { key: "overview", label: "概览", icon: "cube", no: "01" },
-  { key: "launch", label: "启动设置", icon: "settings", no: "02" },
-  { key: "mods", label: "Mod", icon: "grid", no: "03" },
-  { key: "resourcepacks", label: "资源包", icon: "image", no: "04" },
-  { key: "shaderpacks", label: "光影", icon: "sun", no: "05" },
-  { key: "datapacks", label: "数据包", icon: "package", no: "06" },
-  { key: "schematics", label: "投影", icon: "layers", no: "07" },
-  { key: "saves", label: "存档", icon: "database", no: "08" },
-  { key: "screenshots", label: "截图", icon: "folder", no: "09" },
+/// 右侧只展示可统计分类的数量；没有计数的页签不显示数字，避免与序号混淆。
+const tabs: {
+  key: Tab;
+  label: string;
+  icon: string;
+  countKey?: keyof InstanceInfo["counts"];
+}[] = [
+  { key: "overview", label: "概览", icon: "cube" },
+  { key: "launch", label: "启动设置", icon: "settings" },
+  { key: "mods", label: "Mod", icon: "grid", countKey: "mods" },
+  { key: "resourcepacks", label: "资源包", icon: "image", countKey: "resourcepacks" },
+  { key: "shaderpacks", label: "光影", icon: "sun", countKey: "shaderpacks" },
+  { key: "datapacks", label: "数据包", icon: "package" },
+  { key: "schematics", label: "投影", icon: "layers" },
+  { key: "saves", label: "存档", icon: "database", countKey: "saves" },
+  { key: "screenshots", label: "截图", icon: "folder", countKey: "screenshots" },
 ];
 
 const contentTabs: Tab[] = [
@@ -1031,13 +1037,9 @@ function launch() {
         >
           <AppIcon :name="item.icon" :size="16" />
           <span class="ins-side__label">{{ item.label }}</span>
-          <span
-            v-if="item.key === 'mods' || item.key === 'resourcepacks' || item.key === 'shaderpacks' || item.key === 'saves' || item.key === 'screenshots'"
-            class="ins-side__count mono"
-          >
-            {{ item.key === "mods" ? info.counts.mods : item.key === "resourcepacks" ? info.counts.resourcepacks : item.key === "shaderpacks" ? info.counts.shaderpacks : item.key === "saves" ? info.counts.saves : info.counts.screenshots }}
+          <span v-if="item.countKey" class="ins-side__count mono">
+            {{ info.counts[item.countKey] }}
           </span>
-          <span v-else class="ins-side__no mono">{{ item.no }}</span>
         </button>
 
         <div class="ins-side__meta">
@@ -2004,7 +2006,6 @@ function launch() {
   flex: 1;
 }
 
-.ins-side__no,
 .ins-side__count {
   font-size: 10.5px;
   color: var(--muted);

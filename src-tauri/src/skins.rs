@@ -329,11 +329,8 @@ async fn profile_textures(client: &reqwest::Client, url: &str) -> Result<Texture
     Ok(payload.textures)
 }
 
-/// 读取档案里的皮肤并下载（Mojang 与第三方皮肤站格式一致），同时返回披风地址。
-async fn skin_from_profile(
-    client: &reqwest::Client,
-    url: &str,
-) -> Result<(Vec<u8>, String, Option<String>)> {
+/// 读取档案里的皮肤并下载（Mojang 与第三方皮肤站格式一致）。
+async fn skin_from_profile(client: &reqwest::Client, url: &str) -> Result<(Vec<u8>, String)> {
     let textures = profile_textures(client, url).await?;
     let skin = textures
         .skin
@@ -352,14 +349,10 @@ async fn skin_from_profile(
         .bytes()
         .await?
         .to_vec();
-    let cape = textures.cape.map(|item| item.url);
-    Ok((bytes, model, cape))
+    Ok((bytes, model))
 }
 
-pub async fn official_skin(
-    client: &reqwest::Client,
-    uuid: &str,
-) -> Result<(Vec<u8>, String, Option<String>)> {
+pub async fn official_skin(client: &reqwest::Client, uuid: &str) -> Result<(Vec<u8>, String)> {
     skin_from_profile(
         client,
         &format!("https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"),
@@ -372,7 +365,7 @@ pub async fn authlib_skin(
     client: &reqwest::Client,
     root: &str,
     uuid: &str,
-) -> Result<(Vec<u8>, String, Option<String>)> {
+) -> Result<(Vec<u8>, String)> {
     let root = root.trim().trim_end_matches('/');
     if root.is_empty() || uuid.is_empty() {
         bail!("皮肤站地址或角色 UUID 为空");
@@ -404,26 +397,6 @@ pub struct LoadedSkin {
     pub data_url: String,
     pub model: String,
     pub source: String,
-    pub cape: Option<String>,
-}
-
-/// 披风地址转 data URL；没有披风或下载失败都不影响皮肤本身。
-async fn cape_data_url(client: &reqwest::Client, url: Option<String>) -> Option<String> {
-    let url = url?;
-    if !url.starts_with("https://") && !url.starts_with("http://") {
-        return None;
-    }
-    let bytes = client
-        .get(url)
-        .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?
-        .bytes()
-        .await
-        .ok()?;
-    Some(to_data_url(&bytes, "image/png"))
 }
 
 pub async fn load_skin(client: &reqwest::Client, account: &Account) -> LoadedSkin {
@@ -443,7 +416,6 @@ pub async fn load_skin(client: &reqwest::Client, account: &Account) -> LoadedSki
                 data_url: to_data_url(&bytes, "image/png"),
                 model,
                 source: "local".into(),
-                cape: None,
             };
         }
     }
@@ -454,23 +426,21 @@ pub async fn load_skin(client: &reqwest::Client, account: &Account) -> LoadedSki
             .map(str::trim)
             .filter(|value| !value.is_empty())
         {
-            if let Ok((bytes, model, cape)) = authlib_skin(client, root, &account.uuid).await {
+            if let Ok((bytes, model)) = authlib_skin(client, root, &account.uuid).await {
                 return LoadedSkin {
                     data_url: to_data_url(&bytes, "image/png"),
                     model,
                     source: "authlib".into(),
-                    cape: cape_data_url(client, cape).await,
                 };
             }
         }
     }
     if account.kind == "microsoft" {
-        if let Ok((bytes, model, cape)) = official_skin(client, &account.uuid).await {
+        if let Ok((bytes, model)) = official_skin(client, &account.uuid).await {
             return LoadedSkin {
                 data_url: to_data_url(&bytes, "image/png"),
                 model,
                 source: "official".into(),
-                cape: cape_data_url(client, cape).await,
             };
         }
         if let Ok(bytes) = fallback_skin(client, &account.uuid).await {
@@ -478,7 +448,6 @@ pub async fn load_skin(client: &reqwest::Client, account: &Account) -> LoadedSki
                 data_url: to_data_url(&bytes, "image/png"),
                 model: "classic".into(),
                 source: "official".into(),
-                cape: None,
             };
         }
     }
@@ -487,7 +456,6 @@ pub async fn load_skin(client: &reqwest::Client, account: &Account) -> LoadedSki
         data_url,
         model,
         source: "default".into(),
-        cape: None,
     }
 }
 
@@ -702,7 +670,7 @@ pub async fn player_skin(client: &reqwest::Client, name: &str) -> Result<(String
         .json()
         .await
         .context("解析玩家信息失败")?;
-    let (bytes, model, _cape) = official_skin(client, &lookup.id)
+    let (bytes, model) = official_skin(client, &lookup.id)
         .await
         .context("该玩家没有设置皮肤")?;
     let bytes = normalize_png(bytes)?;
@@ -844,20 +812,18 @@ pub async fn set_cape(
 mod tests {
     use super::*;
 
-    /// 联网实测：档案解析能同时拿到皮肤与披风。
-    /// cargo test --lib skins::tests::live_official_skin_with_cape -- --ignored --nocapture
+    /// 联网实测：能从官方档案解析出皮肤与模型。
+    /// cargo test --lib skins::tests::live_official_skin -- --ignored --nocapture
     #[tokio::test]
     #[ignore]
-    async fn live_official_skin_with_cape() {
+    async fn live_official_skin() {
         let client = crate::http::client();
-        // jeb_ 有官方披风
-        let (bytes, model, cape) = official_skin(&client, "853c80ef3c3749fdaa49938b674adae6")
+        // jeb_ 的官方皮肤
+        let (bytes, model) = official_skin(&client, "853c80ef3c3749fdaa49938b674adae6")
             .await
             .expect("读取皮肤失败");
-        println!("皮肤 {} 字节，模型 {model}，披风 {cape:?}", bytes.len());
+        println!("皮肤 {} 字节，模型 {model}", bytes.len());
         assert!(!bytes.is_empty());
         assert_eq!(model, "classic");
-        let cape_url = cape_data_url(&client, cape).await.expect("下载披风失败");
-        assert!(cape_url.starts_with("data:image/png;base64,"));
     }
 }

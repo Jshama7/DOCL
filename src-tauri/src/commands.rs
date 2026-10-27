@@ -1281,8 +1281,6 @@ pub struct AccountSkinView {
     pub data_url: String,
     pub model: String,
     pub source: String,
-    /// 披风的 data URL（没有披风时为 null）
-    pub cape: Option<String>,
 }
 
 fn find_account(account_id: &str) -> CmdResult<Account> {
@@ -1314,7 +1312,6 @@ pub async fn get_account_skin(
         data_url: skin.data_url,
         model: skin.model,
         source: skin.source,
-        cape: skin.cape,
     })
 }
 

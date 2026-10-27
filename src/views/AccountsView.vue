@@ -90,17 +90,6 @@ const skinSource = computed(() => store.accountSkin?.data_url ?? "");
 const skinModel = computed(
   () => store.accountSkin?.model ?? selectedAccount.value?.skin_model ?? "classic"
 );
-/// 披风默认不显示，避免挡住角色本体；需要时点按钮再看
-const showCape = ref(false);
-const capeSource = computed(() =>
-  showCape.value ? store.accountSkin?.cape ?? "" : ""
-);
-watch(
-  () => store.accountSkin?.cape,
-  () => {
-    showCape.value = false;
-  }
-);
 const skinSourceLabel = computed(() => {
   switch (store.accountSkin?.source) {
     case "local":
@@ -333,7 +322,6 @@ onMounted(() => {
               }}
             </span>
             <span class="tag">{{ skinSourceLabel }}</span>
-            <span v-if="store.accountSkin?.cape" class="tag">披风</span>
           </div>
         </header>
 
@@ -347,7 +335,6 @@ onMounted(() => {
           <SkinModel
             v-else
             :skin="skinSource"
-            :cape="capeSource"
             :seed="selectedAccount.uuid"
             :model="skinModel"
             :height="360"
@@ -356,9 +343,6 @@ onMounted(() => {
 
         <div class="acc-actions">
           <WoodButton variant="soft" @click="editSkin">编辑皮肤</WoodButton>
-          <WoodButton v-if="store.accountSkin?.cape" variant="soft" @click="showCape = !showCape">
-            {{ showCape ? "隐藏披风" : "显示披风" }}
-          </WoodButton>
           <WoodButton variant="soft" @click="exportSkin">
             <AppIcon name="download" :size="15" />
             导出 PNG

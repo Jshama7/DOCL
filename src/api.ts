@@ -638,8 +638,6 @@ export interface AccountSkin {
   data_url: string;
   model: string;
   source: "local" | "official" | "authlib" | "default";
-  // 披风 data URL，没有披风时为 null
-  cape: string | null;
 }
 
 export interface DeviceCode {

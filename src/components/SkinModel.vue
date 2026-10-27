@@ -216,11 +216,16 @@ function part(
   regions: FaceRegions,
   width: number,
   height: number,
-  depth: number
+  depth: number,
+  // 第二层的层级偏移：0 为贴图层；外套/帽子 1、袖子/裤子 2。
+  // 相邻两层表面共面时必须给出不同偏移，否则会 z-fighting 出一条暗线
+  layer = 0
 ): THREE.Mesh {
   const order = [
-    regions.right,
+    // 皮肤展开图的「右/左」面是角色自身的右侧/左侧：角色面向 +Z 时自身右侧为 -X，
+    // 所以 right → BoxGeometry 的 -X 面，left → +X 面（顺序反了会整条手臂贴错图）
     regions.left,
+    regions.right,
     regions.top,
     regions.bottom,
     regions.front,
@@ -234,6 +239,10 @@ function part(
         alphaTest: 0.02,
         roughness: 0.95,
         metalness: 0,
+        // 第二层与相邻表面共面时靠深度偏移分先后，避免出现一条贯穿的暗线
+        polygonOffset: layer > 0,
+        polygonOffsetFactor: -layer,
+        polygonOffsetUnits: -layer,
       })
   );
   materials.push(...mats);
@@ -298,45 +307,46 @@ async function build() {
   head.position.y = 32;
   head.add(headMesh);
   // 第二层外扩量与游戏一致：头 0.5，身体四肢 0.25；透明像素会被 alphaTest 丢弃
-  const hatMesh = part(canvas, HAT, 9, 9, 9);
+  const hatMesh = part(canvas, HAT, 9, 9, 9, 1);
   hatMesh.position.y = 0.5;
   head.add(hatMesh);
 
   const bodyMesh = part(canvas, BODY, 8, 12, 4);
   bodyMesh.position.y = 24;
-  const jacketMesh = part(canvas, JACKET, 8.5, 12.5, 4.5);
+  const jacketMesh = part(canvas, JACKET, 8.5, 12.5, 4.5, 1);
   jacketMesh.position.y = 24.25;
 
   const armWidth = props.model === "slim" ? 3 : 4;
   const arms = armFaces(props.model === "slim");
+  // 角色右手在 -X（面向 +Z 时），左手在 +X
   const armLeftGroup = new THREE.Group();
-  armLeftGroup.position.set(-(4 + armWidth / 2), 24, 0);
+  armLeftGroup.position.set(4 + armWidth / 2, 24, 0);
   armLeftGroup.add(part(canvas, arms.leftArm, armWidth, 12, 4));
-  const sleeveLeft = part(canvas, arms.sleeveLeft, armWidth + 0.5, 12.5, 4.5);
+  const sleeveLeft = part(canvas, arms.sleeveLeft, armWidth + 0.5, 12.5, 4.5, 2);
   sleeveLeft.position.y = 0.25;
   armLeftGroup.add(sleeveLeft);
   armLeft = armLeftGroup;
 
   const armRightGroup = new THREE.Group();
-  armRightGroup.position.set(4 + armWidth / 2, 24, 0);
+  armRightGroup.position.set(-(4 + armWidth / 2), 24, 0);
   armRightGroup.add(part(canvas, arms.rightArm, armWidth, 12, 4));
-  const sleeveRight = part(canvas, arms.sleeveRight, armWidth + 0.5, 12.5, 4.5);
+  const sleeveRight = part(canvas, arms.sleeveRight, armWidth + 0.5, 12.5, 4.5, 2);
   sleeveRight.position.y = 0.25;
   armRightGroup.add(sleeveRight);
   armRight = armRightGroup;
 
   const legLeftGroup = new THREE.Group();
-  legLeftGroup.position.set(-2, 12, 0);
+  legLeftGroup.position.set(2, 12, 0);
   legLeftGroup.add(part(canvas, LEG_LEFT, 4, 12, 4));
-  const pantsLeft = part(canvas, PANTS_LEFT, 4.5, 12.5, 4.5);
+  const pantsLeft = part(canvas, PANTS_LEFT, 4.5, 12.5, 4.5, 2);
   pantsLeft.position.y = 0.25;
   legLeftGroup.add(pantsLeft);
   legLeft = legLeftGroup;
 
   const legRightGroup = new THREE.Group();
-  legRightGroup.position.set(2, 12, 0);
+  legRightGroup.position.set(-2, 12, 0);
   legRightGroup.add(part(canvas, LEG_RIGHT, 4, 12, 4));
-  const pantsRight = part(canvas, PANTS_RIGHT, 4.5, 12.5, 4.5);
+  const pantsRight = part(canvas, PANTS_RIGHT, 4.5, 12.5, 4.5, 2);
   pantsRight.position.y = 0.25;
   legRightGroup.add(pantsRight);
   legRight = legRightGroup;

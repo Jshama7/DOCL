@@ -161,7 +161,16 @@ function mirrorLegacyLimbs(ctx: CanvasRenderingContext2D) {
   }
 }
 
-/** 供 3D 预览使用：旧版 64x32 皮肤自动补全左臂/左腿与覆盖层布局 */
+/** 画布下半部分是否完全透明：旧版 64x32 布局（或被拉伸进 64x64 的旧皮肤） */
+function hasEmptyLowerHalf(ctx: CanvasRenderingContext2D): boolean {
+  const { data } = ctx.getImageData(0, SKIN_SIZE / 2, SKIN_SIZE, SKIN_SIZE / 2);
+  for (let index = 3; index < data.length; index += 4) {
+    if (data[index] !== 0) return false;
+  }
+  return true;
+}
+
+/** 供 3D 预览/编辑器使用：旧版 64x32 皮肤自动补全左臂/左腿，统一成 64x64 布局 */
 export async function skinCanvasFromSource(source: string): Promise<HTMLCanvasElement> {
   const image = await imageFromSource(source);
   const canvas = document.createElement("canvas");
@@ -169,7 +178,8 @@ export async function skinCanvasFromSource(source: string): Promise<HTMLCanvasEl
   canvas.height = SKIN_SIZE;
   const ctx = canvas.getContext("2d")!;
   const destHeight = drawScaled(ctx, image);
-  if (destHeight <= SKIN_SIZE / 2) {
+  // 编辑器会把任何皮肤都画进 64x64 画布，所以按比例之外还要看下半部分是否为空
+  if (destHeight <= SKIN_SIZE / 2 || hasEmptyLowerHalf(ctx)) {
     mirrorLegacyLimbs(ctx);
   }
   return canvas;

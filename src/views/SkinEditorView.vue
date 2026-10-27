@@ -8,7 +8,7 @@ import WoodButton from "../components/WoodButton.vue";
 import WoodInput from "../components/WoodInput.vue";
 import WoodModal from "../components/WoodModal.vue";
 import type { AccountView, DefaultSkin, SkinLibraryItem } from "../api";
-import { canvasFromSource, createDefaultSkin, seedFromString, SKIN_SIZE } from "../skin";
+import { canvasFromSource, createDefaultSkin, seedFromString, skinCanvasFromSource, SKIN_SIZE } from "../skin";
 import { loadSelectedSkin, notify, refreshAccounts, store } from "../store";
 
 const props = defineProps<{ account: AccountView }>();
@@ -183,16 +183,27 @@ function onHueUp() {
   hueDragging = false;
 }
 
+/// 参考框包含两层：上半部分为贴图层，下半部分为第二层（帽子/外套/袖子/裤子）
 const guideRects = computed<Record<string, [number, number, number, number][]>>(() => ({
-  head: [[0, 0, 32, 16]],
-  body: [[16, 16, 24, 16]],
+  head: [
+    [0, 0, 32, 16], // 头部基础层
+    [32, 0, 32, 16], // 帽子层
+  ],
+  body: [
+    [16, 16, 24, 16], // 身体基础层
+    [16, 32, 32, 16], // 外套层
+  ],
   arms: [
-    [32, 16, 16, 16],
-    [32, 48, 16, 16],
+    [40, 16, 16, 16], // 右臂
+    [32, 48, 16, 16], // 左臂
+    [40, 32, 16, 16], // 右袖
+    [48, 48, 16, 16], // 左袖
   ],
   legs: [
-    [0, 16, 16, 16],
-    [16, 48, 16, 16],
+    [0, 16, 16, 16], // 右腿
+    [16, 48, 16, 16], // 左腿
+    [0, 32, 16, 16], // 右裤
+    [0, 48, 16, 16], // 左裤
   ],
 }));
 
@@ -363,7 +374,8 @@ async function loadSource() {
   let base: HTMLCanvasElement;
   if (source) {
     try {
-      base = await canvasFromSource(source);
+      // 旧版 64x32 皮肤会补全左臂/左腿，保证预览、编辑与保存都是完整的 64x64 布局
+      base = await skinCanvasFromSource(source);
     } catch {
       base = createDefaultSkin(seedFromString(props.account.uuid));
     }

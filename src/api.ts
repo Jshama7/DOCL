@@ -635,7 +635,7 @@ export interface AuthlibMeta {
 export interface AccountSkin {
   data_url: string;
   model: string;
-  source: "local" | "official" | "default";
+  source: "local" | "official" | "authlib" | "default";
 }
 
 export interface DeviceCode {

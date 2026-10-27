@@ -47,6 +47,7 @@ struct ProfileResp {
 }
 
 #[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AuthResp {
     #[serde(default)]
     access_token: Option<String>,
@@ -308,5 +309,37 @@ pub async fn prepare(client: &reqwest::Client, account: &crate::auth::Account) {
     }
     if let Ok(path) = ensure_injector(client).await {
         set_injector(path);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Yggdrasil 返回的是 camelCase，解析失败会误报“没有可用的角色档案”
+    #[test]
+    fn parses_camel_case_auth_response() {
+        let text = r#"{
+            "accessToken": "token",
+            "clientToken": "client",
+            "selectedProfile": { "id": "069a79f444e94726a5befca90e38aaf5", "name": "Steve" },
+            "availableProfiles": [{ "id": "069a79f444e94726a5befca90e38aaf5", "name": "Steve" }]
+        }"#;
+        let data: AuthResp = serde_json::from_str(text).unwrap();
+        assert_eq!(data.access_token.as_deref(), Some("token"));
+        assert_eq!(data.client_token.as_deref(), Some("client"));
+        let profile = pick_profile(&data).unwrap();
+        assert_eq!(profile.name, "Steve");
+        assert_eq!(profile.id, "069a79f444e94726a5befca90e38aaf5");
+    }
+
+    /// 没有 selectedProfile 时退回第一个可用角色
+    #[test]
+    fn falls_back_to_first_available_profile() {
+        let data: AuthResp = serde_json::from_str(
+            r#"{"availableProfiles":[{"id":"abc","name":"Alex"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(pick_profile(&data).unwrap().name, "Alex");
     }
 }

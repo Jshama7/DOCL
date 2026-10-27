@@ -1229,7 +1229,7 @@ pub async fn authlib_login(
     let login = authlib::authenticate(&state.client, &root, &username, &password)
         .await
         .map_err(err)?;
-    let mut account = Account {
+    let account = Account {
         id: format!("authlib-{}", login.uuid),
         kind: "authlib".into(),
         name: login.name,
@@ -1237,15 +1237,11 @@ pub async fn authlib_login(
         access_token: login.access_token,
         refresh_token: login.client_token,
         expires_at: u64::MAX,
+        // 不写本地默认皮肤，否则会盖住皮肤站上的角色皮肤
         skin_path: None,
         skin_model: "classic".into(),
         authlib_url: Some(root.trim().trim_end_matches('/').to_string()),
     };
-    // 复用离线皮肤的默认脸，避免列表里出现空白头像
-    if let Ok((path, model)) = skins::install_default(&account.id, &account.id) {
-        account.skin_path = Some(path.to_string_lossy().to_string());
-        account.skin_model = model;
-    }
     {
         let mut accounts = state.accounts.lock().unwrap();
         accounts.retain(|a| a.id != account.id);

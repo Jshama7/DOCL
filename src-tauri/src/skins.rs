@@ -123,6 +123,12 @@ pub fn default_skin_for(seed: &str) -> (String, String) {
     (to_data_url(&bytes, "image/png"), entry.model.to_string())
 }
 
+/// 内置默认皮肤的字节，用于识别旧版本给第三方账号预装的占位皮肤。
+fn builtin_skin_bytes(seed: &str) -> Option<Vec<u8>> {
+    let entry = &DEFAULT_SKINS[default_index(seed)];
+    normalize_png(entry.bytes.to_vec()).ok()
+}
+
 pub fn install_default(account_id: &str, seed: &str) -> Result<(PathBuf, String)> {
     let entry = &DEFAULT_SKINS[default_index(seed)];
     let bytes = normalize_png(entry.bytes.to_vec()).context("默认皮肤损坏")?;
@@ -297,20 +303,19 @@ struct SkinMetadata {
     model: String,
 }
 
-pub async fn official_skin(
+/// 读取 Yggdrasil 档案里的 textures 属性并下载皮肤（Mojang 与第三方皮肤站格式一致）。
+async fn skin_from_profile(
     client: &reqwest::Client,
-    uuid: &str,
+    url: &str,
 ) -> Result<(Vec<u8>, String)> {
     let profile: ProfileResponse = client
-        .get(format!(
-            "https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"
-        ))
+        .get(url)
         .send()
         .await?
         .error_for_status()?
         .json()
         .await
-        .context("读取 Mojang 皮肤档案失败")?;
+        .context("读取皮肤档案失败")?;
 
     let property = profile
         .properties
@@ -343,6 +348,34 @@ pub async fn official_skin(
     Ok((bytes, model))
 }
 
+pub async fn official_skin(
+    client: &reqwest::Client,
+    uuid: &str,
+) -> Result<(Vec<u8>, String)> {
+    skin_from_profile(
+        client,
+        &format!("https://sessionserver.mojang.com/session/minecraft/profile/{uuid}"),
+    )
+    .await
+}
+
+/// 第三方皮肤站（LittleSkin 等）的 Yggdrasil 档案接口。
+pub async fn authlib_skin(
+    client: &reqwest::Client,
+    root: &str,
+    uuid: &str,
+) -> Result<(Vec<u8>, String)> {
+    let root = root.trim().trim_end_matches('/');
+    if root.is_empty() || uuid.is_empty() {
+        bail!("皮肤站地址或角色 UUID 为空");
+    }
+    skin_from_profile(
+        client,
+        &format!("{root}/sessionserver/session/minecraft/profile/{uuid}"),
+    )
+    .await
+}
+
 pub async fn fallback_skin(
     client: &reqwest::Client,
     uuid: &str,
@@ -368,7 +401,26 @@ pub async fn load_skin(
         } else {
             account.skin_model.clone()
         };
-        return (to_data_url(&bytes, "image/png"), model, "local".into());
+        // 旧版本给第三方账号写过内置默认皮肤作占位，不能让它在皮肤站皮肤之前生效
+        let placeholder = account.kind == "authlib"
+            && builtin_skin_bytes(&account.id)
+                .map(|builtin| builtin == bytes)
+                .unwrap_or(false);
+        if !placeholder {
+            return (to_data_url(&bytes, "image/png"), model, "local".into());
+        }
+    }
+    if account.kind == "authlib" {
+        if let Some(root) = account
+            .authlib_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if let Ok((bytes, model)) = authlib_skin(client, root, &account.uuid).await {
+                return (to_data_url(&bytes, "image/png"), model, "authlib".into());
+            }
+        }
     }
     if account.kind == "microsoft" {
         if let Ok((bytes, model)) = official_skin(client, &account.uuid).await {

@@ -96,6 +96,8 @@ const skinSourceLabel = computed(() => {
       return "本地自定义";
     case "official":
       return "Mojang 官方";
+    case "authlib":
+      return "皮肤站";
     default:
       return "默认皮肤";
   }
@@ -349,8 +351,12 @@ onMounted(() => {
             <AppIcon name="refresh" :size="14" />
             重新拉取官方皮肤
           </WoodButton>
+          <WoodButton v-if="selectedAccount.kind === 'authlib'" variant="soft" @click="refreshOfficial">
+            <AppIcon name="refresh" :size="14" />
+            刷新皮肤站皮肤
+          </WoodButton>
           <WoodButton
-            v-if="selectedAccount.kind === 'microsoft' && store.accountSkin?.source === 'local'"
+            v-if="selectedAccount.kind !== 'offline' && store.accountSkin?.source === 'local'"
             variant="danger"
             @click="clearLocalSkin"
           >
@@ -359,7 +365,7 @@ onMounted(() => {
         </div>
 
         <p class="acc-note">
-          离线账号的皮肤只用于启动器内预览与导出，游戏内原版不会显示；微软账号可在编辑页选择上传到 Mojang。
+          离线账号的皮肤只用于启动器内预览与导出，游戏内原版不会显示；第三方账号会自动读取皮肤站上的角色皮肤；微软账号可在编辑页选择上传到 Mojang。
         </p>
       </section>
 
